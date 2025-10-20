@@ -1,0 +1,2 @@
+This work is licensed under the Arma Public License (APL).
+See https://www.bohemia.net/community/licenses/arma-public-license
