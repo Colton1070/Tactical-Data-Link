@@ -1,0 +1,24 @@
+ImageSetClass {
+ RefSize 1024 1024
+ Textures {
+  ImageSetTextureClass {
+   screenSize FHD
+   size 1024 1024
+   path "{EC261FEE4B3A5775}UI/Textures/Icons/tdl_map_markers_atlas.edds"
+  }
+ }
+ Images {
+  ImageSetDefClass tdl_checkpoint {
+   Name "tdl_checkpoint"
+   Pos 0 0
+   Size 128 128
+   Flags 0
+  }
+  ImageSetDefClass tdl_pin {
+   Name "tdl_pin"
+   Pos 128 0
+   Size 128 128
+   Flags 0
+  }
+ }
+}

@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{9F956AC0127373B4}Assets/Vehicles/Helicopters/TDL/Data/glass_ext_76FA7CAF24074E6C.emat"
+ Configurations {
+  EMATResourceClass PC {
+  }
+  EMATResourceClass XBOX_ONE : PC {
+  }
+  EMATResourceClass XBOX_SERIES : PC {
+  }
+  EMATResourceClass PS4 : PC {
+  }
+  EMATResourceClass PS5 : PC {
+  }
+  EMATResourceClass HEADLESS : PC {
+  }
+ }
+}

@@ -1,0 +1,50 @@
+GenericEntity {
+ ID "64FA5500F4318B9E"
+ components {
+  AG0_ControlDisplayUnitComponent "{64FA5501026C1289}" {
+  }
+  MeshObject "{64FA55009CFE4215}" {
+   Object "{6DF66EADE2A73A65}Assets/Vehicles/Helicopters/TDL/TDL_CDU.xob"
+   PixelSizeScale 10
+   PixelSizeFilter 0
+  }
+  RigidBody "{64FA5506FADFB660}" {
+   ModelGeometry 1
+  }
+  ActionsManagerComponent "{64FA550109CBD683}" {
+   ActionContexts {
+    UserActionContext "{64FA5501170D1908}" {
+     UIInfo SCR_ActionContextUIInfo "{64FA550112F9A565}" {
+     }
+     ContextName "cdu_pilot"
+     Position PointInfo "{64FA550110A8A28E}" {
+      Offset 0 0 -0.0722
+     }
+    }
+   }
+   additionalActions {
+    AG0_CDU_Power "{64FAEE8122979E03}" {
+     ParentContextList {
+      "cdu_pilot"
+     }
+     UIInfo SCR_ActionContextUIInfo "{64FAEE812F25BFB0}" {
+     }
+    }
+    AG0_CDU_CryptoAction "{64FAEE8133CB7D4D}" {
+     ParentContextList {
+      "cdu_pilot"
+     }
+     UIInfo SCR_ActionContextUIInfo "{64FAEE813F5B45B8}" {
+     }
+    }
+   }
+   AllowCrossHierarchy 1
+  }
+  RplComponent "{64FA55010F9B1EE6}" {
+   "Rpl State Override" Runtime
+  }
+  Hierarchy "{64FA5512B18EEF9E}" {
+  }
+ }
+ coords 2.267 3.602 3.142
+}

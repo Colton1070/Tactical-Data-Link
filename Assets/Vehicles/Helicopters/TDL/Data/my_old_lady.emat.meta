@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{5D3F7C710910505B}Assets/Vehicles/Helicopters/TDL/Data/my_old_lady.emat"
+ Configurations {
+  EMATResourceClass PC {
+  }
+  EMATResourceClass XBOX_ONE : PC {
+  }
+  EMATResourceClass XBOX_SERIES : PC {
+  }
+  EMATResourceClass PS4 : PC {
+  }
+  EMATResourceClass PS5 : PC {
+  }
+  EMATResourceClass HEADLESS : PC {
+  }
+ }
+}

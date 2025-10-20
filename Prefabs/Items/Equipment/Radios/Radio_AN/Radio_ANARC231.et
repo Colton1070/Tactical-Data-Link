@@ -1,0 +1,187 @@
+GenericEntity : "{5879D8E9C56E358D}Prefabs/Items/Core/Radio_base.et" {
+ ID "508AB2013EEE1E00"
+ components {
+  AG0_TDLDeviceComponent "{5A30BAE7673C63D4}" {
+   m_eCapabilities 2147483639
+   m_CameraAttachment PointInfo "{65D34DE3DFE25E82}" {
+    PivotID "i_root"
+    Angles 90 180 -180
+   }
+   m_fCameraFOV 100
+   m_fCameraNearPlane 0.1
+   m_fCameraFarPlane 2000
+   m_aCameraEffects {
+    AG0_PostProcessEffect "{65D577393EDA16B7}" {
+     m_eEffectType HDR
+     m_iPriority 18
+     m_sMaterialPath "{1595F0E3112723D1}Common/Postprocess/HDR_Camera.emat"
+    }
+    AG0_PostProcessEffect "{65D57733209EF5F3}" {
+     m_eEffectType HDR
+     m_iPriority 1
+     m_sMaterialPath "{1595F0E3112723D1}Common/Postprocess/HDR_Camera.emat"
+    }
+   }
+   m_bEnableNightVisionMode 0
+  }
+  AG0_TDLRadioComponent "{65D341BCD1E43BE7}" {
+   m_eAnimVariable ANPRC68
+  }
+  BaseRadioComponent "{5A30BAE7673C63CA}" {
+   "Encryption key" "chickenNuggets"
+   "Turned on" 1
+   Transceivers {
+    RadioTransceiver "{65D341B8987866A4}" {
+     ChannelFrequency 32000
+     "Transmitting Range" 1300
+     "Min tunable frequency" 32000
+     "Max tunable frequency" 68000
+    }
+    RadioTransceiver "{65D341B898786690}" {
+     ChannelFrequency 48000
+     "Transmitting Range" 1300
+     "Min tunable frequency" 32000
+     "Max tunable frequency" 68000
+    }
+   }
+  }
+  InventoryItemComponent "{5222EB4D0C73006B}" {
+   Attributes SCR_ItemAttributeCollection "{5222EB4D0A2B466B}" {
+    ItemDisplayName UIInfo "{5222EB4D07D865FA}" {
+     Name "AN/ARC 231"
+     Description "#AR-Item_ANPRC68_Description"
+     Icon "{2FBD8DA665FB8AF1}UI/Textures/VON/ANPRC68-100px_UI.edds"
+    }
+    ItemPhysAttributes ItemPhysicalAttributes PhysicalAttributes {
+     Weight 1.3
+     SizeSetupStrategy Manual
+     ItemVolume 300
+     RestingUP Forward
+     RestingAdditiveOffsetLS 0 0 0.15
+    }
+    ItemAnimationAttributes ItemAnimationAttributes "{65D341B898786683}" {
+     AnimationInstance "{332D4A7512E78419}Assets/Items/Equipment/workspaces/Radio_ANPRC68_player.asi"
+     AnimationAttachments {
+      AnimationAttachmentInfo "{65D341B898786680}" {
+       AnimGraph "{402BB5FA2891D687}Assets/Items/Equipment/workspaces/Radio_ANPRC68.agr"
+       AnimInstance "{332D4A7512E78419}Assets/Items/Equipment/workspaces/Radio_ANPRC68_player.asi"
+       BindingName "Gadget"
+      }
+     }
+     AllowInspection 1
+    }
+    CustomAttributes {
+     PreviewRenderAttributes "{65D341B898786579}" {
+      CameraPreset Top
+      CameraOrbitAngles 20 0 0
+      CameraDistanceToItem 1
+      CameraOffset 0 -0.015 0
+      FOV 10
+     }
+     SCR_VONPreviewAttributes "{65D341B89878657D}" {
+      CameraOrbitAngles -30 180 45
+      CameraDistanceToItem 0.6
+      FOV 40
+     }
+    }
+    CommonItemType "RADIO"
+    m_SlotType SLOT_GADGETS_STORAGE
+   }
+  }
+  MeshObject "{5A30BAE7673C63D1}" {
+   Object "{1B8B5484D7F21A41}Assets/Items/Equipment/Radios/Radio_ANPRC68/Radio_ANPRC68_01.xob"
+  }
+  RigidBody "{5A30BAE7673C63D3}" {
+   CenterOfMass 0 0.1 0
+   ModelGeometry 1
+   CCDRadius 0.015
+  }
+  ProcAnimComponent "{65D341B898786574}" {
+   Parameters {
+    ProcAnimParams "{65D341B89878656A}" {
+     ResourceName "{F335B90D4353B9A4}Assets/Items/Equipment/Radios/Radio_ANPRC68/Radio_ANPRC68_01.pap"
+     BoneNames {
+      "i_channel01" "i_power" "i_volume"
+     }
+     SimulationDistance 20
+     SimulateOnDedicatedServer 0
+    }
+   }
+  }
+  ActionsManagerComponent "{508AB5952B584B2E}" {
+   ActionContexts {
+    UserActionContext "{508AC2ABEC97066C}" {
+     Position PointInfo "{508AC2ABEAC4A0F5}" {
+      Offset 0 0.1 0
+     }
+     Radius 0.115
+    }
+    UserActionContext "{65D341B898786561}" {
+     ContextName "knob_channel"
+     Position PointInfo "{65D341B898786560}" {
+      Offset 0.012 0.2 0.007
+     }
+     Radius 0.1
+    }
+    UserActionContext "{65D341B898786564}" {
+     ContextName "knob_toggle"
+     Position PointInfo "{65D341B89878655B}" {
+      Offset 0 0.2 -0.01
+     }
+     Radius 0.1
+    }
+   }
+   additionalActions {
+    SCR_EquipItemAction "{553AEBE8F3B60801}" : "{068D8D646964D12A}Prefabs/Characters/Core/Actions/EquipGadgetAction.conf" {
+    }
+    SCR_RadioTuningUserAction "{65D341B89878655C}" {
+     ParentContextList {
+      "knob_channel"
+     }
+     UIInfo UIInfo "{65D341B89878654C}" {
+     }
+    }
+    SCR_RadioTuningUserAction "{65D341B898786542}" {
+     ParentContextList {
+      "knob_channel"
+     }
+     UIInfo UIInfo "{65D341B898786541}" {
+     }
+     m_bTuneUp 1
+    }
+    SCR_RadioToggleUserAction "{65D341B898786546}" {
+     ParentContextList {
+      "knob_toggle"
+     }
+    }
+    AG0_RadioFillKeyUserAction "{65D341BF32EBCF8B}" {
+     ParentContextList {
+      "knob_channel"
+     }
+     UIInfo SCR_ActionContextUIInfo "{65D341BF3E3A8EBE}" {
+     }
+     "Sort Priority" -5
+     "Inventory action" 1
+    }
+    AG0_DeviceTDLNetworkAction "{65D341BF396856C2}" {
+     ParentContextList {
+      "knob_channel"
+     }
+     UIInfo SCR_ActionContextUIInfo "{65D341BF04417A69}" {
+     }
+     "Sort Priority" -4
+     "Inventory action" 1
+     m_bCreateNetwork 1
+    }
+    AG0_DeviceTDLNetworkAction "{65D341BF17ACBE26}" {
+     ParentContextList {
+      "knob_channel"
+     }
+     UIInfo SCR_ActionContextUIInfo "{65D341BF1123E260}" {
+     }
+     "Sort Priority" -3
+    }
+   }
+  }
+ }
+}

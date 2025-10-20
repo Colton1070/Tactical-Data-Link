@@ -1,0 +1,24 @@
+ImageSetClass {
+ RefSize 288 288
+ Textures {
+  ImageSetTextureClass {
+   screenSize FHD
+   size 288 288
+   path "{8FA9B9C785105602}UI/Textures/Icons/icons_wrapperUI-64TDL-400_atlas.edds"
+  }
+ }
+ Images {
+  ImageSetDefClass tdl_device {
+   Name "tdl_device"
+   Pos 8 8
+   Size 64 64
+   Flags 0
+  }
+  ImageSetDefClass tdl_tak_friendly {
+   Name "tdl_tak_friendly"
+   Pos 80 8
+   Size 64 64
+   Flags 0
+  }
+ }
+}

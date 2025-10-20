@@ -1,0 +1,63 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ {
+  RTTextureWidgetClass "{64FAEE8FB51FE078}" {
+   Name "RTTexture0"
+   Slot FrameWidgetSlot "{6292C9F015F09E00}" {
+    OffsetLeft 0
+    OffsetTop 0
+    SizeX 512
+    OffsetRight -512
+    SizeY 512
+    OffsetBottom -512
+   }
+   {
+    FrameWidgetClass "{64FAEE8FB51FE075}" {
+     Name "Frame0"
+     Slot FrameWidgetSlot "{64EE823FE0EB32E0}" {
+      OffsetLeft 0
+      OffsetTop 0
+      SizeX 512
+      OffsetRight -512
+      SizeY 512
+      OffsetBottom -512
+     }
+     Color 0 0 0 1
+     {
+      ImageWidgetClass "{64FAEE8FB51FE06A}" {
+       Name "Image0"
+       Slot FrameWidgetSlot "{64EE823FCA504BAE}" {
+        PositionX 0
+        OffsetLeft 0
+        PositionY 0
+        OffsetTop 0
+        SizeX 512
+        OffsetRight -512
+        SizeY 512
+        OffsetBottom -512
+       }
+       Color 0 0 0 1
+      }
+      TextWidgetClass "{64FAEE8FB51FE063}" {
+       Name "StatusMessage"
+       Slot FrameWidgetSlot "{64EE82304213D0A5}" {
+        PositionX 32.644
+        OffsetLeft 32.644
+        PositionY 406.945
+        OffsetTop 406.945
+        SizeX 434.877
+        OffsetRight -467.521
+        SizeY 64.208
+        OffsetBottom -471.153
+       }
+       "Font Size" 30
+       "Min Font Size" 30
+       "Horizontal Alignment" Right
+       "Vertical Alignment" Center
+      }
+     }
+    }
+   }
+  }
+ }
+}

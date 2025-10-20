@@ -1,0 +1,326 @@
+FrameWidgetClass {
+ Name "BasicDialog"
+ Slot LayoutSlot "{56D70AB5E03A4A74}" {
+ }
+ "Is Visible" 1
+ "Ignore Cursor" 0
+ Color 0.357 0.357 0.357 1
+ {
+  OverlayWidgetClass "{65057CF257DD06EB}" : "{997E262EDAF1549F}UI/layouts/Menus/Dialogs/DialogBackground.layout" {
+   Name "OuterBackgroundOverlay"
+   Slot FrameWidgetSlot "{5558C3118DE4FCC1}" {
+    PositionX 0.915
+    PositionY 5.49
+    SizeX 0
+    SizeY 0
+   }
+  }
+  SizeLayoutWidgetClass "{65057CF257DD06E0}" {
+   Prefab "{5CC296FE0BE2ED39}"
+   Name "SizeBase"
+   Slot FrameWidgetSlot "{5CC296FE0BE2ED71}" {
+    Anchor 0.5 0.5 0.5 0.5
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    OffsetRight -100
+    OffsetBottom -30
+    Alignment 0.5 0.5
+    SizeToContent 1
+   }
+   AllowWidthOverride 1
+   WidthOverride 560
+   {
+    OverlayWidgetClass "{65057CF257DD06E7}" {
+     Prefab "{5CC296FBD8B6CA52}"
+     Name "DialogBase"
+     Slot AlignableSlot "{5CC296FE0BF4F8A1}" {
+      HorizontalAlign 3
+      VerticalAlign 3
+     }
+     {
+      BlurWidgetClass "{65057CF257DD06DA}" : "{352322057FD78AE1}UI/layouts/WidgetLibrary/BaseElements/WLib_Blur.layout" {
+       Name "Blur"
+       Slot OverlayWidgetSlot "{5510B6ACB000E435}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+       }
+       "Is Visible" 0
+       Color 1 1 1 1
+       Intensity 1
+      }
+      ImageWidgetClass "{65057CF257DD06D9}" {
+       Name "Background"
+       Slot OverlayWidgetSlot "{5558A7C18E7F73F5}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+       }
+       Color 0.007 0.012 0.014 1
+      }
+      VerticalLayoutWidgetClass "{65057CF257DD06D8}" {
+       Prefab "{5CC296FBD8B6CA68}"
+       Name "VerticalLayout"
+       Slot OverlayWidgetSlot "{5510B6AD02CB5CFF}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+       }
+       {
+        ImageWidgetClass "{65057CF257DD06DF}" {
+         Name "Separator"
+         Slot LayoutSlot "{5510B6AC95797C6F}" {
+         }
+         "Is Visible" 0
+         Color 1 1 1 1
+         Image ""
+         Size 4 3
+        }
+        HorizontalLayoutWidgetClass "{65057CF257DD06DE}" {
+         Prefab "{5CC296FE665361F7}"
+         Name "Header"
+         Slot LayoutSlot "{5CC296FE6653602F}" {
+          HorizontalAlign 0
+          Padding 18 30 0 0
+         }
+         {
+          SizeLayoutWidgetClass "{65057CF257DD06DD}" {
+           Name "IconSize"
+           Slot LayoutSlot "{5CDCC55754F81BAA}" {
+           }
+           AllowHeightOverride 1
+           HeightOverride 48
+           AllowMinDesiredHeight 1
+           MinDesiredHeight 48
+           AllowMaxDesiredWidth 1
+           MaxDesiredWidth 48
+           {
+            ImageWidgetClass "{65057CF257DD06DC}" {
+             Name "ImgTitleIcon"
+             Slot AlignableSlot "{5CDCD741AF600F00}" {
+              HorizontalAlign 3
+              VerticalAlign 3
+             }
+             Texture "{2EFEA2AF1F38E7F0}UI/Textures/Icons/icons_wrapperUI-64.imageset"
+             Image "misc"
+             Size 48 48
+            }
+           }
+          }
+          SizeLayoutWidgetClass "{65057CF257DD06D3}" {
+           Name "TitleSize"
+           Slot LayoutSlot "{5CECDEAA2B312BFD}" {
+            Padding 8 0 0 0
+           }
+           AllowWidthOverride 1
+           WidthOverride 460
+           {
+            RichTextWidgetClass "{65057CF257DD06D1}" {
+             Name "Title"
+             Slot AlignableSlot "{615A8A083DB2CC4A}" {
+              HorizontalAlign 0
+              VerticalAlign 3
+             }
+             Clipping True
+             Text "Dialog"
+             "Font Size" 32
+             "Min Font Size" 14
+             "Vertical Alignment" Center
+             FontProperties FontProperties "{615A8A082F97E688}" {
+              Font "{3E7733BAC8C831F6}UI/Fonts/RobotoCondensed/RobotoCondensed_Regular.fnt"
+              ShadowOffset 0 0
+             }
+            }
+           }
+          }
+         }
+        }
+        OverlayWidgetClass "{65057CF257DD06D0}" {
+         Name "Content"
+         Slot LayoutSlot "{5510B6ACD309D020}" {
+          Padding 26 12 26 0
+         }
+         {
+          SizeLayoutWidgetClass "{65057CF257DD06D7}" {
+           Name "ContentSizeConstraints"
+           Slot OverlayWidgetSlot "{5CC296F8389B4426}" {
+            HorizontalAlign 3
+            VerticalAlign 3
+           }
+           MinDesiredHeight 100
+           AllowMaxDesiredHeight 1
+           MaxDesiredHeight 750
+           {
+            VerticalLayoutWidgetClass "{65057CF257DD1517}" {
+             Name "ContentVerticalLayout"
+             Slot OverlayWidgetSlot "{56D6D7C05CBE42B1}" {
+              HorizontalAlign 3
+              VerticalAlign 3
+             }
+             {
+              SizeLayoutWidgetClass "{65057CF257DD1514}" {
+               Name "MessageSize"
+               Slot LayoutSlot "{5CDAEBCA568F5063}" {
+                Padding 0 0 0 8
+               }
+               AllowMinDesiredHeight 1
+               MinDesiredHeight 14
+               {
+                RichTextWidgetClass "{65057CF257DD150A}" : "{3FF33FC224E0C76C}UI/layouts/WidgetLibrary/RichTextWidgets/RichText_BodySmall.layout" {
+                 Name "Message"
+                 Slot AlignableSlot "{5CDAEBCA5680E20A}" {
+                  HorizontalAlign 3
+                  VerticalAlign 3
+                 }
+                 "Is Visible" 0
+                 Clipping False
+                 "Line Spacing" 28
+                }
+               }
+              }
+              OverlayWidgetClass "{65057CF257DD1509}" {
+               Name "ContentLayoutContainer"
+               Slot LayoutSlot "{5CB0A797025666D9}" {
+                SizeMode Fill
+               }
+               "Z Order" 2
+               {
+                OverlayWidgetClass "{65057CF257DD150F}" {
+                 Name "Overlay0"
+                 Slot OverlayWidgetSlot "{65057CF257DD2AA4}" {
+                 }
+                 {
+                  FrameWidgetClass "{65057CF257DD1503}" {
+                   Name "Frame0"
+                   Slot OverlayWidgetSlot "{64F8E0C6F207C865}" {
+                    Padding 4 4 4 4
+                   }
+                   {
+                    ImageWidgetClass "{65057CF257DD1502}" {
+                     Name "Image0"
+                     Slot FrameWidgetSlot "{64F8E0C127C37D1E}" {
+                      PositionX 0
+                      OffsetLeft 0
+                      PositionY 0
+                      OffsetTop 0
+                      SizeX 494.895
+                      OffsetRight -494.895
+                      SizeY 30
+                      OffsetBottom -30
+                     }
+                     Color 0.8714 0.8714 0.8714 1
+                     Size 48.1 32
+                    }
+                    EditBoxWidgetClass "{65057CF257DD1501}" {
+                     Name "NetworkNameInput"
+                     Slot FrameWidgetSlot "{64F8E0C6F2124342}" {
+                      PositionX 0
+                      OffsetLeft 0
+                      PositionY 0
+                      OffsetTop 0
+                      SizeX 493.055
+                      OffsetRight -493.055
+                      SizeY 30
+                      OffsetBottom -30
+                     }
+                     Color 0 0 0 1
+                     "Font Size" 30
+                     "Use placeholder text" 1
+                     "Placeholder color" 0 0 0 1
+                     "Placeholder text" "Username"
+                     "Virtual Keyboard Title" "KEY"
+                    }
+                    ImageWidgetClass "{65057CF2921C1CCB}" {
+                     Name "Image1"
+                     Slot FrameWidgetSlot "{64F8E0C127C37D1E}" {
+                      PositionX -0.211
+                      OffsetLeft -0.211
+                      PositionY 39.677
+                      OffsetTop 39.677
+                      SizeX 494.895
+                      OffsetRight -494.685
+                      SizeY 30
+                      OffsetBottom -69.676
+                     }
+                     Color 0.8714 0.8714 0.8714 1
+                     Size 48.1 32
+                    }
+                    EditBoxWidgetClass "{65057CF2AA0598E5}" {
+                     Name "NetworkPasswordInput"
+                     Slot FrameWidgetSlot "{64F8E0C6F2124342}" {
+                      PositionX -0
+                      OffsetLeft -0
+                      PositionY 38.893
+                      OffsetTop 38.893
+                      SizeX 493.055
+                      OffsetRight -493.055
+                      SizeY 30
+                      OffsetBottom -68.892
+                     }
+                     Color 0 0 0 1
+                     "Font Size" 30
+                     "Use placeholder text" 1
+                     "Placeholder color" 0 0 0 1
+                     "Placeholder text" "Password"
+                     "Virtual Keyboard Title" "KEY"
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+        HorizontalLayoutWidgetClass "{65057CF257DD1500}" {
+         Prefab "{5CC296FBD8B6CA62}"
+         Name "Footer"
+         Slot LayoutSlot "{5510B6AC9B6E1FA4}" {
+          Padding 26 32 26 20
+         }
+         Clipping False
+         {
+          OverlayWidgetClass "{65057CF257DD1507}" {
+           Name "Overlay"
+           Slot LayoutSlot "{56D6D7CEFDC867A5}" {
+            SizeMode Fill
+           }
+           {
+            HorizontalLayoutWidgetClass "{65057CF257DD14A0}" {
+             Name "ButtonsLeft"
+             Slot OverlayWidgetSlot "{56D6D7CEEAC64D05}" {
+              HorizontalAlign 0
+              VerticalAlign 3
+             }
+            }
+            HorizontalLayoutWidgetClass "{65057CF257DD14A1}" {
+             Name "ButtonsRight"
+             Slot OverlayWidgetSlot "{56D6D7CEE829B899}" {
+              HorizontalAlign 2
+              VerticalAlign 3
+             }
+             "Fill Origin" Right
+            }
+            HorizontalLayoutWidgetClass "{65057CF257DD14A2}" {
+             Name "ButtonsCenter"
+             Slot OverlayWidgetSlot "{56D6D7CEE8C41B58}" {
+              HorizontalAlign 3
+              VerticalAlign 3
+             }
+             "Fill Origin" Center
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

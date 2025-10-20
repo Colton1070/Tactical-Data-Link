@@ -1,0 +1,8 @@
+SCR_ManualCamera : "{D6DE32D1C0FCC1C7}Prefabs/Editor/Camera/ManualCameraBase.et" {
+ ID "51625C12EB825CAB"
+ m_aComponents {
+  AG0_PlayerCameraOverrideComponent "{65DC11CDB1C14EF0}" {
+   m_iPriority -1
+  }
+ }
+}

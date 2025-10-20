@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{6CF0BFB9D4EF8B96}Configs/FieldManual/Categories/Equipment/FM_Items.conf"
+ Configurations {
+  CONFResourceClass PC {
+  }
+  CONFResourceClass XBOX_ONE : PC {
+  }
+  CONFResourceClass XBOX_SERIES : PC {
+  }
+  CONFResourceClass PS4 : PC {
+  }
+  CONFResourceClass PS5 : PC {
+  }
+  CONFResourceClass HEADLESS : PC {
+  }
+ }
+}

@@ -1,0 +1,57 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ {
+  FrameWidgetClass "{65EF45CF10BFCEC2}" {
+   Name "CardFrame"
+   Slot FrameWidgetSlot "{65EF45CF10BFCD12}" {
+    OffsetLeft 0
+    OffsetTop 0
+    SizeX 250
+    OffsetRight -250
+    SizeY 150
+    OffsetBottom -150
+   }
+   {
+    TextWidgetClass "{65EF45CF2EBC319D}" {
+     Name "Capabilities"
+     Slot FrameWidgetSlot "{65EF45CEDB1CE36E}" {
+      PositionX 0
+      OffsetLeft 0
+      PositionY 77.11
+      OffsetTop 77.11
+      SizeX 231.448
+      OffsetRight -231.448
+      SizeY 30
+      OffsetBottom -107.11
+     }
+    }
+    TextWidgetClass "{65EF45CF206312E3}" {
+     Name "SignalStrength"
+     Slot FrameWidgetSlot "{65EF45CEDB1CE36E}" {
+      PositionX 0
+      OffsetLeft 0
+      PositionY 38.555
+      OffsetTop 38.555
+      SizeX 233.859
+      OffsetRight -233.859
+      SizeY 30
+      OffsetBottom -68.555
+     }
+    }
+    TextWidgetClass "{65EF45CEDB1C9C86}" {
+     Name "PlayerName"
+     Slot FrameWidgetSlot "{65EF45CEDB1CE36E}" {
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX 229.036
+      OffsetRight -229.036
+      SizeY 30
+      OffsetBottom -30
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,11 @@
+AG0_MapMarkerTDL {
+ ID "650D0AFF197EA651"
+ components {
+  RplComponent "{650D0AFF197EAE21}" {
+   "Parent Node From Parent Entity" 0
+   SpatialRelevancy 0
+   Streamable Disabled
+  }
+ }
+ Flags 0
+}

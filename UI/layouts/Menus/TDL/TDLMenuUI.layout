@@ -1,0 +1,94 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ {
+  VerticalLayoutWidgetClass "{65F049EDD86B89DF}" {
+   Name "VerticalLayout0"
+   Slot FrameWidgetSlot "{65F049EDD86B89C7}" {
+    Anchor 0.5 0.5 0.5 0.5
+    PositionX -377.346
+    OffsetLeft -377.346
+    PositionY -254.896
+    OffsetTop -254.896
+    SizeX 734.741
+    OffsetRight -357.395
+    SizeY 427.338
+    OffsetBottom -172.442
+   }
+   {
+    HorizontalLayoutWidgetClass "{65F049EE15E51EBE}" {
+     Name "HeaderSection"
+     Slot LayoutSlot "{65F049EE15E51E9E}" {
+      Padding 15 15 15 15
+     }
+     {
+      TextWidgetClass "{65F049EE6A586D08}" {
+       Name "DeviceName"
+       Slot LayoutSlot "{65F049EE6A586DEF}" {
+        Padding 10 0 10 0
+       }
+       Text "Device Name"
+      }
+      TextWidgetClass "{65F049EE4644C233}" {
+       Name "NetworkStatus"
+       Slot LayoutSlot "{65F049EE6A586DEF}" {
+        Padding 10 0 10 0
+       }
+       Text "Network Status"
+      }
+     }
+    }
+    ScrollLayoutWidgetClass "{65F049EEA4DD8B90}" {
+     Name "ScrollLayout"
+     Slot LayoutSlot "{65F2004D5FEA9654}" {
+     }
+     "Scrollbar Always Visible" 1
+     {
+      SizeLayoutWidgetClass "{65F049EE98CE9FBE}" {
+       Name "SizeLayout"
+       Slot AlignableSlot "{65F049EE98CE9FA7}" {
+       }
+       AllowHeightOverride 1
+       HeightOverride 350
+       {
+        GridLayoutWidgetClass "{65F049EEFDCA6B7F}" {
+         Name "NetworkGrid"
+         Slot AlignableSlot "{65F049EEFDCA6B62}" {
+         }
+         RowFill {
+          1
+         }
+         ColumnFill {
+          1
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+  ScaleWidgetClass "{65EF45C096C2BE70}" {
+   Name "Scale0"
+   Slot FrameWidgetSlot "{65EF45C096C28202}" {
+    Anchor 0.5 0.5 0.5 0.5
+    PositionX -960
+    OffsetLeft -960
+    PositionY -540
+    OffsetTop -540
+    SizeX 1920
+    OffsetRight -960
+    SizeY 1080
+    OffsetBottom -540
+   }
+   {
+    ImageWidgetClass "{65EF45C0244C964D}" {
+     Name "OverlayImage"
+     Slot AlignableSlot "{65EF45C096770165}" {
+     }
+     Texture "{9F5AD825762D9811}UI/layouts/Menus/TDL/RDCUIOverlay.edds"
+     Size 1500 1500
+    }
+   }
+  }
+ }
+}
