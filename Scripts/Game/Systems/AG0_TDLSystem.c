@@ -93,6 +93,15 @@ class AG0_TDLSystem : GameSystem
     
     // System callbacks for map markers
     protected ref array<AG0_TDLMapMarkerEntry> m_MarkerCallbacks = {};
+	
+	protected ref map<RplId, AG0_TDLDeviceComponent> m_mDeviceCache = new map<RplId, AG0_TDLDeviceComponent>();
+    
+    protected float m_fGridCellSize = 2000.0; // Set to 2x your maximum device range
+    protected ref map<string, ref array<AG0_TDLDeviceComponent>> m_mSpatialGrid = new map<string, ref array<AG0_TDLDeviceComponent>>();
+    protected float m_fTimeSinceGridRebuild = 999.0; // Force rebuild on first update
+    protected float m_fGridRebuildInterval = 5.0; // Rebuild every 5 seconds
+	protected float m_fMaxDeviceRange = 1000.0;  // Track maximum range
+	protected bool m_bCellSizeNeedsUpdate = false; // Flag for cell size change
 
 	
     //------------------------------------------------------------------------------------------------
@@ -118,12 +127,7 @@ class AG0_TDLSystem : GameSystem
     //------------------------------------------------------------------------------------------------
     AG0_TDLDeviceComponent GetDeviceByRplId(RplId deviceId)
     {
-        foreach (AG0_TDLDeviceComponent device : m_aRegisteredNetworkDevices)
-        {
-            if (device.GetDeviceRplId() == deviceId)
-                return device;
-        }
-        return null;
+        return m_mDeviceCache.Get(deviceId);
     }
     
     IEntity GetPlayerFromDevice(AG0_TDLDeviceComponent device)
@@ -247,6 +251,93 @@ class AG0_TDLSystem : GameSystem
 	    
 	    return allDevices;
 	}
+	
+	string GetGridCellKey(vector pos)
+    {
+        int x = Math.Floor(pos[0] / m_fGridCellSize);
+        int y = Math.Floor(pos[1] / m_fGridCellSize);
+        int z = Math.Floor(pos[2] / m_fGridCellSize);
+        return string.Format("%1_%2_%3", x, y, z);
+    }
+    
+    void RebuildSpatialGrid()
+    {
+        m_mSpatialGrid.Clear();
+        
+        foreach (AG0_TDLDeviceComponent device : m_aRegisteredNetworkDevices)
+        {
+            string cellKey = GetGridCellKey(device.GetOwner().GetOrigin());
+            
+            if (!m_mSpatialGrid.Contains(cellKey))
+                m_mSpatialGrid.Set(cellKey, new array<AG0_TDLDeviceComponent>);
+            
+            m_mSpatialGrid.Get(cellKey).Insert(device);
+        }
+        
+        Print(string.Format("TDL_SPATIAL_GRID: Rebuilt with %1 devices in %2 cells", 
+            m_aRegisteredNetworkDevices.Count(), m_mSpatialGrid.Count()), LogLevel.DEBUG);
+    }
+	
+	protected void UpdateMaxDeviceRange()
+	{
+	    float previousMaxRange = m_fMaxDeviceRange;
+	    float currentMaxRange = 0.0;
+	    
+	    // Find the device with the longest range
+	    foreach (AG0_TDLDeviceComponent device : m_aRegisteredNetworkDevices)
+	    {
+	        float deviceRange = device.GetEffectiveNetworkRange();
+	        if (deviceRange > currentMaxRange)
+	            currentMaxRange = deviceRange;
+	    }
+	    
+	    // Only update if range changed significantly (>10% or >100m)
+	    float rangeDifference = Math.AbsFloat(currentMaxRange - previousMaxRange);
+	    if (rangeDifference > 100.0 || rangeDifference > (previousMaxRange * 0.1))
+	    {
+	        m_fMaxDeviceRange = currentMaxRange;
+	        m_fGridCellSize = 2.0 * m_fMaxDeviceRange;  // Always 2x max range
+	        m_fTimeSinceGridRebuild = 999.0;  // Force immediate rebuild
+	        
+	        Print(string.Format("TDL_SPATIAL_GRID: Max device range updated to %1m, cell size now %2m", 
+	            m_fMaxDeviceRange, m_fGridCellSize), LogLevel.DEBUG);
+	    }
+	}
+    
+    array<AG0_TDLDeviceComponent> GetNearbyDevices(vector pos, AG0_TDLNetwork network)
+    {
+        array<AG0_TDLDeviceComponent> nearby = {};
+        array<AG0_TDLDeviceComponent> networkDevices = network.GetNetworkDevices();
+        
+        int cx = Math.Floor(pos[0] / m_fGridCellSize);
+        int cy = Math.Floor(pos[1] / m_fGridCellSize);
+        int cz = Math.Floor(pos[2] / m_fGridCellSize);
+        
+        // Check 3x3x3 cube of cells (27 cells total in 3D space)
+        for (int dx = -1; dx <= 1; dx++)
+        {
+            for (int dy = -1; dy <= 1; dy++)
+            {
+                for (int dz = -1; dz <= 1; dz++)
+                {
+                    string cellKey = string.Format("%1_%2_%3", cx + dx, cy + dy, cz + dz);
+                    array<AG0_TDLDeviceComponent> cellDevices = m_mSpatialGrid.Get(cellKey);
+                    
+                    if (cellDevices)
+                    {
+                        foreach (AG0_TDLDeviceComponent device : cellDevices)
+                        {
+                            // Only include devices from this specific network
+                            if (networkDevices.Contains(device))
+                                nearby.Insert(device);
+                        }
+                    }
+                }
+            }
+        }
+        
+        return nearby;
+    }
     
     //------------------------------------------------------------------------------------------------
     void RegisterMarkerCallback(AG0_TDLMapMarkerEntry markerEntry)
@@ -308,7 +399,14 @@ class AG0_TDLSystem : GameSystem
 	    }
 	    
 	    m_aRegisteredNetworkDevices.Insert(device);
+    
+	    RplId deviceRplId = device.GetDeviceRplId();
+	    if (deviceRplId != RplId.Invalid())
+	        m_mDeviceCache.Set(deviceRplId, device);
+	    
 	    LogDeviceRegistration(device, true);
+	    
+	    m_fTimeSinceGridRebuild = 999.0;
 	    
 	    foreach (AG0_TDLMapMarkerEntry markerEntry : m_MarkerCallbacks)
 	    {
@@ -329,7 +427,14 @@ class AG0_TDLSystem : GameSystem
 	    }
 	    
 	    m_aRegisteredNetworkDevices.Remove(idx);
+    
+	    RplId deviceRplId = device.GetDeviceRplId();
+	    if (deviceRplId != RplId.Invalid())
+	        m_mDeviceCache.Remove(deviceRplId);
+	    
 	    LogDeviceRegistration(device, false);
+	    
+	    m_fTimeSinceGridRebuild = 999.0;
 	    
 	    // Remove from any networks
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
@@ -516,13 +621,21 @@ class AG0_TDLSystem : GameSystem
 	    if (!deviceA || !deviceB) return false;
 	    if (!deviceA.CanAccessNetwork() || !deviceB.CanAccessNetwork()) return false;
 	    
-	    float distance = vector.Distance(
-	        deviceA.GetOwner().GetOrigin(), 
-	        deviceB.GetOwner().GetOrigin()
-	    );
+	    vector posA = deviceA.GetOwner().GetOrigin();
+	    vector posB = deviceB.GetOwner().GetOrigin();
 	    
 	    float rangeA = deviceA.GetEffectiveNetworkRange();
 	    float rangeB = deviceB.GetEffectiveNetworkRange();
+	    float maxPossibleRange = Math.Max(rangeA, rangeB);
+	    
+	    // OPTIMIZATION: Early rejection using axis-aligned bounding box (AABB)
+	    // This is much cheaper than distance calculation (no sqrt)
+	    if (Math.AbsFloat(posA[0] - posB[0]) > maxPossibleRange) return false;
+	    if (Math.AbsFloat(posA[1] - posB[1]) > maxPossibleRange) return false;
+	    if (Math.AbsFloat(posA[2] - posB[2]) > maxPossibleRange) return false;
+	    
+	    // Now do the actual distance calculation
+	    float distance = vector.Distance(posA, posB);
 	    float maxRange = Math.Min(rangeA, rangeB);
 	    
 	    bool connected = distance <= maxRange;
@@ -567,6 +680,16 @@ class AG0_TDLSystem : GameSystem
 	    
 	    Print("TDL_SYSTEM_UPDATE: Starting network update cycle", LogLevel.DEBUG);
 	    LogNetworkState("UpdateNetworks");
+		
+		UpdateMaxDeviceRange();
+	    
+	    // OPTIMIZATION: Rebuild spatial grid periodically
+	    m_fTimeSinceGridRebuild += GetWorld().GetFixedTimeSlice();
+	    if (m_fTimeSinceGridRebuild >= m_fGridRebuildInterval)
+	    {
+	        RebuildSpatialGrid();
+	        m_fTimeSinceGridRebuild = 0;
+	    }
 	    
 	    CheckNetworkMerges();
 	    
@@ -696,9 +819,10 @@ class AG0_TDLSystem : GameSystem
 	                        connectedData.SetNetworkIP(memberData.GetNetworkIP());
 	                        connectedData.SetCapabilities(memberData.GetCapabilities());
 	                        
-	                        float maxRange = Math.Max(device.GetEffectiveNetworkRange(), connectedDevice.GetEffectiveNetworkRange());
-	                        float signalStrength = Math.Clamp(100.0 * (1.0 - (distance / maxRange)), 0.0, 100.0);
-	                        connectedData.SetSignalStrength(signalStrength);
+	                        float effectiveRange = Math.Min(device.GetEffectiveNetworkRange(), 
+							                                connectedDevice.GetEffectiveNetworkRange());
+							float signalStrength = Math.Clamp(100.0 * (1.0 - (distance / effectiveRange)), 0.0, 100.0);
+							connectedData.SetSignalStrength(signalStrength);
 	                        
 	                        connectedMembers.Set(connectedRplId, connectedData);
 	                    }
@@ -756,30 +880,35 @@ class AG0_TDLSystem : GameSystem
 	    }
 	}
     
-    protected void FindConnectedDevicesInNetwork(AG0_TDLDeviceComponent source, AG0_TDLNetwork network)
-    {
-        if (m_aProcessedDevices.Contains(source)) return;
-        
-        m_aProcessedDevices.Insert(source);
-        
-        if (!source.CanAccessNetwork()) return;
-        
-        IEntity sourceEntity = source.GetOwner();
-        if (!sourceEntity) return;
-        
-        foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
-        {
-            if (device == source || m_aProcessedDevices.Contains(device)) continue;
-            if (!device.CanAccessNetwork()) continue;
-            
-            if (AreDevicesConnected(source, device))
-            {
-				if (!m_aConnectedDevices.Contains(device))
-        			m_aConnectedDevices.Insert(device);
-                FindConnectedDevicesInNetwork(device, network);
-            }
-        }
-    }
+   	protected void FindConnectedDevicesInNetwork(AG0_TDLDeviceComponent source, AG0_TDLNetwork network)
+	{
+	    if (m_aProcessedDevices.Contains(source)) return;
+	    
+	    m_aProcessedDevices.Insert(source);
+	    
+	    if (!source.CanAccessNetwork()) return;
+	    
+	    IEntity sourceEntity = source.GetOwner();
+	    if (!sourceEntity) return;
+	    
+	    vector sourcePos = sourceEntity.GetOrigin();
+	    
+	    // OPTIMIZATION: Only check nearby devices using spatial grid
+	    array<AG0_TDLDeviceComponent> nearbyDevices = GetNearbyDevices(sourcePos, network);
+	    
+	    foreach (AG0_TDLDeviceComponent device : nearbyDevices)
+	    {
+	        if (device == source || m_aProcessedDevices.Contains(device)) continue;
+	        if (!device.CanAccessNetwork()) continue;
+	        
+	        if (AreDevicesConnected(source, device))
+	        {
+	            if (!m_aConnectedDevices.Contains(device))
+	                m_aConnectedDevices.Insert(device);
+	            FindConnectedDevicesInNetwork(device, network);
+	        }
+	    }
+	}
     
     //------------------------------------------------------------------------------------------------
     // RPC notifications
