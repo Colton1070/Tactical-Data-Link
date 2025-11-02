@@ -17,12 +17,14 @@ class AG0_PlayerHasTDLDeviceWithCapabilitiesCondition : SCR_AvailableActionCondi
         if (!data)
             return GetReturnResult(false);
         
-        SCR_PlayerController playerController = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (!playerController)
+        AG0_TDLController controller = AG0_TDLController.Cast(
+    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+		);
+        if (!controller)
             return GetReturnResult(false);
         
         // Use existing method from modded player controller
-        array<AG0_TDLDeviceComponent> devices = playerController.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
         
         foreach (AG0_TDLDeviceComponent device : devices)
         {

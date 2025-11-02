@@ -74,7 +74,7 @@ class AG0_TDLNetwork
     }
 }
 
-class AG0_TDLSystem : GameSystem
+class AG0_TDLSystem : WorldSystem
 {
     // Networks storage
     protected ref array<ref AG0_TDLNetwork> m_aNetworks = {};
@@ -106,14 +106,16 @@ class AG0_TDLSystem : GameSystem
 	
     //------------------------------------------------------------------------------------------------
     override static void InitInfo(WorldSystemInfo outInfo)
-    {
-        outInfo
-            .SetAbstract(false)
-            .AddPoint(ESystemPoint.Frame);
-            
-        Print("AG0_TDLSystem: Device-centric system initialized", LogLevel.NORMAL);
-    }
-    
+	{
+	    outInfo
+	        .SetAbstract(false)
+	        .SetLocation(WorldSystemLocation.Server)
+	        .AddPoint(WorldSystemPoint.Frame)
+	        .AddController(AG0_TDLController);  // Wire up the controller
+	        
+	    Print("AG0_TDLSystem: Device-centric system initialized", LogLevel.NORMAL);
+	}
+	
     //------------------------------------------------------------------------------------------------
     static AG0_TDLSystem GetInstance()
     {
@@ -872,11 +874,11 @@ class AG0_TDLSystem : GameSystem
 	        foreach (int id : connections)
 	            connArray.Insert(id);
 	        
-	        SCR_PlayerController controller = SCR_PlayerController.Cast(
-	            playerMgr.GetPlayerController(playerID)
-	        );
-	        if (controller)
-	            controller.Rpc(controller.RPC_SetTDLConnectedPlayers, connArray);
+	        AG0_TDLController controller = AG0_TDLController.Cast(
+			    GetSystems().FindController(AG0_TDLController, playerID)
+			);
+			if (controller)
+			    controller.NotifyConnectedPlayers(connArray);
 	    }
 	}
     
@@ -944,10 +946,12 @@ class AG0_TDLSystem : GameSystem
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
 	    if (playerId <= 0) return;
 	    
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(playerMgr.GetPlayerController(playerId));
+	    AG0_TDLController controller = AG0_TDLController.Cast(
+		    GetSystems().FindController(AG0_TDLController, playerId)
+		);
 	    if (controller && networkId > 0)
 	    {
-	        controller.Rpc(controller.RPC_ClearTDLNetwork, networkId);
+	        controller.NotifyClearNetwork(networkId);
 	    }
     }
     
@@ -971,7 +975,9 @@ class AG0_TDLSystem : GameSystem
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
 	    if (playerId < 0) return;
 	    
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(playerMgr.GetPlayerController(playerId));
+	    AG0_TDLController controller = AG0_TDLController.Cast(
+		    GetSystems().FindController(AG0_TDLController, playerId)
+		);
 	    if (!controller) return;
 	    
 	    // Get the network ID from the device
@@ -985,7 +991,7 @@ class AG0_TDLSystem : GameSystem
 	        membersArray.Insert(member);
 	    }
 	    
-	    controller.Rpc(controller.RPC_SetTDLNetworkMembers, networkId, membersArray);
+	    controller.NotifyNetworkMembers(networkId, membersArray);
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -1040,11 +1046,12 @@ class AG0_TDLSystem : GameSystem
             {
                 notifiedPlayers.Insert(playerId);
                 
-                SCR_PlayerController controller = SCR_PlayerController.Cast(
-                    playerMgr.GetPlayerController(playerId));
+                AG0_TDLController controller = AG0_TDLController.Cast(
+				    GetSystems().FindController(AG0_TDLController, playerId)
+				);
                 if (controller)
                 {
-                    controller.Rpc(controller.RPC_SetNetworkBroadcastingSources, broadcastingDevices);
+                    controller.NotifyBroadcastingSources(broadcastingDevices);
                 }
             }
         }

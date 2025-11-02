@@ -29,19 +29,19 @@ modded class SCR_MapMarkerBase
 	    // TDL markers need connectivity check
 	    if (m_bIsTDLMarker && m_iMarkerOwnerID > 0)  // Skip server markers (-1)
 	    {
-	        SCR_PlayerController localController = SCR_PlayerController.Cast(
-	            GetGame().GetPlayerController()
-	        );
+	        AG0_TDLController controller = AG0_TDLController.Cast(
+	    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+			);
 	        
-	        if (!localController)
+	        if (!controller)
 	            return false;
 	        
 	        // Always show our own markers
-	        if (m_iMarkerOwnerID == localController.GetPlayerId())
+	        if (m_iMarkerOwnerID == controller.GetOwnerPlayerId())
 	            return super.OnUpdate(visibleMin, visibleMax);
 	        
 	        // Otherwise check connectivity
-	        array<int> connectedPlayers = localController.GetTDLConnectedPlayers();
+	        array<int> connectedPlayers = controller.GetTDLConnectedPlayers();
 	        if (!connectedPlayers.Contains(m_iMarkerOwnerID))
 	        {
 	            SetUpdateDisabled(true);
@@ -51,4 +51,42 @@ modded class SCR_MapMarkerBase
 	    
 	    return super.OnUpdate(visibleMin, visibleMax);
 	}
+	
+	//------------------------------------------------------------------------------------------------
+    // Serialization pass-through methods (I've got NO additional data to store here...)
+    //------------------------------------------------------------------------------------------------
+    override static bool Extract(SCR_MapMarkerBase instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
+    {
+        return SCR_MapMarkerBase.Extract(instance, ctx, snapshot);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    override static bool Inject(SSnapSerializerBase snapshot, ScriptCtx ctx, SCR_MapMarkerBase instance)
+    {
+        return SCR_MapMarkerBase.Inject(snapshot, ctx, instance);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    override static void Encode(SSnapSerializerBase snapshot, ScriptCtx ctx, ScriptBitSerializer packet)
+    {
+        SCR_MapMarkerBase.Encode(snapshot, ctx, packet);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    override static bool Decode(ScriptBitSerializer packet, ScriptCtx ctx, SSnapSerializerBase snapshot)
+    {
+        return SCR_MapMarkerBase.Decode(packet, ctx, snapshot);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    override static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
+    {
+        return SCR_MapMarkerBase.SnapCompare(lhs, rhs, ctx);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    override static bool PropCompare(SCR_MapMarkerBase instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
+    {
+        return SCR_MapMarkerBase.PropCompare(instance, snapshot, ctx);
+    }
 }
