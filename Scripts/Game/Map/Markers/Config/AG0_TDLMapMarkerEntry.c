@@ -25,6 +25,21 @@ class AG0_TDLMapMarkerEntry : SCR_MapMarkerEntryDynamic
 	    m_mRadioMarkers.Remove(radioRplId);
 	}
 	
+	void RefreshAllMarkerVisibility()
+	{
+	    SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!pc) return;
+	    
+	    foreach (RplId deviceId, SCR_MapMarkerEntity marker : m_mRadioMarkers)
+	    {
+	        AG0_MapMarkerTDL tdlMarker = AG0_MapMarkerTDL.Cast(marker);
+	        if (!tdlMarker) continue;
+	        
+	        bool shouldShow = pc.CanSeeDevice(deviceId);
+	        tdlMarker.SetLocalVisible(shouldShow);
+	    }
+	}
+	
     //------------------------------------------------------------------------------------------------
     // Define our unique marker type for TDL radios
     override SCR_EMapMarkerType GetMarkerType()

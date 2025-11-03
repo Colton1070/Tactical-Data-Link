@@ -1,5 +1,5 @@
 /**
- * AG0 MFDFramework Preprocessor Directives
+ * AG0_TacticalDataLink Preprocessor Directives
  * 
  * This file handles conditional compilation flags for optional mod dependencies.
  * It's named with "!" prefix to ensure it's compiled before other scripts.
@@ -8,8 +8,8 @@
  * For mod developers:
  * - If your mod may interface with this one, but you don't have this mod as a dependency, wrap code which interfaces with this mod using:
  *
- * #ifdef AG0_MFDFramework
- *     owner.FindComponent(AG0_MultiFunctionDisplayComponent)
+ * #ifdef AG0_TacticalDataLink
+ *     owner.FindComponent(AG0_TDLDeviceComponent);
  * #endif
  *
  * This ensures that the code is compiled only when the flag is set. If it's not, which it won't be if this mod is not loaded,

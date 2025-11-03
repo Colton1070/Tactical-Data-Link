@@ -5,6 +5,20 @@ class AG0_TDLController : WorldController
     {
         outInfo.SetPublic(true);
     }
+	
+	void AG0_TDLController()
+	{
+	    string context = "CLIENT";
+	    if (Replication.IsServer())
+	        context = "SERVER";
+	    
+	    Print(string.Format("TDL_CONTROLLER: Constructor called on %1", context), LogLevel.DEBUG);
+	}
+	
+	override protected void OnAuthorityReady()
+	{
+	    Print(string.Format("TDL_CONTROLLER: OnAuthorityReady for player %1", GetOwnerPlayerId()), LogLevel.DEBUG);
+	}
     
     //------------------------------------------------------------------------------------------------
     // Replicated state
@@ -24,6 +38,7 @@ class AG0_TDLController : WorldController
     //------------------------------------------------------------------------------------------------
     void NotifyConnectedPlayers(array<int> connectedPlayerIDs)
     {
+		Print("Recieved connected players on controller, role is server: ", Replication.IsServer());
         Rpc(RPC_SetTDLConnectedPlayers, connectedPlayerIDs);
     }
     
@@ -76,23 +91,27 @@ class AG0_TDLController : WorldController
     {
         m_NetworkBroadcastingSources = sources;
         m_bVideoSourcesDirty = true;
-        Print(string.Format("TDL_CONTROLLER: Received %1 network broadcasting sources", sources.Count()), LogLevel.WARNING);
+        Print(string.Format("TDL_CONTROLLER: Received %1 network broadcasting sources", sources.Count()), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------
-    // Equipment queries (copied from PlayerController)
+    // Equipment queries
     //------------------------------------------------------------------------------------------------
     array<AG0_TDLDeviceComponent> GetPlayerTDLDevices()
 	{
 	    array<AG0_TDLDeviceComponent> devices = {};
 	    
-	    // Only enumerate on local client
-	    if (!IsMyOwn()) 
+	    if (!IsMyOwn())
 	        return devices;
 	    
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
-	    PlayerController pc = playerMgr.GetPlayerController(GetOwnerPlayerId());
-	    if (!pc) return devices;
+		#ifdef WORKBENCH
+	    	PlayerController pc = playerMgr.GetPlayerController(1);
+	    #else
+			PlayerController pc = playerMgr.GetPlayerController(GetOwnerPlayerId());
+		#endif
+		
+		if (!pc) return devices;
 	    
 	    IEntity controlled = pc.GetControlledEntity();
 	    if (!controlled) return devices;
@@ -126,6 +145,42 @@ class AG0_TDLController : WorldController
 	                item.FindComponent(AG0_TDLDeviceComponent));
 	            if (deviceComp && deviceComp.CanAccessNetwork())
 	                devices.Insert(deviceComp);
+	        }
+	    }
+	    
+	    // Check loadout clothing slots
+	    ChimeraCharacter character = ChimeraCharacter.Cast(controlled);
+	    if (character)
+	    {
+	        EquipedLoadoutStorageComponent loadoutStorage = 
+	            EquipedLoadoutStorageComponent.Cast(character.FindComponent(EquipedLoadoutStorageComponent));
+	        if (loadoutStorage)
+	        {
+	            array<typename> equipmentAreas = {
+	                LoadoutHeadCoverArea, LoadoutArmoredVestSlotArea, 
+	                LoadoutVestArea, LoadoutJacketArea, LoadoutBackpackArea
+	            };
+	            
+	            foreach (typename area : equipmentAreas)
+	            {
+	                IEntity container = loadoutStorage.GetClothFromArea(area);
+	                if (!container) continue;
+	                
+	                ClothNodeStorageComponent clothStorage = ClothNodeStorageComponent.Cast(
+	                    container.FindComponent(ClothNodeStorageComponent));
+	                if (!clothStorage) continue;
+	                
+	                array<IEntity> clothItems = {};
+	                clothStorage.GetAll(clothItems);
+	                
+	                foreach (IEntity item : clothItems)
+	                {
+	                    AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
+	                        item.FindComponent(AG0_TDLDeviceComponent));
+	                    if (deviceComp && deviceComp.CanAccessNetwork())
+	                        devices.Insert(deviceComp);
+	                }
+	            }
 	        }
 	    }
 	    

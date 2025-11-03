@@ -65,5 +65,10 @@ class AG0_MapMarkerTDL : SCR_MapMarkerEntity
     {
         return m_DeviceRplId;
     }
+	
+	void SetVisibility(bool visible)
+	{
+	    SetLocalVisible(visible);
+	}
 
 }

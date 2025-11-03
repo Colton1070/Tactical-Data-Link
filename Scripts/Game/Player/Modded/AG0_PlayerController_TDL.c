@@ -29,6 +29,7 @@ modded class SCR_PlayerController
         AG0_TDLController controller = AG0_TDLController.Cast(
             GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
         );
+		Print(controller, LogLevel.WARNING);
         if (!controller) return;
         
         array<AG0_TDLDeviceComponent> playerDevices = controller.GetPlayerTDLDevices();
@@ -50,8 +51,21 @@ modded class SCR_PlayerController
         }
         
         // Update if changed
-        if (!RplIdArraysEqual(newVisibleDevices, m_aVisibleTDLDevices))
-            m_aVisibleTDLDevices = newVisibleDevices;
+		if (!RplIdArraysEqual(newVisibleDevices, m_aVisibleTDLDevices))
+		{
+		    m_aVisibleTDLDevices = newVisibleDevices;
+		    
+		    // Notify marker system
+		    SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+		    if (markerMgr)
+		    {
+		        AG0_TDLMapMarkerEntry entry = AG0_TDLMapMarkerEntry.Cast(
+		            markerMgr.GetMarkerConfig().GetMarkerEntryConfigByType(SCR_EMapMarkerType.TDL_RADIO)
+		        );
+		        if (entry)
+		            entry.RefreshAllMarkerVisibility();
+		    }
+		}
     }
     
     protected bool RplIdArraysEqual(array<RplId> a, array<RplId> b)

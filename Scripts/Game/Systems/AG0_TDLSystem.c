@@ -81,7 +81,7 @@ class AG0_TDLSystem : WorldSystem
     protected int m_iNextNetworkID = 1;
     
     // Configuration
-    protected float m_fUpdateInterval = 1.0;
+    protected float m_fUpdateInterval = 5.0;
     protected float m_fTimeSinceLastUpdate = 0;
     
     // All registered network devices
@@ -107,11 +107,14 @@ class AG0_TDLSystem : WorldSystem
     //------------------------------------------------------------------------------------------------
     override static void InitInfo(WorldSystemInfo outInfo)
 	{
+		super.InitInfo(outInfo);
+	    
+	    Print("TDL_SYSTEM_INIT: InitInfo called", LogLevel.DEBUG);
 	    outInfo
 	        .SetAbstract(false)
 	        .SetLocation(WorldSystemLocation.Server)
 	        .AddPoint(WorldSystemPoint.Frame)
-	        .AddController(AG0_TDLController);  // Wire up the controller
+	        .AddController(AG0_TDLController);
 	        
 	    Print("AG0_TDLSystem: Device-centric system initialized", LogLevel.NORMAL);
 	}
@@ -142,6 +145,7 @@ class AG0_TDLSystem : WorldSystem
 	        
             if (playerId > 0)
                return owner;
+			//TODO: just return the playerId when found... since that's what we need to use anyways.
 	        
 	        owner = owner.GetParent();
 	    }
@@ -150,7 +154,7 @@ class AG0_TDLSystem : WorldSystem
     
     
     //------------------------------------------------------------------------------------------------
-    override protected void OnUpdate(ESystemPoint point)
+    override protected void OnUpdatePoint(WorldUpdatePointArgs args)
     {
         if (!Replication.IsServer()) return;
         
@@ -846,7 +850,10 @@ class AG0_TDLSystem : WorldSystem
 	        if (!playerEntity) continue;
 	        
 	        int ownerID = playerMgr.GetPlayerIdFromControlledEntity(playerEntity);
-	        if (ownerID <= 0) continue;
+			PlayerController pc = playerMgr.GetPlayerController(ownerID);
+			Print(string.Format("DEBUG_PLAYERID: Entity %1 -> PlayerId %2 -> PC PlayerId %3", playerEntity, ownerID, pc.GetPlayerId()), LogLevel.DEBUG);
+			
+	        if (!ownerID) continue;
 	        
 	        if (!playerConnections.Contains(ownerID))
 	            playerConnections.Insert(ownerID, new set<int>());
@@ -862,8 +869,8 @@ class AG0_TDLSystem : WorldSystem
 	            if (!connectedPlayerEntity) continue;
 	            
 	            int connectedOwnerID = playerMgr.GetPlayerIdFromControlledEntity(connectedPlayerEntity);
-	            if (connectedOwnerID > 0 && connectedOwnerID != ownerID)
-	                playerConnections[ownerID].Insert(connectedOwnerID);
+	            if (connectedOwnerID > 0)
+    				playerConnections[ownerID].Insert(connectedOwnerID);
 	        }
 	    }
 	    
@@ -873,13 +880,24 @@ class AG0_TDLSystem : WorldSystem
 	        array<int> connArray = {};
 	        foreach (int id : connections)
 	            connArray.Insert(id);
-	        
-	        AG0_TDLController controller = AG0_TDLController.Cast(
+			//Below is required because the controller is created with index 0 for workbench player, while everything else things the workbench is player 1.
+	        #ifdef WORKBENCH
+				PlayerId workbenchPlayer = 0;
+			
+		        AG0_TDLController controller = AG0_TDLController.Cast(
+				    GetSystems().FindController(AG0_TDLController, workbenchPlayer)
+				);
+			#else
+			AG0_TDLController controller = AG0_TDLController.Cast(
 			    GetSystems().FindController(AG0_TDLController, playerID)
 			);
-			if (controller)
+			#endif
+			PrintFormat("TDL_System: Notifying player controller for player %1, %2", playerID, controller, LogLevel.DEBUG);
+			if (controller) {
 			    controller.NotifyConnectedPlayers(connArray);
-	    }
+	    		PrintFormat("Notified connected players: %1", connArray, LogLevel.DEBUG);
+			}
+		}
 	}
     
    	protected void FindConnectedDevicesInNetwork(AG0_TDLDeviceComponent source, AG0_TDLNetwork network)
@@ -944,7 +962,7 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
-	    if (playerId <= 0) return;
+	    if (playerId < 0) return;
 	    
 	    AG0_TDLController controller = AG0_TDLController.Cast(
 		    GetSystems().FindController(AG0_TDLController, playerId)
@@ -1067,7 +1085,7 @@ class AG0_TDLSystem : WorldSystem
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player)
 	    {
-	        Print("TDL_VIDEO_SYSTEM: ERROR - No player found for broadcasting device!", LogLevel.ERROR);
+	        Print("TDL_VIDEO_SYSTEM: ERROR - No player found for broadcasting device!", LogLevel.DEBUG);
 	        return;
 	    }
 	    
@@ -1096,7 +1114,7 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    if (!foundInNetwork)
 	    {
-	        Print("TDL_VIDEO_SYSTEM: WARNING - Broadcasting device's player not in any network!", LogLevel.WARNING);
+	        Print("TDL_VIDEO_SYSTEM: WARNING - Broadcasting device's player not in any network!", LogLevel.DEBUG);
 	    }
 	}
 	
