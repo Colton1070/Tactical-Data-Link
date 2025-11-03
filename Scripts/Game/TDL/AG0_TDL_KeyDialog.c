@@ -1,21 +1,36 @@
 class AG0_TDL_KeyDialog : SCR_ConfigurableDialogUi
 {
-	ResourceName m_dialogsConfig = "{B5657EE8DF7F856D}Configs/UI/AG0_TDL_Dialogs.conf";
-	
-	//------------------------------------------------------------------------------------------------
-	void AG0_TDL_KeyDialog(string dialogMessage, string dialogPreset, string dialogTitle = "")
+    protected const ResourceName DIALOG_CONFIG = "{B5657EE8DF7F856D}Configs/UI/AG0_TDL_Dialogs.conf";
+    
+    protected SCR_EditBoxComponent m_InputField;
+    
+    // Static factory - this is how you create instances
+    static AG0_TDL_KeyDialog CreateKeyDialog(string message, string title = "")
     {
-        // CreateFromPreset will actually initialize 'this' object
-        SCR_ConfigurableDialogUi.CreateFromPreset(m_dialogsConfig, dialogPreset, this);
+        AG0_TDL_KeyDialog dialog = new AG0_TDL_KeyDialog();
+        SCR_ConfigurableDialogUi.CreateFromPreset(DIALOG_CONFIG, "dialog_cypherkey", dialog);
         
-        SetMessage(dialogMessage);
-        
-        if (!dialogTitle.IsEmpty())
-            SetTitle(dialogTitle);
+        dialog.SetMessage(message);
+        if (!title.IsEmpty())
+            dialog.SetTitle(title);
+            
+        return dialog;
     }
     
-    void ClearButtons()
+    override void OnMenuOpen(SCR_ConfigurableDialogUiPreset preset)
     {
-        m_aButtonComponents.Clear();
+        super.OnMenuOpen(preset);
+        
+        m_InputField = SCR_EditBoxComponent.GetEditBoxComponent("InputField", m_wRoot);
+        if (m_InputField)
+        {
+            GetGame().GetWorkspace().SetFocusedWidget(m_InputField.GetRootWidget());
+        }
+    }
+    
+    string GetInputValue()
+    {
+        if (!m_InputField) return "";
+        return m_InputField.GetValue().Trim();
     }
 }

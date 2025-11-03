@@ -1,0 +1,104 @@
+FrameWidgetClass : "{604721ED8E6ED458}UI/layouts/Menus/Dialogs/ConfigurableDialog_Medium.layout" {
+ Name "BasicDialog"
+ {
+  SizeLayoutWidgetClass "{5CC296FE0BE2ED39}" {
+   Prefab "{5CC296FE0BE2ED39}"
+   {
+    OverlayWidgetClass "{5CC296FBD8B6CA52}" {
+     Prefab "{5CC296FBD8B6CA52}"
+     {
+      VerticalLayoutWidgetClass "{5CC296FBD8B6CA68}" {
+       Prefab "{5CC296FBD8B6CA68}"
+       {
+        HorizontalLayoutWidgetClass "{5CC296FE665361F7}" {
+         Prefab "{5CC296FE665361F7}"
+         components {
+          SCR_CoreMenuHeaderComponent "{5DF8B494918B68DB}" {
+           m_sTitle "#ar-account_login"
+          }
+         }
+         {
+          SizeLayoutWidgetClass "{5CDCC55754F81B7E}" {
+           Prefab "{5CDCC55754F81B7E}"
+           {
+            ImageWidgetClass "{5CC296FBD8B6CA6E}" {
+             Prefab "{5CC296FBD8B6CA6E}"
+             Color 0.8107 0.8238 0 1
+             Texture "{B365115DCD2C393A}UI/Textures/Icons/icons_wrapperUI-64TDL.imageset"
+             Image "tdl_device"
+            }
+           }
+          }
+         }
+        }
+        OverlayWidgetClass "{5CC296FBD8B6CA6D}" {
+         Prefab "{5CC296FBD8B6CA6D}"
+         {
+          SizeLayoutWidgetClass "{5CC296F8389B4B68}" {
+           Prefab "{5CC296F8389B4B68}"
+           {
+            VerticalLayoutWidgetClass "{5CC296F8389B4B6E}" {
+             Prefab "{5CC296F8389B4B6E}"
+             {
+              OverlayWidgetClass "{5CC296F8389B4B62}" {
+               Prefab "{5CC296F8389B4B62}"
+               Slot LayoutSlot "{5CB0A797025666D9}" {
+               }
+               {
+                FrameWidgetClass "{66C612CFF46BC37E}" {
+                 Name "Frame0"
+                 Slot OverlayWidgetSlot "{66C612C81465F0D8}" {
+                 }
+                 {
+                  VerticalLayoutWidgetClass "{66C612CFCEFC6ADB}" {
+                   Name "VerticalLayout0"
+                   Slot FrameWidgetSlot "{66C612CFCEFC6AAF}" {
+                    PositionX 0
+                    OffsetLeft 0
+                    PositionY 0
+                    OffsetTop 0
+                    SizeX 772.951
+                    OffsetRight -773
+                    SizeY 98.652
+                    OffsetBottom -98.7
+                   }
+                   {
+                    EditBoxWidgetClass "{66C612CFF46BC37C}" {
+                     Name "NetworkNameInput"
+                     Slot LayoutSlot "{66C612CDF19024CA}" {
+                      Padding 0 0 0 10
+                     }
+                     "Use placeholder text" 1
+                     "Placeholder text" "Username"
+                     "Virtual Keyboard Title" "Username"
+                    }
+                    EditBoxWidgetClass "{66C612CFFC933606}" {
+                     Name "NetworkPasswordInput"
+                     Slot LayoutSlot "{66C612CDF19024AB}" {
+                      Padding 0 10 0 10
+                     }
+                     "Use placeholder text" 1
+                     "Placeholder text" "Password"
+                     "Obfuscation character" "*"
+                     "Virtual Keyboard Title" "Password"
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

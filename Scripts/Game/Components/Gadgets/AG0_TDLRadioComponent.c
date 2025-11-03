@@ -146,7 +146,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 
 		// Create the dialog - using the same preset as the CDU example
 		// Make sure "dialog_cypherkey" preset exists in TDL_Dialogs.conf and has an "InputField" EditBoxWidget.
-		m_inputDialog = new AG0_TDL_KeyDialog("ENTER CRYPTO KEY", "dialog_cypherkey", "CRYPTO KEY INPUT");
+		m_inputDialog = AG0_TDL_KeyDialog.CreateKeyDialog("ENTER CRYPTO KEY", "CRYPTO KEY INPUT");
 
 		//Print("AG0_TDLRadioComponent: Dialog created.", LogLevel.NORMAL);
 		// Check if dialog creation failed

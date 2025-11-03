@@ -110,7 +110,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	protected RplId m_LocalActiveVideoSource = RplId.Invalid();
 	
     // Dialog state
-    protected ref AG0_TDL_KeyDialog m_networkDialog;
+    protected ref AG0_TDL_LoginDialog m_networkDialog;
     protected EditBoxWidget m_networkNameEdit;
     protected EditBoxWidget m_networkPasswordEdit;
     protected bool m_bCreateNetworkMode = false;
@@ -437,7 +437,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		}
 		
 		// Configure HDR for broadcast
-		world.SetCameraHDRBrightness(cameraIndex, 0.05);
+		world.SetCameraHDRBrightness(cameraIndex, 0.5);
 		
 		// Apply configured effects
 		foreach (AG0_PostProcessEffect effect : m_aCameraEffects) {
@@ -618,7 +618,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    if(createMode) {
 			dialogTitle = "CREATE TDL NETWORK";
 		}
-		m_networkDialog = new AG0_TDL_KeyDialog("Enter network credentials", "dialog_tdllogin", dialogTitle);
+		m_networkDialog = AG0_TDL_LoginDialog.CreateLoginDialog("Enter network credentials", dialogTitle);
 	    
 	    // Check if dialog creation failed
 	    if (!m_networkDialog || !m_networkDialog.GetRootWidget())
@@ -652,38 +652,26 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	//------------------------------------------------------------------------------------------------
 	protected void OnNetworkDialogConfirm(SCR_ConfigurableDialogUi dialog)
 	{
-	    // Should already be on client due to OpenNetworkDialog check
-	    if (!rplComp || !rplComp.IsOwner()) return;
-	    
-	    if (!m_networkNameEdit || !m_networkPasswordEdit)
-	    {
-	        //Print("AG0_TDLRadioComponent: OnNetworkDialogConfirm called but input fields are null!", LogLevel.ERROR);
-	        CleanupNetworkDialogRefs();
+	    Print("OnNetworkDialogConfirm FIRED", LogLevel.NORMAL);
+    
+	    AG0_TDL_LoginDialog loginDialog = AG0_TDL_LoginDialog.Cast(dialog);
+	    if (!loginDialog) {
+	        Print("CAST FAILED - dialog is not AG0_TDL_LoginDialog!", LogLevel.ERROR);
 	        return;
 	    }
 	    
-	    string networkName = m_networkNameEdit.GetText();
-	    string networkPassword = m_networkPasswordEdit.GetText();
+	    string networkName = loginDialog.GetNetworkName();
+	    string networkPassword = loginDialog.GetNetworkPassword();
 	    
-	    // Basic validation
-	    if (networkName.IsEmpty())
-	    {
-	        // You could show an error message here
-	        //Print("AG0_TDLRadioComponent: Network name cannot be empty", LogLevel.WARNING);
-	        return;
-	    }
+	    Print(string.Format("Got values: name='%1' pass='%2'", networkName, networkPassword), LogLevel.NORMAL);
+
 	    
-	   //Print(string.Format("AG0_TDLRadioComponent: Network credentials entered: %1 / %2 (Client)", networkName, networkPassword), LogLevel.DEBUG);
+	    if (networkName.IsEmpty()) return;  // Only check you probably want
 	    
-	    // Send the request to server
 	    if (m_bCreateNetworkMode)
-	    {
 	        Rpc(RpcAsk_CreateNetworkTDL, networkName, networkPassword);
-	    }
 	    else
-	    {
 	        Rpc(RpcAsk_JoinNetworkTDL, networkName, networkPassword);
-	    }
 	    
 	    CleanupNetworkDialogRefs();
 	}

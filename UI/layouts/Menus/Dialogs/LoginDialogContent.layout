@@ -1,0 +1,229 @@
+OverlayWidgetClass "{66C612CA80AF8C2D}" {
+ Name "ContentRoot"
+ Slot OverlayWidgetSlot "{5CB6C1EDF6BB076A}" {
+  HorizontalAlign 3
+  VerticalAlign 3
+ }
+ {
+  VerticalLayoutWidgetClass "{66C612CA80AF8C25}" {
+   Name "LoginAndPassword"
+   Slot OverlayWidgetSlot "{5510B6A84580B6C2}" {
+    HorizontalAlign 3
+    VerticalAlign 3
+    Padding 0 0 0 0
+   }
+   {
+    HorizontalLayoutWidgetClass "{66C612CA80AF8C1B}" {
+     Name "PlayerIDLayout"
+     Slot LayoutSlot "{5DF69AC4F554D408}" {
+      HorizontalAlign 2
+     }
+     {
+      SizeLayoutWidgetClass "{66C612CA80AF8C18}" {
+       Name "CopyPIDSize"
+       Slot LayoutSlot "{5EA6B01D57695CF6}" {
+       }
+       WidthOverride 32
+       AllowHeightOverride 1
+       HeightOverride 32
+       AllowAspectRatioForce 1
+       {
+        ButtonWidgetClass "{66C612CA80AF8C1D}" : "{4A119D28E23A3999}UI/layouts/WidgetLibrary/Buttons/WLib_ButtonImage.layout" {
+         Name "CopyPIDButton"
+         Slot AlignableSlot "{5548E6E7EED73BC0}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+         }
+         components {
+          SCR_ButtonImageComponent "{55589476821916D2}" {
+           m_BackgroundDefault 1 1 1 0
+           m_BackgroundHovered 1 1 1 0
+           m_bShowBorderOnHover 1
+           m_sTexture "{3262679C50EF4F01}UI/Textures/Icons/icons_wrapperUI.imageset"
+           m_sImageName "copy"
+          }
+         }
+         {
+          SizeLayoutWidgetClass "{5548E6E7E6AEDDA7}" {
+           Prefab "{5548E6E7E6AEDDA7}"
+           {
+            OverlayWidgetClass "{5548E6E7F213FBF1}" {
+             Prefab "{5548E6E7F213FBF1}"
+             {
+              ScaleWidgetClass "{55589476C896A09B}" {
+               Prefab "{55589476C896A09B}"
+               {
+                ImageWidgetClass "{55589476CBD910D4}" {
+                 Prefab "{55589476CBD910D4}"
+                 Color 1 1 1 0.7
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+      RichTextWidgetClass "{66C612CA80AF8C11}" {
+       Name "PIDText"
+       Slot LayoutSlot "{5DF0A90F9E6CDF56}" {
+        HorizontalAlign 0
+        VerticalAlign 1
+       }
+       Color 1 1 1 0.7
+       Text ""
+       "Font Size" 16
+       "Min Font Size" 16
+       "Vertical Alignment" Center
+       Wrap 1
+      }
+     }
+    }
+    ButtonWidgetClass "{66C612CA80AF8C17}" : "{0022F0B45ADBC5AC}UI/layouts/WidgetLibrary/EditBox/WLib_EditBox.layout" {
+     Name "UserName"
+     Slot LayoutSlot "{58D4CA331FD88936}" {
+      VerticalAlign 0
+      Padding 0 0 0 5
+     }
+     components {
+      SCR_EditBoxComponent "{547290FFBD5B33E9}" {
+       m_bUseLabel 0
+       m_bShowWriteIcon 0
+      }
+     }
+     {
+      VerticalLayoutWidgetClass "{5AA4D27F39EB2514}" {
+       Prefab "{5AA4D27F39EB2514}"
+       {
+        SizeLayoutWidgetClass "{5538C205B27B0F5D}" {
+         Prefab "{5538C205B27B0F5D}"
+         {
+          OverlayWidgetClass "{55367D8E531FD623}" {
+           Prefab "{55367D8E531FD623}"
+           Slot AlignableSlot "{55367D8E531FD640}" {
+            Padding 0 0 0 0
+           }
+           {
+            PanelWidgetClass "{55367D8E4A135500}" {
+             Prefab "{55367D8E4A135500}"
+             Slot OverlayWidgetSlot "{55367D8E4A13554A}" {
+              Padding 0 0 0 0
+             }
+             "Is Visible" 1
+            }
+            HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
+             Prefab "{55367D8E4592BC6E}"
+             {
+              OverlayWidgetClass "{5538C2059A570E94}" {
+               Prefab "{5538C2059A570E94}"
+               {
+                ScaleWidgetClass "{553AB38C59601DA1}" {
+                 Prefab "{553AB38C59601DA1}"
+                 "Is Visible" 0
+                }
+                HorizontalLayoutWidgetClass "{58D095EE846E2B93}" {
+                 Prefab "{58D095EE846E2B93}"
+                 {
+                  EditBoxWidgetClass "{5538C2058B18F877}" {
+                   Prefab "{5538C2058B18F877}"
+                   "Placeholder text" "#AR-Account_Email"
+                   "Virtual Keyboard Title" "#AR-Account_Email"
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+    ButtonWidgetClass "{66C612CA80AF8C0F}" : "{0022F0B45ADBC5AC}UI/layouts/WidgetLibrary/EditBox/WLib_EditBox.layout" {
+     Name "Password"
+     Slot LayoutSlot "{5510B6A845F8349E}" {
+      VerticalAlign 0
+      Padding 0 0 0 5
+     }
+     components {
+      SCR_EditBoxComponent "{547290FFBD5B33E9}" {
+       m_bUseLabel 0
+       m_sLabel "#AR-Account_Password"
+       m_fSizeWithLabel 56
+       m_bShowWriteIcon 0
+      }
+     }
+     {
+      VerticalLayoutWidgetClass "{5AA4D27F39EB2514}" {
+       Prefab "{5AA4D27F39EB2514}"
+       {
+        SizeLayoutWidgetClass "{5538C205B27B0F5D}" {
+         Prefab "{5538C205B27B0F5D}"
+         {
+          OverlayWidgetClass "{55367D8E531FD623}" {
+           Prefab "{55367D8E531FD623}"
+           Slot AlignableSlot "{55367D8E531FD640}" {
+            Padding 0 0 0 0
+           }
+           {
+            PanelWidgetClass "{55367D8E4A135500}" {
+             Prefab "{55367D8E4A135500}"
+             Slot OverlayWidgetSlot "{55367D8E4A13554A}" {
+              Padding 0 0 0 0
+             }
+             "Is Visible" 1
+            }
+            HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
+             Prefab "{55367D8E4592BC6E}"
+             {
+              OverlayWidgetClass "{5538C2059A570E94}" {
+               Prefab "{5538C2059A570E94}"
+               {
+                ScaleWidgetClass "{553AB38C59601DA1}" {
+                 Prefab "{553AB38C59601DA1}"
+                 "Is Visible" 0
+                }
+                HorizontalLayoutWidgetClass "{58D095EE846E2B93}" {
+                 Prefab "{58D095EE846E2B93}"
+                 {
+                  EditBoxWidgetClass "{5538C2058B18F877}" {
+                   Prefab "{5538C2058B18F877}"
+                   "Placeholder text" "#AR-Account_Password"
+                   "Obfuscation character" "*"
+                   "Virtual Keyboard Title" "#AR-Account_Password"
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+    SizeLayoutWidgetClass "{66C612CA80AF8C03}" : "{DF3A499412C6768B}UI/layouts/WidgetLibrary/TextWidgets/Text_WarningMessage.layout" {
+     Name "WarningSize"
+     Slot LayoutSlot "{5DE68E71585BB95D}" {
+     }
+     components {
+      SCR_SimpleWarningComponent "{5EA8B68B12CFCC2B}" {
+       m_sWarning "#AR-Account_WrongUserPasswd"
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -76,70 +76,61 @@ class AG0_TDLController : WorldController
     {
         m_NetworkBroadcastingSources = sources;
         m_bVideoSourcesDirty = true;
-        Print(string.Format("TDL_CONTROLLER: Received %1 network broadcasting sources", sources.Count()), LogLevel.DEBUG);
+        Print(string.Format("TDL_CONTROLLER: Received %1 network broadcasting sources", sources.Count()), LogLevel.WARNING);
     }
     
     //------------------------------------------------------------------------------------------------
     // Equipment queries (copied from PlayerController)
     //------------------------------------------------------------------------------------------------
     array<AG0_TDLDeviceComponent> GetPlayerTDLDevices()
-    {
-        array<AG0_TDLDeviceComponent> devices = {};
-        
-        // Get controlled entity via PlayerManager
-        PlayerManager playerMgr = GetGame().GetPlayerManager();
-        IEntity controlled = playerMgr.GetPlayerControlledEntity(GetOwnerPlayerId());
-        if (!controlled)
-        {
-            Print("TDL_CONTROLLER: No controlled entity", LogLevel.DEBUG);
-            return devices;
-        }
-        
-        Print(string.Format("TDL_CONTROLLER: Searching for TDL devices on %1", controlled.ToString()), LogLevel.DEBUG);
-        
-        // Check held gadget
-        SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
-            controlled.FindComponent(SCR_GadgetManagerComponent));
-        if (gadgetMgr)
-        {
-            IEntity heldGadget = gadgetMgr.GetHeldGadget();
-            if (heldGadget)
-            {
-                AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
-                    heldGadget.FindComponent(AG0_TDLDeviceComponent));
-                if (deviceComp && deviceComp.CanAccessNetwork())
-                {
-                    devices.Insert(deviceComp);
-                    Print(string.Format("TDL_CONTROLLER: Found held TDL device: %1", heldGadget.ToString()), LogLevel.DEBUG);
-                }
-            }
-        }
-        
-        // Check inventory
-        InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
-            controlled.FindComponent(InventoryStorageManagerComponent));
-        if (storage)
-        {
-            array<IEntity> items = {};
-            storage.GetItems(items);
-            
-            Print(string.Format("TDL_CONTROLLER: Checking %1 inventory items", items.Count()), LogLevel.DEBUG);
-            
-            foreach (IEntity item : items)
-            {
-                AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
-                    item.FindComponent(AG0_TDLDeviceComponent));
-                if (deviceComp && deviceComp.CanAccessNetwork())
-                {
-                    devices.Insert(deviceComp);
-                    Print(string.Format("TDL_CONTROLLER: Found inventory TDL device: %1", item.ToString()), LogLevel.DEBUG);
-                }
-            }
-        }
-        
-        Print(string.Format("TDL_CONTROLLER: Total TDL devices found: %1", devices.Count()), LogLevel.DEBUG);
-        return devices;
-    }
+	{
+	    array<AG0_TDLDeviceComponent> devices = {};
+	    
+	    // Only enumerate on local client
+	    if (!IsMyOwn()) 
+	        return devices;
+	    
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    PlayerController pc = playerMgr.GetPlayerController(GetOwnerPlayerId());
+	    if (!pc) return devices;
+	    
+	    IEntity controlled = pc.GetControlledEntity();
+	    if (!controlled) return devices;
+	    
+	    // Check held gadget
+	    SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
+	        controlled.FindComponent(SCR_GadgetManagerComponent));
+	    if (gadgetMgr)
+	    {
+	        IEntity heldGadget = gadgetMgr.GetHeldGadget();
+	        if (heldGadget)
+	        {
+	            AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
+	                heldGadget.FindComponent(AG0_TDLDeviceComponent));
+	            if (deviceComp && deviceComp.CanAccessNetwork())
+	                devices.Insert(deviceComp);
+	        }
+	    }
+	    
+	    // Check inventory
+	    InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
+	        controlled.FindComponent(InventoryStorageManagerComponent));
+	    if (storage)
+	    {
+	        array<IEntity> items = {};
+	        storage.GetItems(items);
+	        
+	        foreach (IEntity item : items)
+	        {
+	            AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
+	                item.FindComponent(AG0_TDLDeviceComponent));
+	            if (deviceComp && deviceComp.CanAccessNetwork())
+	                devices.Insert(deviceComp);
+	        }
+	    }
+	    
+	    return devices;
+	}
     
     bool IsHoldingDevice(IEntity device)
     {

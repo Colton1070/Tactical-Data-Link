@@ -364,7 +364,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    }
 	    
 	    // Create dialog similar to TDL radio component
-	    m_inputDialog = new AG0_TDL_KeyDialog("ENTER CRYPTO KEY", "dialog_cypherkey", "CRYPTO KEY INPUT");
+	    m_inputDialog = AG0_TDL_KeyDialog.CreateKeyDialog("ENTER CRYPTO KEY", "CRYPTO KEY INPUT");
 	    
 	    // Check if dialog creation failed
 	    if (!m_inputDialog || !m_inputDialog.GetRootWidget())

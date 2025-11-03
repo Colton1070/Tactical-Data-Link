@@ -680,8 +680,8 @@ class AG0_TDLSystem : WorldSystem
 	{
 	    if (!Replication.IsServer()) return;
 	    
-	    Print("TDL_SYSTEM_UPDATE: Starting network update cycle", LogLevel.DEBUG);
-	    LogNetworkState("UpdateNetworks");
+	    //Print("TDL_SYSTEM_UPDATE: Starting network update cycle", LogLevel.DEBUG);
+	    //LogNetworkState("UpdateNetworks");
 		
 		UpdateMaxDeviceRange();
 	    
@@ -703,7 +703,7 @@ class AG0_TDLSystem : WorldSystem
 	    // Update video streaming after network connectivity changes
 	    UpdateVideoStreaming();
 	    
-	    Print("TDL_SYSTEM_UPDATE: Network update cycle complete", LogLevel.DEBUG);
+	    //Print("TDL_SYSTEM_UPDATE: Network update cycle complete", LogLevel.DEBUG);
 	}
     
     protected void CheckNetworkMerges()
