@@ -437,7 +437,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		}
 		
 		// Configure HDR for broadcast
-		world.SetCameraHDRBrightness(cameraIndex, 0.5);
+		world.SetCameraHDRBrightness(cameraIndex, 5);
 		
 		// Apply configured effects
 		foreach (AG0_PostProcessEffect effect : m_aCameraEffects) {
@@ -465,8 +465,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		if (!world) return;
 		
 		// Basic NVG stack
-		world.SetCameraPostProcessEffect(cameraIndex, 15, PostProcessEffectType.ColorGrading, "");
-		world.SetCameraPostProcessEffect(cameraIndex, 16, PostProcessEffectType.FilmGrain, "");
+		//world.SetCameraPostProcessEffect(cameraIndex, 15, PostProcessEffectType.ColorGrading, "");
+		//world.SetCameraPostProcessEffect(cameraIndex, 16, PostProcessEffectType.FilmGrain, "");
 		
 		Print("TDL_VIDEO: Applied night vision effects", LogLevel.DEBUG);
 	}

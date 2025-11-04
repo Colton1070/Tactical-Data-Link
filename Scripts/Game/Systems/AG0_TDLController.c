@@ -1,5 +1,7 @@
 class AG0_TDLController : WorldController
 {
+	[RplProp()]
+	protected int m_iPlayerId;
     //------------------------------------------------------------------------------------------------
     override static void InitInfo(WorldControllerInfo outInfo)
     {
@@ -24,6 +26,7 @@ class AG0_TDLController : WorldController
 	        system.RegisterController(this, realPlayerId);
 	        Print(string.Format("TDL_CONTROLLER: Registered with player ID %1", realPlayerId), LogLevel.DEBUG);
 	    }
+		m_iPlayerId = realPlayerId;
 	}
 	
 	override protected void OnAuthorityReady()
@@ -47,13 +50,10 @@ class AG0_TDLController : WorldController
 	
 	void ~AG0_TDLController()
     {
-        // Unregister ourselves from the system
-        int playerId = GetOwnerPlayerId();
-        
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (system)
         {
-            system.UnregisterController(playerId);
+            system.UnregisterController(m_iPlayerId);
         }
     }
     
@@ -145,7 +145,7 @@ class AG0_TDLController : WorldController
 		#ifdef WORKBENCH
 	    	PlayerController pc = playerMgr.GetPlayerController(1);
 	    #else
-			PlayerController pc = playerMgr.GetPlayerController(GetOwnerPlayerId());
+			PlayerController pc = playerMgr.GetPlayerController(m_iPlayerId);
 		#endif
 		
 		if (!pc) return devices;
@@ -229,7 +229,7 @@ class AG0_TDLController : WorldController
         if (!device) return false;
         
         PlayerManager playerMgr = GetGame().GetPlayerManager();
-        IEntity controlled = playerMgr.GetPlayerControlledEntity(GetOwnerPlayerId());
+        IEntity controlled = playerMgr.GetPlayerControlledEntity(m_iPlayerId);
         if (!controlled) return false;
         
         // Quick check - held gadget?
