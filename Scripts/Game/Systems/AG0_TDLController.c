@@ -15,10 +15,47 @@ class AG0_TDLController : WorldController
 	    Print(string.Format("TDL_CONTROLLER: Constructor called on %1", context), LogLevel.DEBUG);
 	}
 	
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	private void RPC_RegisterWithPlayerID(int realPlayerId)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (system)
+	    {
+	        system.RegisterController(this, realPlayerId);
+	        Print(string.Format("TDL_CONTROLLER: Registered with player ID %1", realPlayerId), LogLevel.DEBUG);
+	    }
+	}
+	
 	override protected void OnAuthorityReady()
 	{
-	    Print(string.Format("TDL_CONTROLLER: OnAuthorityReady for player %1", GetOwnerPlayerId()), LogLevel.DEBUG);
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    PlayerId localPlayerID = SCR_PlayerController.GetLocalPlayerId();
+	    if (localPlayerID != 0)
+	    {
+	        Rpc(RPC_RegisterWithPlayerID, localPlayerID);
+	        Print(string.Format("TDL_CONTROLLER: Sending registration for player %1", localPlayerID), LogLevel.DEBUG);
+	    }
+		else {
+			PrintFormat("TDL_CONTROLLER: PlayerID is 0, therefor disregarding.");
+			//Unless:
+			#ifdef WORKBENCH
+				Rpc(RPC_RegisterWithPlayerID, 1);
+	        Print(string.Format("TDL_CONTROLLER: Sending registration for player %1", 1), LogLevel.DEBUG);
+			#endif
+		}
 	}
+	
+	void ~AG0_TDLController()
+    {
+        // Unregister ourselves from the system
+        int playerId = GetOwnerPlayerId();
+        
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (system)
+        {
+            system.UnregisterController(playerId);
+        }
+    }
     
     //------------------------------------------------------------------------------------------------
     // Replicated state
@@ -64,8 +101,8 @@ class AG0_TDLController : WorldController
     protected void RPC_SetTDLConnectedPlayers(array<int> connectedPlayerIDs)
     {
         m_aTDLConnectedPlayerIDs = connectedPlayerIDs;
-        Print(string.Format("TDL_CONTROLLER: Player %1 received connectivity update", GetOwnerPlayerId()), LogLevel.NORMAL);
-        Print(string.Format("  Connected player count: %1", connectedPlayerIDs.Count()), LogLevel.NORMAL);
+        Print(string.Format("TDL_CONTROLLER: Updated connected players: %1", connectedPlayerIDs), LogLevel.DEBUG);
+
     }
     
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
