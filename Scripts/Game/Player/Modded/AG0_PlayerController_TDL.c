@@ -25,7 +25,6 @@ modded class SCR_PlayerController
         if (m_bIsLocalPlayerController)
         {
             UpdateTDLNetworkState(timeSlice);
-			// Find my WorldController and tell it my player ID
         }
     }
 	
@@ -97,14 +96,7 @@ modded class SCR_PlayerController
 	{
 	    array<AG0_TDLDeviceComponent> devices = {};
 	    
-	    SCR_PlayerController pc = SCR_PlayerController.Cast(
-		    GetGame().GetPlayerController()
-		);
-
-		
-		if (!pc) return devices;
-	    
-	    IEntity controlled = pc.GetControlledEntity();
+	    IEntity controlled = GetControlledEntity();
 	    if (!controlled) return devices;
 	    
 	    // Check held gadget
@@ -182,13 +174,7 @@ modded class SCR_PlayerController
     {
         if (!device) return false;
         
-        PlayerManager playerMgr = GetGame().GetPlayerManager();
-		
-		SCR_PlayerController controller = SCR_PlayerController.Cast(
-		    GetGame().GetPlayerController()
-		);
-		
-        IEntity controlled = playerMgr.GetPlayerControlledEntity(controller.GetPlayerId());
+        IEntity controlled = GetControlledEntity();
         if (!controlled) return false;
         
         // Quick check - held gadget?
@@ -322,14 +308,7 @@ modded class SCR_PlayerController
         
         m_fTDLUpdateTimer = 0;
         
-        // Get devices from TDLController
-        SCR_PlayerController controller = SCR_PlayerController.Cast(
-		    GetGame().GetPlayerController()
-		);
-		Print(controller, LogLevel.WARNING);
-        if (!controller) return;
-        
-        array<AG0_TDLDeviceComponent> playerDevices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> playerDevices = GetPlayerTDLDevices();
         
         // Aggregate visible devices from all player's TDL devices
         array<RplId> newVisibleDevices = {};
