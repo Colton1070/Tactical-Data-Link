@@ -59,7 +59,7 @@ modded class SCR_PlayerController
     protected void RPC_SetTDLConnectedPlayers(array<int> connectedPlayerIDs)
     {
         m_aTDLConnectedPlayerIDs = connectedPlayerIDs;
-        Print(string.Format("TDL_CONTROLLER: Updated connected players: %1", connectedPlayerIDs), LogLevel.DEBUG);
+        Print(string.Format("TDL_PLAYERCONTROLLER: Updated connected players: %1", connectedPlayerIDs), LogLevel.DEBUG);
 
     }
     
@@ -71,14 +71,14 @@ modded class SCR_PlayerController
             membersData.Add(member);
         
         m_mTDLNetworkMembersMap.Set(networkId, membersData);
-        Print(string.Format("TDL_CONTROLLER: Received network %1 member update with %2 members", networkId, members.Count()), LogLevel.DEBUG);
+        Print(string.Format("TDL_PLAYERCONTROLLER: Received network %1 member update with %2 members", networkId, members.Count()), LogLevel.DEBUG);
     }
     
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
     protected void RPC_ClearTDLNetwork(int networkId)
     {
         m_mTDLNetworkMembersMap.Remove(networkId);
-        Print(string.Format("TDL_CONTROLLER: Cleared network %1 data", networkId), LogLevel.DEBUG);
+        Print(string.Format("TDL_PLAYERCONTROLLER: Cleared network %1 data", networkId), LogLevel.DEBUG);
     }
     
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
@@ -86,7 +86,7 @@ modded class SCR_PlayerController
     {
         m_NetworkBroadcastingSources = sources;
         m_bVideoSourcesDirty = true;
-        Print(string.Format("TDL_CONTROLLER: Received %1 network broadcasting sources", sources.Count()), LogLevel.DEBUG);
+        Print(string.Format("TDL_PLAYERCONTROLLER: Received %1 network broadcasting sources", sources.Count()), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -230,7 +230,7 @@ modded class SCR_PlayerController
         {
             m_StreamedBroadcastingDevices.Insert(deviceId);
             m_bVideoSourcesDirty = true;
-            Print(string.Format("TDL_CONTROLLER: Registered streamed broadcaster %1", deviceId), LogLevel.DEBUG);
+            Print(string.Format("TDL_PLAYERCONTROLLER: Registered streamed broadcaster %1", deviceId), LogLevel.DEBUG);
         }
     }
     
@@ -240,7 +240,7 @@ modded class SCR_PlayerController
         {
             m_StreamedBroadcastingDevices.RemoveItem(deviceId);
             m_bVideoSourcesDirty = true;
-            Print(string.Format("TDL_CONTROLLER: Unregistered streamed broadcaster %1", deviceId), LogLevel.DEBUG);
+            Print(string.Format("TDL_PLAYERCONTROLLER: Unregistered streamed broadcaster %1", deviceId), LogLevel.DEBUG);
         }
     }
     

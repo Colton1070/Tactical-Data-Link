@@ -75,11 +75,7 @@ class AG0_TDLNetwork
 }
 
 class AG0_TDLSystem : WorldSystem
-{
-	// Controller registry - maps PlayerID to controller instance
-    protected ref map<int, AG0_TDLController> m_PlayerControllers = new map<int, AG0_TDLController>();
-
-	
+{	
     // Networks storage
     protected ref array<ref AG0_TDLNetwork> m_aNetworks = {};
     protected int m_iNextNetworkID = 1;
@@ -117,74 +113,11 @@ class AG0_TDLSystem : WorldSystem
 	    outInfo
 	        .SetAbstract(false)
 	        .SetLocation(WorldSystemLocation.Server)
-	        .AddPoint(WorldSystemPoint.Frame)
-	        .AddController(AG0_TDLController);
+	        .AddPoint(WorldSystemPoint.Frame);
+	        //.AddController(AG0_TDLController);
 	        
 	    Print("AG0_TDLSystem: Device-centric system initialized", LogLevel.NORMAL);
 	}
-	
-	//! Register a controller when it's created and ready
-    void RegisterController(AG0_TDLController controller, int playerId)
-    {
-        if (!controller)
-        {
-            Print(string.Format("TDL_System: Attempted to register NULL controller for player %1", playerId), LogLevel.ERROR);
-            return;
-        }
-        
-        // Check if already registered
-        if (m_PlayerControllers.Contains(playerId))
-        {
-            Print(string.Format("TDL_System: Player %1 already has a controller registered, replacing", playerId), LogLevel.WARNING);
-        }
-        
-        m_PlayerControllers.Set(playerId, controller);
-        Print(string.Format("TDL_System: Registered controller for player %1", playerId), LogLevel.DEBUG);
-    }
-    
-    //! Unregister a controller when player disconnects
-    void UnregisterController(int playerId)
-    {
-        if (m_PlayerControllers.Contains(playerId))
-        {
-            m_PlayerControllers.Remove(playerId);
-            Print(string.Format("TDL_System: Unregistered controller for player %1", playerId), LogLevel.DEBUG);
-        }
-    }
-	
-	//! Get a controller by PlayerID - replacement for FindController()
-    AG0_TDLController GetControllerByPlayerId(int playerId)
-    {
-        if (m_PlayerControllers.Contains(playerId))
-            return m_PlayerControllers.Get(playerId);
-        
-        Print(string.Format("TDL_System: No controller found for player %1", playerId), LogLevel.WARNING);
-        return null;
-    }
-    
-    //! Get all registered controllers
-    array<AG0_TDLController> GetAllControllers()
-    {
-        array<AG0_TDLController> controllers = {};
-        foreach (int playerId, AG0_TDLController controller : m_PlayerControllers)
-        {
-            if (controller)
-                controllers.Insert(controller);
-        }
-        return controllers;
-    }
-    
-    //! Check if a player has a registered controller
-    bool HasController(int playerId)
-    {
-        return m_PlayerControllers.Contains(playerId);
-    }
-    
-    //! Get the number of registered controllers
-    int GetControllerCount()
-    {
-        return m_PlayerControllers.Count();
-    }
     
     //--------------------------------------------------------------------------
     // Static instance getter for easy access from controller
