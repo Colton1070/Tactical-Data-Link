@@ -948,23 +948,25 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    // Convert and RPC
 	    foreach (int playerID, set<int> connections : playerConnections)
-	    {
-	        array<int> connArray = {};
-	        foreach (int id : connections)
-	            connArray.Insert(id);
-			//Below is required because the controller is created with index 0 for workbench player, while everything else things the workbench is player 1.
-	       
-			AG0_TDLController controller = GetControllerByPlayerId(playerID);
-	        if (!controller) 
-	        {
-	            Print(string.Format("TDL_System: Controller not found for player %1", playerID), LogLevel.WARNING);
-	            return;
-	        }
-			PrintFormat("TDL_System: Notifying player controller for player %1, %2", playerID, controller, LogLevel.DEBUG);
-			if (controller) {
-			    controller.NotifyConnectedPlayers(connArray);
-	    		PrintFormat("Notified connected players: %1", connArray, LogLevel.DEBUG);
-			}
+		{
+		    array<int> connArray = {};
+		    foreach (int id : connections)
+		        connArray.Insert(id);
+		    
+		    // Get the specific player's controller
+		    SCR_PlayerController controller = SCR_PlayerController.Cast(
+		        GetGame().GetPlayerManager().GetPlayerController(playerID)
+		    );
+		    
+		    if (!controller) 
+		    {
+		        Print(string.Format("TDL_System: Controller not found for player %1", playerID), LogLevel.WARNING);
+		        continue; // Changed from return to continue so other players still get notified
+		    }
+		    
+		    PrintFormat("TDL_System: Notifying player controller for player %1, %2", playerID, controller, LogLevel.DEBUG);
+		    controller.NotifyConnectedPlayers(connArray);
+		    PrintFormat("Notified connected players: %1", connArray, LogLevel.DEBUG);
 		}
 	}
     
@@ -1032,7 +1034,9 @@ class AG0_TDLSystem : WorldSystem
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
 	    if (playerId < 0) return;
 	    
-	    AG0_TDLController controller = GetControllerByPlayerId(playerId);
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(
+	        GetGame().GetPlayerManager().GetPlayerController(playerId)
+	    );
         if (!controller) 
         {
             Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.WARNING);
@@ -1064,7 +1068,9 @@ class AG0_TDLSystem : WorldSystem
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
 	    if (playerId < 0) return;
 	    
-	   	AG0_TDLController controller = GetControllerByPlayerId(playerId);
+	   	SCR_PlayerController controller = SCR_PlayerController.Cast(
+	        GetGame().GetPlayerManager().GetPlayerController(playerId)
+	    );
         if (!controller) 
         {
             Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.WARNING);
@@ -1138,7 +1144,9 @@ class AG0_TDLSystem : WorldSystem
             {
                 notifiedPlayers.Insert(playerId);
                 
-                AG0_TDLController controller = GetControllerByPlayerId(playerId);
+			    SCR_PlayerController controller = SCR_PlayerController.Cast(
+			        GetGame().GetPlayerManager().GetPlayerController(playerId)
+			    );
 	            if (controller)
 	            {
 	                controller.NotifyBroadcastingSources(broadcastingDevices);

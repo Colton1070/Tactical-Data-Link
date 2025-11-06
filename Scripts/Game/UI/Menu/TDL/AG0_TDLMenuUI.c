@@ -99,9 +99,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected bool FindTDLDevice()
     {
-        AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
-		);
+        SCR_PlayerController controller = SCR_PlayerController.Cast(
+	        GetGame().GetPlayerController()
+	    );
         if (!controller) return false;
         
         // Use the player controller's method to get devices

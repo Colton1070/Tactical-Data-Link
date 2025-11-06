@@ -17,9 +17,9 @@ class AG0_PlayerHasTDLDeviceWithCapabilitiesCondition : SCR_AvailableActionCondi
         if (!data)
             return GetReturnResult(false);
         
-        AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
-		);
+        SCR_PlayerController controller = SCR_PlayerController.Cast(
+	        GetGame().GetPlayerController()
+	    );
         if (!controller)
             return GetReturnResult(false);
         

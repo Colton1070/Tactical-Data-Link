@@ -165,8 +165,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    super.EOnPostFrame(owner, timeSlice);
 	    
 	    // Ask controller if we're held
-	    AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(
+		    GetGame().GetPlayerController()
 		);
 	    if (!controller || !controller.IsHoldingDevice(owner))
 	        return;
@@ -191,8 +191,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		// Unregister from PC if broadcasting
         if (!System.IsConsoleApp() && m_bCameraBroadcasting)
         {
-            AG0_TDLController controller = AG0_TDLController.Cast(
-	    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+            SCR_PlayerController controller = SCR_PlayerController.Cast(
+			    GetGame().GetPlayerController()
 			);
             if (controller)
             {
@@ -297,8 +297,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    m_CachedBroadcaster = null;
 	    
 	    // Immediately set up display if we're holding this device
-	    AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(
+		    GetGame().GetPlayerController()
 		);
 	    if (controller && controller.IsHoldingDevice(GetOwner()))
 	    {
@@ -309,8 +309,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	array<RplId> GetAvailableVideoSources() 
     { 
         // Ask PC instead of maintaining local array
-        AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+        SCR_PlayerController controller = SCR_PlayerController.Cast(
+		    GetGame().GetPlayerController()
 		);
         if (controller)
             return controller.GetAvailableVideoSources();
@@ -324,8 +324,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	        return m_LocalActiveVideoSource;
 	    
 	    // Fallback to first available
-	   	AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+	   	SCR_PlayerController controller = SCR_PlayerController.Cast(
+		    GetGame().GetPlayerController()
 		);
 	    if (controller)
 	    {
@@ -349,8 +349,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
         // On client, register/unregister with PC
         if (!System.IsConsoleApp())
         {
-            AG0_TDLController controller = AG0_TDLController.Cast(
-	    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+            SCR_PlayerController controller = SCR_PlayerController.Cast(
+			    GetGame().GetPlayerController()
 			);
             if (controller)
             {
@@ -1027,8 +1027,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    if (m_ActiveVideoSourceRplId == RplId.Invalid()) 
 	        return false;
 	        
-	    AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(
+		    GetGame().GetPlayerController()
 		);
 	    if (!controller) return false;
 	    
@@ -1049,8 +1049,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    if (!HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
 	        return null;
 	        
-	    AG0_TDLController controller = AG0_TDLController.Cast(
-    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(
+		    GetGame().GetPlayerController()
 		);
 	    if (!controller) return null;
 	    

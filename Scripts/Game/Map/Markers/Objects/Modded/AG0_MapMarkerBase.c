@@ -29,15 +29,15 @@ modded class SCR_MapMarkerBase
 	    // TDL markers need connectivity check
 	    if (m_bIsTDLMarker && m_iMarkerOwnerID > 0)  // Skip server markers (-1)
 	    {
-	        AG0_TDLController controller = AG0_TDLController.Cast(
-	    		GetGame().GetWorld().GetSystems().FindMyController(AG0_TDLController)
+	        SCR_PlayerController controller = SCR_PlayerController.Cast(
+			    GetGame().GetPlayerController()
 			);
 	        
 	        if (!controller)
 	            return false;
 	        
 	        // Always show our own markers
-	        if (m_iMarkerOwnerID == controller.GetOwnerPlayerId())
+	        if (m_iMarkerOwnerID == controller.GetPlayerId())
 	            return super.OnUpdate(visibleMin, visibleMax);
 	        
 	        // Otherwise check connectivity
