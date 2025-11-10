@@ -93,7 +93,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	protected float m_fCameraFarPlane;
 	
 	[Attribute("", UIWidgets.Auto, category: "Video Source Config")]
-	protected ref array<ref AG0_PostProcessEffect> m_aCameraEffects = {};
+	protected ref array<ref AG0_PostProcessEffect> m_aCameraEffects;
 	
 	[Attribute("1", UIWidgets.CheckBox, category: "Video Source Config")]
 	protected bool m_bEnableNightVisionMode;
@@ -437,7 +437,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		}
 		
 		// Configure HDR for broadcast
-		world.SetCameraHDRBrightness(cameraIndex, 5);
+		//world.SetCameraHDRBrightness(cameraIndex, 5);
+		//This should be done with post process effect not with script.
 		
 		// Apply configured effects
 		foreach (AG0_PostProcessEffect effect : m_aCameraEffects) {
@@ -1034,6 +1035,11 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    
 	    return controller.IsVideoSourceAvailable(m_ActiveVideoSourceRplId);
 	}
+	
+	float GetCameraFOV() { return m_fCameraFOV; }
+	float GetCameraNearPlane() { return m_fCameraNearPlane; }
+	float GetCameraFarPlane() { return m_fCameraFarPlane; }
+	
 	
 	//------------------------------------------------------------------------------------------------
 	// Public API to check if device has network member data
