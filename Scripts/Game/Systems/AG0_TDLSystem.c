@@ -897,9 +897,9 @@ class AG0_TDLSystem : WorldSystem
 		        continue; // Changed from return to continue so other players still get notified
 		    }
 		    
-		    PrintFormat("TDL_System: Notifying player controller for player %1, %2", playerID, controller, LogLevel.DEBUG);
+		    //PrintFormat("TDL_System: Notifying player controller for player %1, %2", playerID, controller, LogLevel.DEBUG);
 		    controller.NotifyConnectedPlayers(connArray);
-		    PrintFormat("Notified connected players: %1", connArray, LogLevel.DEBUG);
+		    //PrintFormat("Notified connected players: %1", connArray, LogLevel.DEBUG);
 		}
 	}
     

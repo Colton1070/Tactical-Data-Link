@@ -26,26 +26,39 @@ modded class SCR_MapMarkerBase
     //------------------------------------------------------------------------------------------------
   	override bool OnUpdate(vector visibleMin = vector.Zero, vector visibleMax = vector.Zero)
 	{
-	    // TDL markers need connectivity check
-	    if (m_bIsTDLMarker && m_iMarkerOwnerID > 0)  // Skip server markers (-1)
+	    // CRITICAL: Only apply TDL logic to actual TDL markers
+	    if (!m_bIsTDLMarker)
+	        return super.OnUpdate(visibleMin, visibleMax);
+	    
+	    // TDL markers need connectivity check, but only for player-owned markers
+	    if (m_iMarkerOwnerID > 0)  // Skip server markers (-1) and invalid (0)
 	    {
 	        SCR_PlayerController controller = SCR_PlayerController.Cast(
-			    GetGame().GetPlayerController()
-			);
+	            GetGame().GetPlayerController()
+	        );
 	        
+	        // On dedicated servers, GetPlayerController might be null
 	        if (!controller)
-	            return false;
+	            return super.OnUpdate(visibleMin, visibleMax);
 	        
 	        // Always show our own markers
 	        if (m_iMarkerOwnerID == controller.GetPlayerId())
 	            return super.OnUpdate(visibleMin, visibleMax);
 	        
-	        // Otherwise check connectivity
+	        // Check connectivity for other players' markers
 	        array<int> connectedPlayers = controller.GetTDLConnectedPlayers();
-	        if (!connectedPlayers.Contains(m_iMarkerOwnerID))
+	        bool isConnected = connectedPlayers.Contains(m_iMarkerOwnerID);
+	        
+	        if (!isConnected)
 	        {
-	            SetUpdateDisabled(true);
+	            if (m_wRoot)
+	                m_wRoot.SetVisible(false);
 	            return false;
+	        }
+	        else
+	        {
+	            if (m_wRoot)
+	                m_wRoot.SetVisible(true);
 	        }
 	    }
 	    
@@ -53,40 +66,38 @@ modded class SCR_MapMarkerBase
 	}
 	
 	//------------------------------------------------------------------------------------------------
-    // Serialization pass-through methods (I've got NO additional data to store here...)
-    //------------------------------------------------------------------------------------------------
     override static bool Extract(SCR_MapMarkerBase instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
-        return SCR_MapMarkerBase.Extract(instance, ctx, snapshot);
+        return super.Extract(instance, ctx, snapshot);
     }
 
     //------------------------------------------------------------------------------------------------
     override static bool Inject(SSnapSerializerBase snapshot, ScriptCtx ctx, SCR_MapMarkerBase instance)
     {
-        return SCR_MapMarkerBase.Inject(snapshot, ctx, instance);
+        return super.Inject(snapshot, ctx, instance);
     }
 
     //------------------------------------------------------------------------------------------------
     override static void Encode(SSnapSerializerBase snapshot, ScriptCtx ctx, ScriptBitSerializer packet)
     {
-        SCR_MapMarkerBase.Encode(snapshot, ctx, packet);
+        super.Encode(snapshot, ctx, packet);
     }
 
     //------------------------------------------------------------------------------------------------
     override static bool Decode(ScriptBitSerializer packet, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
-        return SCR_MapMarkerBase.Decode(packet, ctx, snapshot);
+        return super.Decode(packet, ctx, snapshot);
     }
 
     //------------------------------------------------------------------------------------------------
     override static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
     {
-        return SCR_MapMarkerBase.SnapCompare(lhs, rhs, ctx);
+        return super.SnapCompare(lhs, rhs, ctx);
     }
 
     //------------------------------------------------------------------------------------------------
     override static bool PropCompare(SCR_MapMarkerBase instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
     {
-        return SCR_MapMarkerBase.PropCompare(instance, snapshot, ctx);
+        return super.PropCompare(instance, snapshot, ctx);
     }
 }
