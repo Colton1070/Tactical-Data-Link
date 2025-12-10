@@ -359,4 +359,10 @@ modded class SCR_PlayerController
     {
         return m_aVisibleTDLDevices.Contains(deviceId);
     }
+	
+	bool IsConnectedTDLPlayer(int playerId)
+	{
+	    return m_aTDLConnectedPlayerIDs.Contains(playerId);
+	}
+
 }
