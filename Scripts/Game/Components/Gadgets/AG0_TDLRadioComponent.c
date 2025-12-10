@@ -16,6 +16,8 @@ class AG0_TDLRadioComponentClass : SCR_RadioComponentClass
 class AG0_TDLRadioComponent : SCR_RadioComponent
 {
 	protected RplComponent rplComp;
+	protected AG0_TDLDeviceComponent m_DeviceComp;
+
 	
 	// Dialog references
 	protected ref AG0_TDL_KeyDialog m_inputDialog;
@@ -47,6 +49,12 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	
 	[RplProp()]
 	protected ref array<RplId> m_mConnectedMembers = new array<RplId>();
+	
+	[Attribute(defvalue: "1", desc: "Block transmit while receiving on same frequency (half-duplex operation)", category: "TDL Radio")]
+	protected bool m_bHalfDuplexEnabled;
+	
+	[Attribute(defvalue: "0", desc: "Allow full duplex when device is connected to TDL network")]
+	protected bool m_bFullDuplexWhenNetworked;
 	
 	// 
 	//
@@ -338,6 +346,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 			m_sCurrentCryptoKey = m_BaseRadioComp.GetEncryptionKey();
 			//Print(string.Format("'%1' AG0_TDLRadioComponent::EOnInit - Syncing our default key to '%2'", owner, m_BaseRadioComp.GetEncryptionKey()), LogLevel.NORMAL);
 		}
+		m_DeviceComp = AG0_TDLDeviceComponent.Cast(owner.FindComponent(AG0_TDLDeviceComponent));
 	}
 	
 	float GetNetworkRange() {
@@ -394,5 +403,17 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	string GetDefaultCryptoKey()
 	{
 		return m_sDefaultCryptoKey;
+	}
+	
+	bool ShouldBlockHalfDuplex()
+	{
+	    if (!m_bHalfDuplexEnabled)
+	        return false;
+	    
+	    // Full duplex allowed when networked
+	    if (m_bFullDuplexWhenNetworked && m_DeviceComp && m_DeviceComp.IsInNetwork())
+	        return false;
+	    
+	    return true; // Caller still needs to check if actually receiving
 	}
 }
