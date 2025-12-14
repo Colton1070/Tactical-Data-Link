@@ -21,8 +21,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     
     // State tracking
     protected ref array<RplId> m_aCachedMemberIds = {};
+    protected ref array<Widget> m_aMemberCards = {};
     protected float m_fUpdateTimer = 0;
     protected const float UPDATE_INTERVAL = 0.5; // 500ms
+    protected int m_iFocusedCardIndex = -1;
     
     // Layout paths
     protected const ResourceName MEMBER_CARD_LAYOUT = "{7C025C99261C96C5}UI/layouts/Menus/TDL/TDLMemberCardUI.layout";
@@ -54,7 +56,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         // Setup input handlers - both for closing and navigation
         m_InputManager.AddActionListener("MenuBack", EActionTrigger.DOWN, OnBack);
-        m_InputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnBack); // Same key to close
+        m_InputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnBack);
+        
+        // Set initial focus to first card if we have any
+        if (!m_aMemberCards.IsEmpty())
+            SetFocusToCard(0);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -69,12 +75,13 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         // Clear references
         m_ActiveDevice = null;
         m_aCachedMemberIds.Clear();
+        m_aMemberCards.Clear();
+        m_iFocusedCardIndex = -1;
     }
     
     //------------------------------------------------------------------------------------------------
     override void OnMenuUpdate(float tDelta)
     {
-        
         if (!m_ActiveDevice || !m_ActiveDevice.IsPowered())
         {
             Close();
@@ -92,6 +99,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             {
                 m_aCachedMemberIds = currentMembers;
                 UpdateMemberGrid();
+            }
+            else
+            {
+                // Just update existing card data without recreating
+                UpdateMemberCardData();
             }
         }
     }
@@ -184,6 +196,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             child.RemoveFromHierarchy();
             child = next;
         }
+        m_aMemberCards.Clear();
         
         // Get member data if available
         if (!m_ActiveDevice.HasNetworkMemberData()) return;
@@ -200,6 +213,13 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             
             CreateMemberCard(member);
         }
+        
+        // Set focus to first card if we lost focus during refresh
+        if (!m_aMemberCards.IsEmpty() && m_iFocusedCardIndex >= 0)
+        {
+            int newIndex = Math.Min(m_iFocusedCardIndex, m_aMemberCards.Count() - 1);
+            SetFocusToCard(newIndex);
+        }
     }
     
     //------------------------------------------------------------------------------------------------
@@ -208,15 +228,53 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         Widget card = GetGame().GetWorkspace().CreateWidgets(MEMBER_CARD_LAYOUT, m_wNetworkGrid);
         if (!card) return;
         
+        // Attach button handler
+        ButtonWidget button = ButtonWidget.Cast(card);
+        if (button)
+        {
+            AG0_TDLMemberCardHandler handler = new AG0_TDLMemberCardHandler();
+            handler.Init(this, member.GetRplId(), member);
+            button.AddHandler(handler);
+        }
+        
         // Update card content
+        UpdateCardWidgets(card, member);
+        
+        m_aMemberCards.Insert(card);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void UpdateCardWidgets(Widget card, AG0_TDLNetworkMember member)
+    {
+        if (!card || !member) return;
+        
+        // Update name
         TextWidget nameText = TextWidget.Cast(card.FindAnyWidget("PlayerName"));
         if (nameText)
             nameText.SetText(member.GetPlayerName());
-            
+        
+        // Update signal strength
         TextWidget signalText = TextWidget.Cast(card.FindAnyWidget("SignalStrength"));
         if (signalText)
             signalText.SetTextFormat("%1%%", Math.Round(member.GetSignalStrength()));
-            
+        
+        // Update network IP
+        TextWidget ipText = TextWidget.Cast(card.FindAnyWidget("NetworkIP"));
+        if (ipText)
+            ipText.SetTextFormat("IP: %1", member.GetNetworkIP());
+        
+        // Update distance (calculate from player position)
+        TextWidget distText = TextWidget.Cast(card.FindAnyWidget("Distance"));
+        if (distText && m_ActiveDevice)
+        {
+            float distance = vector.Distance(
+                m_ActiveDevice.GetOwner().GetOrigin(), 
+                member.GetPosition()
+            );
+            distText.SetTextFormat("%1m", Math.Round(distance));
+        }
+        
+        // Update capabilities
         TextWidget capText = TextWidget.Cast(card.FindAnyWidget("Capabilities"));
         if (capText)
         {
@@ -235,6 +293,26 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    // Just update the data in existing cards without recreating them
+    protected void UpdateMemberCardData()
+    {
+        if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+            return;
+        
+        AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+        if (!membersData) return;
+        
+        int count = Math.Min(m_aMemberCards.Count(), membersData.Count());
+        for (int i = 0; i < count; i++)
+        {
+            AG0_TDLNetworkMember member = membersData.Get(i);
+            if (!member) continue;
+            
+            UpdateCardWidgets(m_aMemberCards[i], member);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
     protected bool HasMembershipChanged(array<RplId> newMembers)
     {
         if (newMembers.Count() != m_aCachedMemberIds.Count())
@@ -247,6 +325,64 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         }
         
         return false;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Set focus to a specific card index
+    protected void SetFocusToCard(int index)
+    {
+        if (index < 0 || index >= m_aMemberCards.Count())
+            return;
+        
+        Widget card = m_aMemberCards[index];
+        ButtonWidget button = ButtonWidget.Cast(card);
+        
+        if (button)
+        {
+            GetGame().GetWorkspace().SetFocusedWidget(button);
+            m_iFocusedCardIndex = index;
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Called by card handler when a card gains focus
+    void OnMemberCardFocused(RplId memberId, AG0_TDLNetworkMember memberData)
+    {
+        // Update focused index
+        for (int i = 0; i < m_aMemberCards.Count(); i++)
+        {
+            Widget card = m_aMemberCards[i];
+            AG0_TDLMemberCardHandler handler = AG0_TDLMemberCardHandler.Cast(
+                ButtonWidget.Cast(card).FindHandler(AG0_TDLMemberCardHandler)
+            );
+            
+            if (handler && handler.GetMemberRplId() == memberId)
+            {
+                m_iFocusedCardIndex = i;
+                break;
+            }
+        }
+        
+        // TODO: Update detail panel or preview when card is focused
+        PrintFormat("TDL Menu: Focused on member %1", memberData.GetPlayerName());
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Called by card handler when a card is clicked
+    void OnMemberCardClicked(RplId memberId, AG0_TDLNetworkMember memberData, int button)
+    {
+        PrintFormat("TDL Menu: Clicked member %1 (button %2)", memberData.GetPlayerName(), button);
+        
+        // TODO: Open member detail page with options:
+        // - View video feed (if VIDEO_SOURCE capability)
+        // - Send waypoint
+        // - Send message
+        // - Request position update
+        
+        if (memberData.GetCapabilities() & AG0_ETDLDeviceCapability.VIDEO_SOURCE)
+        {
+            PrintFormat("  Member has camera - could switch to their feed");
+        }
     }
     
     //------------------------------------------------------------------------------------------------

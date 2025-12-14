@@ -53,7 +53,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	[Attribute(defvalue: "1", desc: "Block transmit while receiving on same frequency (half-duplex operation)", category: "TDL Radio")]
 	protected bool m_bHalfDuplexEnabled;
 	
-	[Attribute(defvalue: "0", desc: "Allow full duplex when device is connected to TDL network")]
+	[Attribute(defvalue: "1", desc: "Allow full duplex when device is connected to TDL network")]
 	protected bool m_bFullDuplexWhenNetworked;
 	
 	// 

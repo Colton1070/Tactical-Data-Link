@@ -5,9 +5,7 @@ modded class SCR_PlayerController
     protected float m_fTDLUpdateTimer = 0;
     protected const float TDL_UPDATE_INTERVAL = 1.0;
 	
-	 //------------------------------------------------------------------------------------------------
-    // Replicated state
-    //------------------------------------------------------------------------------------------------
+	// Replicated state
     protected ref array<int> m_aTDLConnectedPlayerIDs = {};
     protected ref map<int, ref AG0_TDLNetworkMembers> m_mTDLNetworkMembersMap = new map<int, ref AG0_TDLNetworkMembers>();
     protected ref array<RplId> m_NetworkBroadcastingSources = {};
@@ -18,6 +16,40 @@ modded class SCR_PlayerController
     protected ref array<RplId> m_AvailableVideoSources = {};
     protected bool m_bVideoSourcesDirty = true;
     
+    // TDL Menu input handling
+    protected bool m_bTDLMenuContextActive = false;
+    protected InputManager m_TDLInputManager;
+    
+    //------------------------------------------------------------------------------------------------
+    override void EOnInit(IEntity owner)
+    {
+        super.EOnInit(owner);
+        
+        // Cache input manager on clients only
+        if (!System.IsConsoleApp())
+        {
+            m_TDLInputManager = GetGame().GetInputManager();
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    void ~SCR_PlayerController()
+    {
+        // Clean up context if still active
+        if (m_bTDLMenuContextActive && m_TDLInputManager)
+        {
+            m_TDLInputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
+            m_bTDLMenuContextActive = false;
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void OnTDLMenuToggle()
+    {
+        GetGame().GetMenuManager().OpenMenu(ChimeraMenuPreset.AG0_TDLMenu);
+    }
+    
+    //------------------------------------------------------------------------------------------------
     override void OnUpdate(float timeSlice)
     {
         super.OnUpdate(timeSlice);
@@ -60,7 +92,6 @@ modded class SCR_PlayerController
     {
         m_aTDLConnectedPlayerIDs = connectedPlayerIDs;
         Print(string.Format("TDL_PLAYERCONTROLLER: Updated connected players: %1", connectedPlayerIDs), LogLevel.DEBUG);
-
     }
     
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
@@ -82,147 +113,19 @@ modded class SCR_PlayerController
     }
     
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
-    protected void RPC_SetNetworkBroadcastingSources(array<RplId> sources)
+    protected void RPC_SetNetworkBroadcastingSources(array<RplId> broadcastingSources)
     {
-        m_NetworkBroadcastingSources = sources;
+        m_NetworkBroadcastingSources = broadcastingSources;
+        m_AvailableVideoSourcesSet.Clear();
+        foreach (RplId sourceId : broadcastingSources)
+            m_AvailableVideoSourcesSet.Insert(sourceId);
+        
         m_bVideoSourcesDirty = true;
-        Print(string.Format("TDL_PLAYERCONTROLLER: Received %1 network broadcasting sources", sources.Count()), LogLevel.DEBUG);
+        Print(string.Format("TDL_PLAYERCONTROLLER: Updated broadcasting sources: %1", broadcastingSources.Count()), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------
-    // Equipment queries
-    //------------------------------------------------------------------------------------------------
-    array<AG0_TDLDeviceComponent> GetPlayerTDLDevices()
-	{
-	    array<AG0_TDLDeviceComponent> devices = {};
-	    
-	    IEntity controlled = GetControlledEntity();
-	    if (!controlled) return devices;
-	    
-	    // Check held gadget
-	    SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
-	        controlled.FindComponent(SCR_GadgetManagerComponent));
-	    if (gadgetMgr)
-	    {
-	        IEntity heldGadget = gadgetMgr.GetHeldGadget();
-	        if (heldGadget)
-	        {
-	            AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
-	                heldGadget.FindComponent(AG0_TDLDeviceComponent));
-	            if (deviceComp && deviceComp.CanAccessNetwork())
-	                devices.Insert(deviceComp);
-	        }
-	    }
-	    
-	    // Check inventory
-	    InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
-	        controlled.FindComponent(InventoryStorageManagerComponent));
-	    if (storage)
-	    {
-	        array<IEntity> items = {};
-	        storage.GetItems(items);
-	        
-	        foreach (IEntity item : items)
-	        {
-	            AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
-	                item.FindComponent(AG0_TDLDeviceComponent));
-	            if (deviceComp && deviceComp.CanAccessNetwork())
-	                devices.Insert(deviceComp);
-	        }
-	    }
-	    
-	    // Check loadout clothing slots
-	    ChimeraCharacter character = ChimeraCharacter.Cast(controlled);
-	    if (character)
-	    {
-	        EquipedLoadoutStorageComponent loadoutStorage = 
-	            EquipedLoadoutStorageComponent.Cast(character.FindComponent(EquipedLoadoutStorageComponent));
-	        if (loadoutStorage)
-	        {
-	            array<typename> equipmentAreas = {
-	                LoadoutHeadCoverArea, LoadoutArmoredVestSlotArea, 
-	                LoadoutVestArea, LoadoutJacketArea, LoadoutBackpackArea
-	            };
-	            
-	            foreach (typename area : equipmentAreas)
-	            {
-	                IEntity container = loadoutStorage.GetClothFromArea(area);
-	                if (!container) continue;
-	                
-	                ClothNodeStorageComponent clothStorage = ClothNodeStorageComponent.Cast(
-	                    container.FindComponent(ClothNodeStorageComponent));
-	                if (!clothStorage) continue;
-	                
-	                array<IEntity> clothItems = {};
-	                clothStorage.GetAll(clothItems);
-	                
-	                foreach (IEntity item : clothItems)
-	                {
-	                    AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
-	                        item.FindComponent(AG0_TDLDeviceComponent));
-	                    if (deviceComp && deviceComp.CanAccessNetwork())
-	                        devices.Insert(deviceComp);
-	                }
-	            }
-	        }
-	    }
-	    
-	    return devices;
-	}
-    
-    bool IsHoldingDevice(IEntity device)
-    {
-        if (!device) return false;
-        
-        IEntity controlled = GetControlledEntity();
-        if (!controlled) return false;
-        
-        // Quick check - held gadget?
-        SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
-            controlled.FindComponent(SCR_GadgetManagerComponent));
-        if (gadgetMgr && gadgetMgr.GetHeldGadget() == device)
-            return true;
-        
-        // Check inventory storage
-        InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
-            controlled.FindComponent(InventoryStorageManagerComponent));
-        if (storage && storage.Contains(device))
-            return true;
-        
-        ChimeraCharacter character = ChimeraCharacter.Cast(controlled);
-        if (character)
-        {
-            EquipedLoadoutStorageComponent loadoutStorage = 
-                EquipedLoadoutStorageComponent.Cast(character.FindComponent(EquipedLoadoutStorageComponent));
-            if (loadoutStorage)
-            {
-                array<typename> equipmentAreas = {
-                    LoadoutHeadCoverArea, LoadoutArmoredVestSlotArea, 
-                    LoadoutVestArea, LoadoutJacketArea, LoadoutBackpackArea
-                };
-                
-                foreach (typename area : equipmentAreas)
-                {
-                    IEntity container = loadoutStorage.GetClothFromArea(area);
-                    if (!container) continue;
-                    
-                    ClothNodeStorageComponent clothStorage = ClothNodeStorageComponent.Cast(
-                        container.FindComponent(ClothNodeStorageComponent));
-                    if (!clothStorage) continue;
-                    
-                    array<IEntity> clothItems = {};
-                    clothStorage.GetAll(clothItems);
-                    
-                    if (clothItems.Contains(device))
-                        return true;
-                }
-            }
-        }
-        return false;
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    // Video streaming registration (client-side tracking)
+    // Video source management
     //------------------------------------------------------------------------------------------------
     void RegisterBroadcastingDevice(RplId deviceId)
     {
@@ -230,7 +133,6 @@ modded class SCR_PlayerController
         {
             m_StreamedBroadcastingDevices.Insert(deviceId);
             m_bVideoSourcesDirty = true;
-            Print(string.Format("TDL_PLAYERCONTROLLER: Registered streamed broadcaster %1", deviceId), LogLevel.DEBUG);
         }
     }
     
@@ -238,9 +140,8 @@ modded class SCR_PlayerController
     {
         if (m_StreamedBroadcastingDevices.Contains(deviceId))
         {
-            m_StreamedBroadcastingDevices.RemoveItem(deviceId);
+            m_StreamedBroadcastingDevices.Remove(deviceId);
             m_bVideoSourcesDirty = true;
-            Print(string.Format("TDL_PLAYERCONTROLLER: Unregistered streamed broadcaster %1", deviceId), LogLevel.DEBUG);
         }
     }
     
@@ -249,28 +150,16 @@ modded class SCR_PlayerController
         if (m_bVideoSourcesDirty)
         {
             m_AvailableVideoSources.Clear();
-            m_AvailableVideoSourcesSet.Clear();
-            
-            foreach (RplId networkSource : m_NetworkBroadcastingSources)
-            {
-                if (m_StreamedBroadcastingDevices.Contains(networkSource))
-                {
-                    m_AvailableVideoSources.Insert(networkSource);
-                    m_AvailableVideoSourcesSet.Insert(networkSource);
-                }
-            }
+            foreach (RplId sourceId : m_StreamedBroadcastingDevices)
+                m_AvailableVideoSources.Insert(sourceId);
             
             m_bVideoSourcesDirty = false;
         }
-        
         return m_AvailableVideoSources;
     }
     
     bool IsVideoSourceAvailable(RplId sourceId)
     {
-        if (m_bVideoSourcesDirty)
-            GetAvailableVideoSources(); // Forces recalc
-            
         return m_AvailableVideoSourcesSet.Contains(sourceId);
     }
     
@@ -299,7 +188,7 @@ modded class SCR_PlayerController
     }
     
     //------------------------------------------------------------------------------------------------
-    // Client-side visibility aggregation (for map markers)
+    // Client-side visibility aggregation (for map markers) and menu context management
     //------------------------------------------------------------------------------------------------
     protected void UpdateTDLNetworkState(float timeSlice)
     {
@@ -309,6 +198,9 @@ modded class SCR_PlayerController
         m_fTDLUpdateTimer = 0;
         
         array<AG0_TDLDeviceComponent> playerDevices = GetPlayerTDLDevices();
+        
+        // Check if player can open TDL menu (has device with INFORMATION + DISPLAY_OUTPUT)
+        UpdateTDLMenuContext(playerDevices);
         
         // Aggregate visible devices from all player's TDL devices
         array<RplId> newVisibleDevices = {};
@@ -344,6 +236,44 @@ modded class SCR_PlayerController
 		}
     }
     
+    //------------------------------------------------------------------------------------------------
+    // TDL Menu context activation - driven by device capability state
+    //------------------------------------------------------------------------------------------------
+    protected void UpdateTDLMenuContext(array<AG0_TDLDeviceComponent> playerDevices)
+    {
+        if (!m_TDLInputManager) return;
+        
+        // Check if any device can open the menu
+        bool canOpenMenu = false;
+        foreach (AG0_TDLDeviceComponent device : playerDevices)
+        {
+            if (device.IsPowered() && 
+                device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
+                device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
+            {
+                canOpenMenu = true;
+                break;
+            }
+        }
+        
+        // State changed - update context
+        if (canOpenMenu != m_bTDLMenuContextActive)
+        {
+            if (canOpenMenu)
+            {
+                m_TDLInputManager.ActivateContext("TDLMenuContext");
+                m_TDLInputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
+                Print("TDL_PLAYERCONTROLLER: Activated TDLMenuContext", LogLevel.DEBUG);
+            }
+            else
+            {
+                m_TDLInputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
+                Print("TDL_PLAYERCONTROLLER: Deactivated TDLMenuContext", LogLevel.DEBUG);
+            }
+            m_bTDLMenuContextActive = canOpenMenu;
+        }
+    }
+    
     protected bool RplIdArraysEqual(array<RplId> a, array<RplId> b)
     {
         if (a.Count() != b.Count()) return false;
@@ -364,5 +294,40 @@ modded class SCR_PlayerController
 	{
 	    return m_aTDLConnectedPlayerIDs.Contains(playerId);
 	}
-
+	
+	//------------------------------------------------------------------------------------------------
+	// Device management
+	//------------------------------------------------------------------------------------------------
+	array<AG0_TDLDeviceComponent> GetPlayerTDLDevices()
+	{
+	    array<AG0_TDLDeviceComponent> devices = {};
+	    
+	    IEntity controlledEntity = GetControlledEntity();
+	    if (!controlledEntity)
+	        return devices;
+	    
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return devices;
+	    
+	    return system.GetPlayerAllTDLDevices(controlledEntity);
+	}
+	
+	bool IsHoldingDevice(IEntity device)
+	{
+	    if (!device)
+	        return false;
+	    
+	    IEntity controlledEntity = GetControlledEntity();
+	    if (!controlledEntity)
+	        return false;
+	    
+	    // Check inventory for the device
+	    InventoryStorageManagerComponent invManager = InventoryStorageManagerComponent.Cast(
+	        controlledEntity.FindComponent(InventoryStorageManagerComponent));
+	    if (!invManager)
+	        return false;
+	    
+	    return invManager.Contains(device);
+	}
 }

@@ -119,10 +119,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
     protected bool m_bCapabilitiesActive = true;
 	
 	
-	protected bool m_bInputListenerActive = false;
-	protected InputManager m_InputManager;
-	
-	
 	//Replication hack - trying to prevent VME...
 	protected bool m_bLeavingNetwork = false;
 
@@ -181,12 +177,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	override void OnDelete(IEntity owner)
 	{
-	    // Clean up input listener if active
-	    if (m_bInputListenerActive && m_InputManager)
-	    {
-	        m_InputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnOpenTDLMenu);
-	        m_bInputListenerActive = false;
-	    }
 		
 		// Unregister from PC if broadcasting
         if (!System.IsConsoleApp() && m_bCameraBroadcasting)
