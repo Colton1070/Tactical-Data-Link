@@ -3,6 +3,7 @@ ButtonWidgetClass {
  Slot LayoutSlot "{65F049EE6A586DEF}" {
   Padding 4 4 4 4
  }
+ Color 0 0 0 1
  components {
   SCR_ModularButtonComponent "{65F7502A1B3E4C89}" {
    m_aEffects {
@@ -41,13 +42,14 @@ ButtonWidgetClass {
     VerticalLayoutWidgetClass "{65F7502A1B3E4C8F}" {
      Name "ContentLayout"
      Slot FrameWidgetSlot "{65F7502A1B3E4C90}" {
+      Anchor 0 0 1 1
       PositionX 8
       OffsetLeft 8
       PositionY 8
       OffsetTop 8
-      SizeX -8
-      OffsetRight -8
-      SizeY -8
+      SizeX -16.021
+      OffsetRight 8.021
+      SizeY 0
       OffsetBottom -8
      }
      {
@@ -62,11 +64,9 @@ ButtonWidgetClass {
          Slot LayoutSlot "{65F7502A1B3E4C94}" {
           Padding 0 0 8 0
          }
+         Color 1 1 1 1
          Text "Player Name"
          "Font Size" 18
-         FontProperties FontProperties "{671D64EAF4E9B17A}" {
-          Font "{CD2634D279AB011A}UI/Fonts/Roboto/Roboto_Bold.fnt"
-         }
         }
         SizeLayoutWidgetClass "{65F7502A1B3E4C95}" {
          Name "Spacer"
@@ -78,6 +78,7 @@ ButtonWidgetClass {
          Name "SignalStrength"
          Slot LayoutSlot "{65F7502A1B3E4C98}" {
          }
+         Color 1 1 1 1
          Text "100%"
          "Font Size" 16
         }

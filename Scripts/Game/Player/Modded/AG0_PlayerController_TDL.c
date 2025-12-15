@@ -25,10 +25,14 @@ modded class SCR_PlayerController
     {
         super.EOnInit(owner);
         
+        Print(string.Format("TDL_CTRL_INIT: IsConsoleApp=%1, IsLocalPlayer=%2", 
+            System.IsConsoleApp(), m_bIsLocalPlayerController), LogLevel.DEBUG);
+        
         // Cache input manager on clients only
         if (!System.IsConsoleApp())
         {
             m_TDLInputManager = GetGame().GetInputManager();
+            Print(string.Format("TDL_CTRL_INIT: InputManager=%1", m_TDLInputManager != null), LogLevel.DEBUG);
         }
     }
     
@@ -46,6 +50,7 @@ modded class SCR_PlayerController
     //------------------------------------------------------------------------------------------------
     protected void OnTDLMenuToggle()
     {
+        Print("TDL_CTRL: OnTDLMenuToggle FIRED!", LogLevel.DEBUG);
         GetGame().GetMenuManager().OpenMenu(ChimeraMenuPreset.AG0_TDLMenu);
     }
     
@@ -199,6 +204,8 @@ modded class SCR_PlayerController
         
         array<AG0_TDLDeviceComponent> playerDevices = GetPlayerTDLDevices();
         
+        Print(string.Format("TDL_CTRL_UPDATE: Found %1 player devices", playerDevices.Count()), LogLevel.DEBUG);
+        
         // Check if player can open TDL menu (has device with INFORMATION + DISPLAY_OUTPUT)
         UpdateTDLMenuContext(playerDevices);
         
@@ -241,34 +248,49 @@ modded class SCR_PlayerController
     //------------------------------------------------------------------------------------------------
     protected void UpdateTDLMenuContext(array<AG0_TDLDeviceComponent> playerDevices)
     {
-        if (!m_TDLInputManager) return;
+        Print(string.Format("TDL_CONTEXT: Checking %1 devices, InputManager=%2, CurrentState=%3", 
+            playerDevices.Count(), m_TDLInputManager != null, m_bTDLMenuContextActive), LogLevel.DEBUG);
+        
+        if (!m_TDLInputManager) 
+        {
+            Print("TDL_CONTEXT: No InputManager - bailing", LogLevel.DEBUG);
+            return;
+        }
         
         // Check if any device can open the menu
         bool canOpenMenu = false;
         foreach (AG0_TDLDeviceComponent device : playerDevices)
         {
-            if (device.IsPowered() && 
-                device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
-                device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
+            bool powered = device.IsPowered();
+            bool hasInfo = device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION);
+            bool hasDisplay = device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT);
+            
+            Print(string.Format("TDL_CONTEXT: Device powered=%1, INFO=%2, DISPLAY=%3", 
+                powered, hasInfo, hasDisplay), LogLevel.DEBUG);
+            
+            if (powered && hasInfo && hasDisplay)
             {
                 canOpenMenu = true;
                 break;
             }
         }
         
+        Print(string.Format("TDL_CONTEXT: canOpenMenu=%1, wasActive=%2", 
+            canOpenMenu, m_bTDLMenuContextActive), LogLevel.DEBUG);
+        
         // State changed - update context
         if (canOpenMenu != m_bTDLMenuContextActive)
         {
             if (canOpenMenu)
             {
-                m_TDLInputManager.ActivateContext("TDLMenuContext");
+                m_TDLInputManager.ActivateContext("TDLMenuContext", 1);
                 m_TDLInputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
-                Print("TDL_PLAYERCONTROLLER: Activated TDLMenuContext", LogLevel.DEBUG);
+                Print("TDL_CONTEXT: >>> ACTIVATED TDLMenuContext <<<", LogLevel.DEBUG);
             }
             else
             {
                 m_TDLInputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
-                Print("TDL_PLAYERCONTROLLER: Deactivated TDLMenuContext", LogLevel.DEBUG);
+                Print("TDL_CONTEXT: >>> DEACTIVATED TDLMenuContext <<<", LogLevel.DEBUG);
             }
             m_bTDLMenuContextActive = canOpenMenu;
         }
@@ -304,13 +326,21 @@ modded class SCR_PlayerController
 	    
 	    IEntity controlledEntity = GetControlledEntity();
 	    if (!controlledEntity)
+	    {
+	        Print("TDL_CTRL_DEVICES: No controlled entity", LogLevel.DEBUG);
 	        return devices;
+	    }
 	    
 	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
 	    if (!system)
+	    {
+	        Print("TDL_CTRL_DEVICES: No TDL system", LogLevel.DEBUG);
 	        return devices;
+	    }
 	    
-	    return system.GetPlayerAllTDLDevices(controlledEntity);
+	    devices = system.GetPlayerAllTDLDevices(controlledEntity);
+	    Print(string.Format("TDL_CTRL_DEVICES: Returning %1 devices", devices.Count()), LogLevel.DEBUG);
+	    return devices;
 	}
 	
 	bool IsHoldingDevice(IEntity device)

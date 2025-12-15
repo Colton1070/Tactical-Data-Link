@@ -26,6 +26,7 @@ FrameWidgetClass {
        Slot LayoutSlot "{65F049EE6A586DEF}" {
         Padding 10 0 10 0
        }
+       Color 1 1 1 1
        Text "Device Name"
       }
       TextWidgetClass "{65F049EE4644C233}" {
@@ -33,6 +34,7 @@ FrameWidgetClass {
        Slot LayoutSlot "{65F049EE6A586DEF}" {
         Padding 10 0 10 0
        }
+       Color 1 1 1 1
        Text "Network Status"
       }
      }
@@ -40,12 +42,14 @@ FrameWidgetClass {
     ScrollLayoutWidgetClass "{65F049EEA4DD8B90}" {
      Name "ScrollLayout"
      Slot LayoutSlot "{65F2004D5FEA9654}" {
+      SizeMode Fill
      }
      "Scrollbar Always Visible" 1
      {
       SizeLayoutWidgetClass "{65F049EE98CE9FBE}" {
        Name "SizeLayout"
        Slot AlignableSlot "{65F049EE98CE9FA7}" {
+        HorizontalAlign 3
        }
        AllowHeightOverride 1
        HeightOverride 350
@@ -53,12 +57,28 @@ FrameWidgetClass {
         GridLayoutWidgetClass "{65F049EEFDCA6B7F}" {
          Name "NetworkGrid"
          Slot AlignableSlot "{65F049EEFDCA6B62}" {
+          HorizontalAlign 3
+          VerticalAlign 0
          }
          RowFill {
-          1
+          1 1
          }
          ColumnFill {
-          1
+          1 1
+         }
+         {
+          ButtonWidgetClass "{671D79A2CA5549A8}" : "{7C025C99261C96C5}UI/layouts/Menus/TDL/TDLMemberCardUI.layout" {
+           Name "MemberCard0"
+           Slot GridWidgetSlot "{671D79A2CA554998}" {
+            Padding 4 4 4 4
+           }
+          }
+          ButtonWidgetClass "{671D79A2D70AE812}" : "{7C025C99261C96C5}UI/layouts/Menus/TDL/TDLMemberCardUI.layout" {
+           Name "MemberCard1"
+           Slot GridWidgetSlot "{671D79A2D70AE8F2}" {
+            Padding 4 4 4 4
+           }
+          }
          }
         }
        }

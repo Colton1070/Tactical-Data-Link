@@ -211,7 +211,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             AG0_TDLNetworkMember member = membersData.Get(i);
             if (!member) continue;
             
-            CreateMemberCard(member);
+            CreateMemberCard(member, i);
         }
         
         // Set focus to first card if we lost focus during refresh
@@ -223,10 +223,24 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void CreateMemberCard(AG0_TDLNetworkMember member)
+    protected void CreateMemberCard(AG0_TDLNetworkMember member, int index)
     {
         Widget card = GetGame().GetWorkspace().CreateWidgets(MEMBER_CARD_LAYOUT, m_wNetworkGrid);
-        if (!card) return;
+	    if (!card) return;
+	    
+	    // Position in grid - 2 columns
+	    int col = index % 2;
+	    int row = index / 2;
+	    GridSlot.SetColumn(card, col);
+	    GridSlot.SetRow(card, row);
+	    
+	    // Make sure grid knows about this row
+	    GridLayoutWidget grid = GridLayoutWidget.Cast(m_wNetworkGrid);
+	    if (grid)
+	    {
+	        grid.SetRowFillWeight(row, 1);
+	        grid.SetColumnFillWeight(col, 1);
+	    }
         
         // Attach button handler
         ButtonWidget button = ButtonWidget.Cast(card);
@@ -346,45 +360,49 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     
     //------------------------------------------------------------------------------------------------
     // Called by card handler when a card gains focus
-    void OnMemberCardFocused(RplId memberId, AG0_TDLNetworkMember memberData)
-    {
-        // Update focused index
-        for (int i = 0; i < m_aMemberCards.Count(); i++)
-        {
-            Widget card = m_aMemberCards[i];
-            AG0_TDLMemberCardHandler handler = AG0_TDLMemberCardHandler.Cast(
-                ButtonWidget.Cast(card).FindHandler(AG0_TDLMemberCardHandler)
-            );
-            
-            if (handler && handler.GetMemberRplId() == memberId)
-            {
-                m_iFocusedCardIndex = i;
-                break;
-            }
-        }
-        
-        // TODO: Update detail panel or preview when card is focused
-        PrintFormat("TDL Menu: Focused on member %1", memberData.GetPlayerName());
-    }
+    void OnMemberCardFocused(RplId memberId)
+	{
+	    for (int i = 0; i < m_aMemberCards.Count(); i++)
+	    {
+	        Widget card = m_aMemberCards[i];
+	        AG0_TDLMemberCardHandler handler = AG0_TDLMemberCardHandler.Cast(
+	            ButtonWidget.Cast(card).FindHandler(AG0_TDLMemberCardHandler)
+	        );
+	        
+	        if (handler && handler.GetMemberRplId() == memberId)
+	        {
+	            m_iFocusedCardIndex = i;
+	            break;
+	        }
+	    }
+	    
+	    if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+	        return;
+	    
+	    AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMembersData().GetByRplId(memberId);
+	    if (member)
+	        PrintFormat("TDL Menu: Focused on member %1", member.GetPlayerName());
+	}
     
     //------------------------------------------------------------------------------------------------
     // Called by card handler when a card is clicked
-    void OnMemberCardClicked(RplId memberId, AG0_TDLNetworkMember memberData, int button)
-    {
-        PrintFormat("TDL Menu: Clicked member %1 (button %2)", memberData.GetPlayerName(), button);
-        
-        // TODO: Open member detail page with options:
-        // - View video feed (if VIDEO_SOURCE capability)
-        // - Send waypoint
-        // - Send message
-        // - Request position update
-        
-        if (memberData.GetCapabilities() & AG0_ETDLDeviceCapability.VIDEO_SOURCE)
-        {
-            PrintFormat("  Member has camera - could switch to their feed");
-        }
-    }
-    
+    void OnMemberCardClicked(RplId memberId, int button)
+	{
+	    if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+	        return;
+	    
+	    AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMembersData().GetByRplId(memberId);
+	    if (!member)
+	        return;
+	    
+	    PrintFormat("TDL Menu: Clicked member %1 (button %2)", member.GetPlayerName(), button);
+	    
+	    if (member.GetCapabilities() & AG0_ETDLDeviceCapability.VIDEO_SOURCE)
+	    {
+	        PrintFormat("  Member has camera - could switch to their feed");
+	    }
+	}
+	    
     //------------------------------------------------------------------------------------------------
     protected void OnBack()
     {

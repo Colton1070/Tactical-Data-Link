@@ -16,19 +16,19 @@ class AG0_TDLMemberCardHandler : ScriptedWidgetComponent
     
     //------------------------------------------------------------------------------------------------
     // Called when card gains focus (D-pad navigation or mouse hover)
-    override bool OnFocus(Widget w, int x, int y)
-    {
-        if (m_Menu)
-            m_Menu.OnMemberCardFocused(m_MemberRplId, m_MemberData);
-        return false; // Allow focus to propagate
-    }
+	override bool OnFocus(Widget w, int x, int y)
+	{
+	    if (m_Menu)
+	        m_Menu.OnMemberCardFocused(m_MemberRplId);
+	    return false;
+	}
     
     //------------------------------------------------------------------------------------------------
     // Called when card is clicked/pressed (A button or mouse click)
     override bool OnClick(Widget w, int x, int y, int button)
     {
         if (m_Menu)
-            m_Menu.OnMemberCardClicked(m_MemberRplId, m_MemberData, button);
+            m_Menu.OnMemberCardClicked(m_MemberRplId, button);
         return true; // Consume the event
     }
     

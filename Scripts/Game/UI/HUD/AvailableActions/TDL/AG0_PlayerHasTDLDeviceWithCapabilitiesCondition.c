@@ -14,25 +14,43 @@ class AG0_PlayerHasTDLDeviceWithCapabilitiesCondition : SCR_AvailableActionCondi
     
     override bool IsAvailable(SCR_AvailableActionsConditionData data)
     {
+        Print("TDL_HINT_CONDITION: IsAvailable() called", LogLevel.DEBUG);
+        
         if (!data)
+        {
+            Print("TDL_HINT_CONDITION: No data", LogLevel.DEBUG);
             return GetReturnResult(false);
+        }
         
         SCR_PlayerController controller = SCR_PlayerController.Cast(
-	        GetGame().GetPlayerController()
-	    );
+            GetGame().GetPlayerController()
+        );
         if (!controller)
+        {
+            Print("TDL_HINT_CONDITION: No controller", LogLevel.DEBUG);
             return GetReturnResult(false);
+        }
         
-        // Use existing method from modded player controller
         array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+        Print(string.Format("TDL_HINT_CONDITION: Found %1 devices, required caps: %2", 
+            devices.Count(), m_eRequiredCapabilities), LogLevel.DEBUG);
         
         foreach (AG0_TDLDeviceComponent device : devices)
         {
-            // Check if device has all required capabilities (bitwise AND check)
-            if ((device.GetActiveCapabilities() & m_eRequiredCapabilities) == m_eRequiredCapabilities)
+            int activeCaps = device.GetActiveCapabilities();
+            bool match = (activeCaps & m_eRequiredCapabilities) == m_eRequiredCapabilities;
+            
+            Print(string.Format("TDL_HINT_CONDITION: Device caps=%1, powered=%2, match=%3", 
+                activeCaps, device.IsPowered(), match), LogLevel.DEBUG);
+            
+            if (match)
+            {
+                Print("TDL_HINT_CONDITION: Returning TRUE", LogLevel.DEBUG);
                 return GetReturnResult(true);
+            }
         }
         
+        Print("TDL_HINT_CONDITION: Returning FALSE", LogLevel.DEBUG);
         return GetReturnResult(false);
     }
 }
