@@ -177,6 +177,14 @@ modded class SCR_PlayerController
     array<RplId> GetNetworkBroadcastingSources() { return m_NetworkBroadcastingSources; }
     bool IsSourceBroadcasting(RplId sourceId) { return m_AvailableVideoSourcesSet.Contains(sourceId); }
     
+    //------------------------------------------------------------------------------------------------
+    // TDL Menu context state - queried by character controller for per-frame pumping
+    //------------------------------------------------------------------------------------------------
+    bool ShouldTDLMenuContextBeActive()
+    {
+        return m_bTDLMenuContextActive;
+    }
+    
     AG0_TDLNetworkMembers GetAggregatedTDLMembers()
     {
         AG0_TDLNetworkMembers aggregate = new AG0_TDLNetworkMembers();
@@ -207,6 +215,7 @@ modded class SCR_PlayerController
         Print(string.Format("TDL_CTRL_UPDATE: Found %1 player devices", playerDevices.Count()), LogLevel.DEBUG);
         
         // Check if player can open TDL menu (has device with INFORMATION + DISPLAY_OUTPUT)
+        // This sets the m_bTDLMenuContextActive flag - actual context pumping happens in CharacterController
         UpdateTDLMenuContext(playerDevices);
         
         // Aggregate visible devices from all player's TDL devices
@@ -244,57 +253,42 @@ modded class SCR_PlayerController
     }
     
     //------------------------------------------------------------------------------------------------
-    // TDL Menu context activation - driven by device capability state
+    // TDL Menu context state management - determines IF context should be active
+    // Actual per-frame context pumping happens in SCR_CharacterControllerComponent.OnPrepareControls
     //------------------------------------------------------------------------------------------------
     protected void UpdateTDLMenuContext(array<AG0_TDLDeviceComponent> playerDevices)
-    {
-        Print(string.Format("TDL_CONTEXT: Checking %1 devices, InputManager=%2, CurrentState=%3", 
-            playerDevices.Count(), m_TDLInputManager != null, m_bTDLMenuContextActive), LogLevel.DEBUG);
-        
-        if (!m_TDLInputManager) 
-        {
-            Print("TDL_CONTEXT: No InputManager - bailing", LogLevel.DEBUG);
-            return;
-        }
-        
-        // Check if any device can open the menu
-        bool canOpenMenu = false;
-        foreach (AG0_TDLDeviceComponent device : playerDevices)
-        {
-            bool powered = device.IsPowered();
-            bool hasInfo = device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION);
-            bool hasDisplay = device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT);
-            
-            Print(string.Format("TDL_CONTEXT: Device powered=%1, INFO=%2, DISPLAY=%3", 
-                powered, hasInfo, hasDisplay), LogLevel.DEBUG);
-            
-            if (powered && hasInfo && hasDisplay)
-            {
-                canOpenMenu = true;
-                break;
-            }
-        }
-        
-        Print(string.Format("TDL_CONTEXT: canOpenMenu=%1, wasActive=%2", 
-            canOpenMenu, m_bTDLMenuContextActive), LogLevel.DEBUG);
-        
-        // State changed - update context
-        if (canOpenMenu != m_bTDLMenuContextActive)
-        {
-            if (canOpenMenu)
-            {
-                m_TDLInputManager.ActivateContext("TDLMenuContext", 1);
-                m_TDLInputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
-                Print("TDL_CONTEXT: >>> ACTIVATED TDLMenuContext <<<", LogLevel.DEBUG);
-            }
-            else
-            {
-                m_TDLInputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
-                Print("TDL_CONTEXT: >>> DEACTIVATED TDLMenuContext <<<", LogLevel.DEBUG);
-            }
-            m_bTDLMenuContextActive = canOpenMenu;
-        }
-    }
+	{
+	    if (!m_TDLInputManager) 
+	        return;
+	    
+	    bool canOpenMenu = false;
+	    foreach (AG0_TDLDeviceComponent device : playerDevices)
+	    {
+	        if (device.IsPowered() && 
+	            device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
+	            device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
+	        {
+	            canOpenMenu = true;
+	            break;
+	        }
+	    }
+	    
+	    // Only manage listener registration on state CHANGE
+	    if (canOpenMenu != m_bTDLMenuContextActive)
+	    {
+	        if (canOpenMenu)
+	        {
+	            m_TDLInputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
+	            Print("TDL_CONTEXT: >>> Added listener <<<", LogLevel.DEBUG);
+	        }
+	        else
+	        {
+	            m_TDLInputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
+	            Print("TDL_CONTEXT: >>> Removed listener <<<", LogLevel.DEBUG);
+	        }
+	        m_bTDLMenuContextActive = canOpenMenu;
+	    }
+	}
     
     protected bool RplIdArraysEqual(array<RplId> a, array<RplId> b)
     {
