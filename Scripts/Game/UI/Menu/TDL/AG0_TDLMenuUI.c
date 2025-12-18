@@ -9,7 +9,8 @@ modded enum ChimeraMenuPreset
 enum ETDLMenuView
 {
     NETWORK,
-    MEMBER_DETAIL
+    MEMBER_DETAIL,
+    MAP
 }
 
 class AG0_TDLMenuUI : ChimeraMenuBase
@@ -28,6 +29,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     // Panel widgets
     protected Widget m_wNetworkPanel;
     protected Widget m_wDetailPanel;
+    protected Widget m_wMapPanel;
     
     // Network panel widgets
     protected Widget m_wScrollContainer;
@@ -44,6 +46,16 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected TextWidget m_wDetailCapabilities;
     protected Widget m_wViewFeedButton;
     protected Widget m_wBackButton;
+    
+    // Map panel widgets
+    protected CanvasWidget m_wMapCanvas;
+    protected ref AG0_TDLMapView m_MapView;
+    protected Widget m_wMapViewButton;
+    protected Widget m_wMapBackButton;
+    protected Widget m_wZoomInButton;
+    protected Widget m_wZoomOutButton;
+    protected TextWidget m_wGridReference;
+    protected TextWidget m_wZoomLevel;
     
     // State tracking
     protected ref array<RplId> m_aCachedMemberIds = {};
@@ -64,6 +76,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         // Find panels
         m_wNetworkPanel = m_wRoot.FindAnyWidget("NetworkPanel");
         m_wDetailPanel = m_wRoot.FindAnyWidget("DetailPanel");
+        m_wMapPanel = m_wRoot.FindAnyWidget("MapPanel");
         
         // Network panel widgets
         m_wScrollContainer = m_wRoot.FindAnyWidget("ScrollLayout");
@@ -80,6 +93,41 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         m_wDetailCapabilities = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailCapabilities"));
         m_wViewFeedButton = m_wRoot.FindAnyWidget("ViewFeedButton");
         m_wBackButton = m_wRoot.FindAnyWidget("BackButton");
+        
+        // Map panel widgets
+        m_wMapCanvas = CanvasWidget.Cast(m_wRoot.FindAnyWidget("MapCanvas"));
+        m_wMapBackButton = m_wRoot.FindAnyWidget("MapBackButton");
+        m_wZoomInButton = m_wRoot.FindAnyWidget("ZoomInButton");
+        m_wZoomOutButton = m_wRoot.FindAnyWidget("ZoomOutButton");
+        m_wGridReference = TextWidget.Cast(m_wRoot.FindAnyWidget("GridReference"));
+        m_wZoomLevel = TextWidget.Cast(m_wRoot.FindAnyWidget("ZoomLevel"));
+        
+        // Initialize map view
+        if (m_wMapCanvas)
+        {
+            m_MapView = new AG0_TDLMapView();
+            if (!m_MapView.Init(m_wMapCanvas))
+            {
+                Print("[TDLMenu] Failed to initialize map view", LogLevel.WARNING);
+                m_MapView = null;
+            }
+        }
+        
+        // Setup map button handler (in network panel header)
+        m_wMapViewButton = m_wRoot.FindAnyWidget("MapViewButton");
+        if (m_wMapViewButton)
+        {
+            ButtonWidget btn = ButtonWidget.Cast(m_wMapViewButton);
+            if (btn)
+            {
+                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
+                handler.Init(this, "map");
+                btn.AddHandler(handler);
+            }
+        }
+        
+        // Setup map panel button handlers
+        SetupMapButtons();
         
         // Setup detail button handlers
         SetupDetailButtons();
@@ -117,6 +165,20 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    override void OnMenuUpdate(float tDelta)
+    {
+        super.OnMenuUpdate(tDelta);
+        
+        // Update map if visible
+        if (m_eCurrentView == ETDLMenuView.MAP && m_MapView)
+        {
+            UpdateMapView();
+            m_MapView.Draw();
+            UpdateMapUI();
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
     protected void SetupDetailButtons()
     {
         if (m_wBackButton)
@@ -143,6 +205,43 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    protected void SetupMapButtons()
+    {
+        if (m_wMapBackButton)
+        {
+            ButtonWidget btn = ButtonWidget.Cast(m_wMapBackButton);
+            if (btn)
+            {
+                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
+                handler.Init(this, "mapback");
+                btn.AddHandler(handler);
+            }
+        }
+        
+        if (m_wZoomInButton)
+        {
+            ButtonWidget btn = ButtonWidget.Cast(m_wZoomInButton);
+            if (btn)
+            {
+                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
+                handler.Init(this, "zoomin");
+                btn.AddHandler(handler);
+            }
+        }
+        
+        if (m_wZoomOutButton)
+        {
+            ButtonWidget btn = ButtonWidget.Cast(m_wZoomOutButton);
+            if (btn)
+            {
+                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
+                handler.Init(this, "zoomout");
+                btn.AddHandler(handler);
+            }
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
     // VIEW SWITCHING
     //------------------------------------------------------------------------------------------------
     protected void ShowNetworkView()
@@ -153,6 +252,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             m_wNetworkPanel.SetVisible(true);
         if (m_wDetailPanel)
             m_wDetailPanel.SetVisible(false);
+        if (m_wMapPanel)
+            m_wMapPanel.SetVisible(false);
         
         if (!m_aMemberCards.IsEmpty())
         {
@@ -172,11 +273,114 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             m_wNetworkPanel.SetVisible(false);
         if (m_wDetailPanel)
             m_wDetailPanel.SetVisible(true);
+        if (m_wMapPanel)
+            m_wMapPanel.SetVisible(false);
         
         PopulateDetailView();
         
         if (m_wBackButton)
             GetGame().GetWorkspace().SetFocusedWidget(m_wBackButton);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void ShowMapView()
+    {
+        m_eCurrentView = ETDLMenuView.MAP;
+        
+        if (m_wNetworkPanel)
+            m_wNetworkPanel.SetVisible(false);
+        if (m_wDetailPanel)
+            m_wDetailPanel.SetVisible(false);
+        if (m_wMapPanel)
+            m_wMapPanel.SetVisible(true);
+        
+        // Center on player when opening
+        if (m_MapView)
+        {
+            m_MapView.CenterOnPlayer();
+            m_MapView.SetZoom(0.3);
+        }
+        
+        if (m_wMapBackButton)
+            GetGame().GetWorkspace().SetFocusedWidget(m_wMapBackButton);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void UpdateMapView()
+    {
+        if (!m_MapView || !m_ActiveDevice)
+            return;
+        
+        m_MapView.ClearMarkers();
+        
+        // Add self marker
+        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+        if (player)
+        {
+            vector playerPos = player.GetOrigin();
+            float playerHeading = GetPlayerHeading(player);
+            m_MapView.AddSelfMarker(playerPos, playerHeading);
+        }
+        
+        // Add network member markers
+        if (m_ActiveDevice.HasNetworkMemberData())
+        {
+            AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+            if (membersData)
+            {
+                int count = membersData.Count();
+                for (int i = 0; i < count; i++)
+                {
+                    AG0_TDLNetworkMember member = membersData.Get(i);
+                    if (!member)
+                        continue;
+                    
+                    // Skip self - compare via RplComponent
+                    RplComponent deviceRpl = RplComponent.Cast(m_ActiveDevice.GetOwner().FindComponent(RplComponent));
+                    if (deviceRpl && member.GetRplId() == deviceRpl.Id())
+                        continue;
+                    
+                    vector memberPos = member.GetPosition();
+                    string name = member.GetPlayerName();
+                    float signal = member.GetSignalStrength();
+                    
+                    m_MapView.AddMemberMarker(memberPos, name, signal);
+                }
+            }
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void UpdateMapUI()
+    {
+        if (!m_MapView)
+            return;
+        
+        // Update grid reference
+        if (m_wGridReference)
+        {
+            vector center = m_MapView.GetCenter();
+            string gridRef = SCR_MapEntity.GetGridLabel(center, 2, 4, " ");
+            m_wGridReference.SetTextFormat("GRID: %1", gridRef);
+        }
+        
+        // Update zoom level display
+        if (m_wZoomLevel)
+        {
+            float zoom = m_MapView.GetZoom();
+            int zoomPct = Math.Round((1.0 - zoom) * 100);
+            m_wZoomLevel.SetTextFormat("ZOOM: %1%%", zoomPct);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected float GetPlayerHeading(IEntity player)
+    {
+        if (!player)
+            return 0;
+        
+        vector angles = player.GetAngles();
+        return angles[1];
     }
     
     //------------------------------------------------------------------------------------------------
@@ -285,6 +489,32 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    void OnMapViewClicked()
+    {
+        ShowMapView();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    void OnMapBackClicked()
+    {
+        ShowNetworkView();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    void OnZoomInClicked()
+    {
+        if (m_MapView)
+            m_MapView.ZoomIn(0.05);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    void OnZoomOutClicked()
+    {
+        if (m_MapView)
+            m_MapView.ZoomOut(0.05);
+    }
+    
+    //------------------------------------------------------------------------------------------------
     protected AG0_PlayerCameraOverrideComponent GetPlayerCameraOverride()
     {
         CameraManager camMgr = GetGame().GetCameraManager();
@@ -303,6 +533,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected void OnBack()
     {
         if (m_eCurrentView == ETDLMenuView.MEMBER_DETAIL)
+        {
+            ShowNetworkView();
+        }
+        else if (m_eCurrentView == ETDLMenuView.MAP)
         {
             ShowNetworkView();
         }

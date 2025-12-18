@@ -1,6 +1,29 @@
 FrameWidgetClass {
  Name "rootFrame"
  {
+  ScaleWidgetClass "{65EF45C096C2BE70}" {
+   Name "Scale0"
+   Slot FrameWidgetSlot "{65EF45C096C28202}" {
+    Anchor 0.5 0.5 0.5 0.5
+    PositionX -960
+    OffsetLeft -960
+    PositionY -540
+    OffsetTop -540
+    SizeX 1920
+    OffsetRight -960
+    SizeY 1080
+    OffsetBottom -540
+   }
+   {
+    ImageWidgetClass "{65EF45C0244C964D}" {
+     Name "OverlayImage"
+     Slot AlignableSlot "{65EF45C096770165}" {
+     }
+     Texture "{9F5AD825762D9811}UI/layouts/Menus/TDL/RDCUIOverlay.edds"
+     Size 1500 1500
+    }
+   }
+  }
   OverlayWidgetClass "{671E54EF901D0A38}" {
    Name "NetworkPanel"
    Slot FrameWidgetSlot "{671E54EF901D0976}" {
@@ -17,7 +40,7 @@ FrameWidgetClass {
    {
     VerticalLayoutWidgetClass "{65F049EDD86B89DF}" {
      Name "VerticalLayout0"
-     Slot OverlayWidgetSlot {
+     Slot OverlayWidgetSlot "{6721643790C6ACA2}" {
      }
      {
       HorizontalLayoutWidgetClass "{65F049EE15E51EBE}" {
@@ -41,6 +64,31 @@ FrameWidgetClass {
          }
          Color 1 1 1 1
          Text "Network Status"
+        }
+        ButtonWidgetClass "{672164344810E4D7}" {
+         Name "MapViewButton"
+         Slot LayoutSlot "{6721640D32883A96}" {
+         }
+         components {
+          SCR_ModularButtonComponent "{6721640D3D604D2C}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{6721640D1FD96013}" {
+             m_sWidgetName "MapBackButton"
+             m_cDefault 0.102 0.102 0.102 0.9
+             m_cFocusGained 0.2 0.2 0.2 1
+            }
+           }
+          }
+         }
+         {
+          RichTextWidgetClass "{672164344810E4E8}" {
+           Name "RichText0"
+           Slot ButtonWidgetSlot "{6721640DA59B569A}" {
+           }
+           Color 0 0 0 1
+           Text "Map"
+          }
+         }
         }
        }
       }
@@ -227,26 +275,174 @@ FrameWidgetClass {
     }
    }
   }
-  ScaleWidgetClass "{65EF45C096C2BE70}" {
-   Name "Scale0"
-   Slot FrameWidgetSlot "{65EF45C096C28202}" {
-    Anchor 0.5 0.5 0.5 0.5
-    PositionX -960
-    OffsetLeft -960
-    PositionY -540
-    OffsetTop -540
-    SizeX 1920
-    OffsetRight -960
-    SizeY 1080
-    OffsetBottom -540
+  OverlayWidgetClass "{67216437E2153852}" {
+   Name "MapPanel"
+   Slot FrameWidgetSlot "{671E54EF901D0976}" {
+    Anchor 0.304 0.264 0.687 0.658
+    PositionX 8.246
+    OffsetLeft 8.246
+    PositionY 0.109
+    OffsetTop 0.109
+    SizeX -8.086
+    OffsetRight -0.16
+    SizeY -4.907
+    OffsetBottom 4.798
    }
+   "Is Visible" 0
    {
-    ImageWidgetClass "{65EF45C0244C964D}" {
-     Name "OverlayImage"
-     Slot AlignableSlot "{65EF45C096770165}" {
+    VerticalLayoutWidgetClass "{67216437E2153851}" {
+     Name "MapVerticalLayout"
+     Slot OverlayWidgetSlot "{6721640FDF7C0469}" {
+      HorizontalAlign 3
+      VerticalAlign 3
      }
-     Texture "{9F5AD825762D9811}UI/layouts/Menus/TDL/RDCUIOverlay.edds"
-     Size 1500 1500
+     {
+      HorizontalLayoutWidgetClass "{67216435DB0D6370}" {
+       Name "HeaderSection"
+       Slot LayoutSlot "{65F049EE15E51E9E}" {
+        Padding 15 15 15 15
+       }
+       {
+        TextWidgetClass "{67216435DB0D6371}" {
+         Name "GridReference"
+         Slot LayoutSlot "{65F049EE6A586DEF}" {
+          Padding 10 0 10 0
+         }
+         Color 1 1 1 1
+         Text "Grid"
+        }
+        TextWidgetClass "{67216435DB0D6373}" {
+         Name "ZoomLevel"
+         Slot LayoutSlot "{65F049EE6A586DEF}" {
+          Padding 10 0 10 0
+         }
+         Color 1 1 1 1
+         Text "Zoom"
+        }
+       }
+      }
+      CanvasWidgetClass "{67216436162E589B}" {
+       Name "MapCanvas"
+       Slot LayoutSlot {
+        SizeMode Fill
+       }
+      }
+      OverlayWidgetClass "{67216436E7C8D212}" {
+       Name "Overlay0"
+       Slot LayoutSlot "{67216436E7C8D23E}" {
+       }
+       {
+        SizeLayoutWidgetClass "{67216436ED0EE138}" {
+         Name "SizeLayout0"
+         Slot OverlayWidgetSlot "{67216436ED0EE144}" {
+         }
+         AllowWidthOverride 1
+         WidthOverride 720
+         HeightOverride 334.6
+        }
+       }
+      }
+      SizeLayoutWidgetClass "{67216437E2150683}" {
+       Name "Spacer"
+       Slot LayoutSlot "{6721640EC191FBE4}" {
+       }
+       AllowHeightOverride 1
+       HeightOverride 16
+      }
+      HorizontalLayoutWidgetClass "{67216437E215069C}" {
+       Name "DetailButtonRow"
+       Slot LayoutSlot "{6721640D24945198}" {
+       }
+       {
+        ButtonWidgetClass "{67216437E215069D}" {
+         Name "MapBackButton"
+         Slot LayoutSlot "{6721640D32883A96}" {
+         }
+         components {
+          SCR_ModularButtonComponent "{6721640D3D604D2C}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{6721640D1FD96013}" {
+             m_sWidgetName "MapBackButton"
+             m_cDefault 0.102 0.102 0.102 0.9
+             m_cFocusGained 0.2 0.2 0.2 1
+            }
+           }
+          }
+         }
+         {
+          RichTextWidgetClass "{67216437E2168BD6}" {
+           Name "RichText0"
+           Slot ButtonWidgetSlot "{6721640DA59B569A}" {
+           }
+           Color 0 0 0 1
+           Text "Back"
+          }
+         }
+        }
+        SizeLayoutWidgetClass "{67216437E2168BD5}" {
+         Name "SizeLayout0"
+         Slot LayoutSlot "{6721640D810A7E49}" {
+         }
+         AllowWidthOverride 1
+         WidthOverride 14.4
+         AllowMinDesiredWidth 1
+         MinDesiredWidth 18
+         AllowMaxDesiredWidth 1
+         MaxDesiredWidth 20.8
+        }
+        ButtonWidgetClass "{67216437E2168BD4}" {
+         Name "ZoomInButton"
+         Slot LayoutSlot "{6721640D32883A96}" {
+         }
+         components {
+          SCR_ModularButtonComponent "{6721640D3D604D2C}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{6721640D5AB8B113}" {
+             m_sWidgetName "ZoomInButton"
+             m_cDefault 0.102 0.102 0.102 0.9
+             m_cFocusGained 0.2 0.2 0.2 1
+            }
+           }
+          }
+         }
+         {
+          RichTextWidgetClass "{67216437E2163C3B}" {
+           Name "RichText0"
+           Slot ButtonWidgetSlot "{6721640DB7077EC3}" {
+           }
+           Color 0 0 0 1
+           Text "Zoom In"
+          }
+         }
+        }
+        ButtonWidgetClass "{67216435E76C3D68}" {
+         Name "ZoomOutButton"
+         Slot LayoutSlot "{6721640D32883A96}" {
+         }
+         components {
+          SCR_ModularButtonComponent "{6721640D3D604D2C}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{6721640D5AB8B113}" {
+             m_sWidgetName "ZoomInButton"
+             m_cDefault 0.102 0.102 0.102 0.9
+             m_cFocusGained 0.2 0.2 0.2 1
+            }
+           }
+          }
+         }
+         {
+          RichTextWidgetClass "{67216435E76C3D6A}" {
+           Name "RichText0"
+           Slot ButtonWidgetSlot "{6721640DB7077EC3}" {
+           }
+           Color 0 0 0 1
+           Text "Zoom Out"
+          }
+         }
+        }
+       }
+      }
+     }
     }
    }
   }
