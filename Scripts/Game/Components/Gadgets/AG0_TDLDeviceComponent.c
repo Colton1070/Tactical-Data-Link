@@ -166,6 +166,13 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		);
 	    if (!controller || !controller.IsHoldingDevice(owner))
 	        return;
+		
+		if (IsPowered() && 
+	        HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
+	        HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
+	    {
+	        GetGame().GetInputManager().ActivateContext("TDLMenuContext");
+	    }
 	    
 	    // Use GetActiveVideoSource() which returns local source
 	    RplId activeSource = GetActiveVideoSource();
