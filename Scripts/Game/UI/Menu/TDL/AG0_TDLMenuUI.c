@@ -148,7 +148,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         // Setup input handlers
         m_InputManager.AddActionListener("MenuBack", EActionTrigger.DOWN, OnBack);
-        m_InputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnClose);
         
         if (!m_aMemberCards.IsEmpty())
             SetFocusToCard(0);
@@ -160,7 +159,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (m_InputManager)
         {
             m_InputManager.RemoveActionListener("MenuBack", EActionTrigger.DOWN, OnBack);
-            m_InputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnClose);
         }
     }
     
@@ -315,12 +313,13 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         // Add self marker
         IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-        if (player)
-        {
-            vector playerPos = player.GetOrigin();
-            float playerHeading = GetPlayerHeading(player);
-            m_MapView.AddSelfMarker(playerPos, playerHeading);
-        }
+    	if (player)
+		{
+		    vector playerPos = player.GetOrigin();
+		    float playerHeading = GetPlayerHeading(player);
+		    m_MapView.AddSelfMarker(playerPos, playerHeading);
+		    m_MapView.SetTrackUp(playerHeading); // <-- add this
+		}
         
         // Add network member markers
         if (m_ActiveDevice.HasNetworkMemberData())

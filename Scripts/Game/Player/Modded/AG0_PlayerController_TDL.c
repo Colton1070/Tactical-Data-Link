@@ -42,10 +42,20 @@ modded class SCR_PlayerController
     
     //------------------------------------------------------------------------------------------------
     protected void OnTDLMenuToggle()
-    {
-        // Open me
-        GetGame().GetMenuManager().OpenMenu(ChimeraMenuPreset.AG0_TDLMenu);
-    }
+	{
+	    MenuManager menuManager = GetGame().GetMenuManager();
+	    MenuBase topMenu = menuManager.GetTopMenu();
+	    
+	    // If TDL menu is already open, close it
+	    if (topMenu && AG0_TDLMenuUI.Cast(topMenu))
+	    {
+	        topMenu.Close();
+	        return;
+	    }
+	    
+	    // Otherwise open it
+	    menuManager.OpenMenu(ChimeraMenuPreset.AG0_TDLMenu);
+	}
     
     //------------------------------------------------------------------------------------------------
     override void OnUpdate(float timeSlice)

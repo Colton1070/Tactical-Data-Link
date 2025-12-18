@@ -527,43 +527,48 @@ class AG0_TDLMapView
     
     //------------------------------------------------------------------------------------------------
     protected void DrawMapTexture()
-    {
-        ImageDrawCommand cmd = new ImageDrawCommand();
-        cmd.m_pTexture = m_pMapTexture;
-        
-        // Calculate canvas aspect ratio
-        float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
-        
-        // Calculate view size in world units, adjusted for canvas aspect ratio
-        float viewWorldSizeX = m_fMapSizeX * m_fZoom;
-        float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
-        
-        // View bounds in world coords
-        float viewMinX = m_vCenterWorld[0] - viewWorldSizeX * 0.5;
-        float viewMaxX = m_vCenterWorld[0] + viewWorldSizeX * 0.5;
-        float viewMinZ = m_vCenterWorld[2] - viewWorldSizeZ * 0.5;
-        float viewMaxZ = m_vCenterWorld[2] + viewWorldSizeZ * 0.5;
-        
-        // Convert to UV (0-1 range on texture)
-        float u0, v0, u1, v1;
-        WorldToUV(Vector(viewMinX, 0, viewMaxZ), u0, v0); // Top-left
-        WorldToUV(Vector(viewMaxX, 0, viewMinZ), u1, v1); // Bottom-right
-        
-        cmd.m_fUV[0] = u0;
-        cmd.m_fUV[1] = v0;
-        cmd.m_fUV[2] = u1;
-        cmd.m_fUV[3] = v1;
-        
-        // Simple: position at top-left, size fills canvas
-        cmd.m_Position = Vector(0, 0, 0);
-        cmd.m_Size = Vector(m_fCanvasWidth, m_fCanvasHeight, 0);
-        cmd.m_Pivot = Vector(0, 0, 0);
-        cmd.m_fRotation = 0; // Disable rotation for now until positioning works
-        cmd.m_iColor = 0xFFFFFFFF;
-        cmd.m_iFlags = WidgetFlags.STRETCH;
-        
-        m_aDrawCommands.Insert(cmd);
-    }
+	{
+	    ImageDrawCommand cmd = new ImageDrawCommand();
+	    cmd.m_pTexture = m_pMapTexture;
+	    
+	    float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
+	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+	    float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
+	    
+	    // Diagonal of the view rectangle (covers any rotation)
+	    float diagonal = Math.Sqrt(viewWorldSizeX * viewWorldSizeX + viewWorldSizeZ * viewWorldSizeZ);
+	    
+	    // Sample square region sized to diagonal
+	    float viewMinX = m_vCenterWorld[0] - diagonal * 0.5;
+	    float viewMaxX = m_vCenterWorld[0] + diagonal * 0.5;
+	    float viewMinZ = m_vCenterWorld[2] - diagonal * 0.5;
+	    float viewMaxZ = m_vCenterWorld[2] + diagonal * 0.5;
+	    
+	    float u0, v0, u1, v1;
+	    WorldToUV(Vector(viewMinX, 0, viewMaxZ), u0, v0);
+	    WorldToUV(Vector(viewMaxX, 0, viewMinZ), u1, v1);
+	    
+	    cmd.m_fUV[0] = u0;
+	    cmd.m_fUV[1] = v0;
+	    cmd.m_fUV[2] = u1;
+	    cmd.m_fUV[3] = v1;
+	    
+	    // Draw size must use same scale factor as UV sampling
+	    float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
+	    float drawSize = diagonal * pixelsPerWorldUnit;
+	    
+	    float offsetX = (m_fCanvasWidth - drawSize) * 0.5;
+	    float offsetY = (m_fCanvasHeight - drawSize) * 0.5;
+	    
+	    cmd.m_Position = Vector(offsetX, offsetY, 0);
+	    cmd.m_Size = Vector(drawSize, drawSize, 0);
+	    cmd.m_Pivot = Vector(drawSize * 0.5, drawSize * 0.5, 0);
+	    cmd.m_fRotation = m_fRotation;
+	    cmd.m_iColor = 0xFFFFFFFF;
+	    cmd.m_iFlags = WidgetFlags.STRETCH;
+	    
+	    m_aDrawCommands.Insert(cmd);
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void DrawFallbackBackground()
