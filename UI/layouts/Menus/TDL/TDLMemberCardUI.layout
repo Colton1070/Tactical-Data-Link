@@ -11,10 +11,11 @@ ButtonWidgetClass {
      m_eEvents 6144
      m_sWidgetName "CardBackground"
      m_fAnimationTime 0.15
-     m_cDefault 0.08 0.08 0.1 0.95
+     m_cDefault 0.078 0.078 0.102 0.8
      m_cHovered 0.14 0.14 0.18 0.98
      m_cActivated 0.18 0.18 0.22 1
-     m_cFocusGained 0.12 0.12 0.15 0.98
+     m_cFocusGained 0.14 0.14 0.18 0.98
+     m_cFocusLost 0.078 0.078 0.102 0.8
     }
     SCR_ButtonEffectSound "{65F7502A1B3E4C8B}" {
      m_eEvents EVENT_FOCUS_GAINED
@@ -30,98 +31,81 @@ ButtonWidgetClass {
    m_bFocusOnMouseEnter 1
   }
  }
+ style blank
  {
   FrameWidgetClass "{65F7502A1B3E4C8D}" {
-   Name "CardBackground"
+   Name "CardFrame"
    Slot AlignableSlot "{65F7502A1B3E4C8E}" {
     HorizontalAlign 3
     VerticalAlign 3
    }
    Color 0.08 0.08 0.1 0.95
    {
-    VerticalLayoutWidgetClass "{65F7502A1B3E4C8F}" {
-     Name "ContentLayout"
-     Slot FrameWidgetSlot "{65F7502A1B3E4C90}" {
+    ImageWidgetClass "{67275C12BFAA6C75}" {
+     Name "CardBackground"
+     Slot FrameWidgetSlot "{67275C12BFAA6BA2}" {
       Anchor 0 0 1 1
-      PositionX 8
-      OffsetLeft 8
-      PositionY 8
-      OffsetTop 8
-      SizeX -16.021
-      OffsetRight 8.021
-      SizeY 0
-      OffsetBottom -8
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX -1820
+      OffsetRight 0
+      SizeY -1050
+      OffsetBottom 0
+     }
+    }
+    HorizontalLayoutWidgetClass "{65F7502A1B3E4C91}" {
+     Name "HeaderRow"
+     Slot FrameWidgetSlot "{67275C11312239DB}" {
+      Anchor 0 0 1 0
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX -1820
+      OffsetRight 0
+      SizeY 50
+      OffsetBottom -50
      }
      {
-      HorizontalLayoutWidgetClass "{65F7502A1B3E4C91}" {
-       Name "HeaderRow"
-       Slot LayoutSlot "{65F7502A1B3E4C92}" {
-        Padding 0 0 0 4
+      ImageWidgetClass "{672744BA7F1B342A}" {
+       Name "StatusDot"
+       Slot LayoutSlot "{67275C1F76F0AD71}" {
+        HorizontalAlign 1
+        VerticalAlign 1
+        Padding 5 5 5 5
        }
-       {
-        TextWidgetClass "{65F7502A1B3E4C93}" {
-         Name "PlayerName"
-         Slot LayoutSlot "{65F7502A1B3E4C94}" {
-          Padding 0 0 8 0
-         }
-         Color 1 1 1 1
-         Text "Player Name"
-         "Font Size" 18
-        }
-        SizeLayoutWidgetClass "{65F7502A1B3E4C95}" {
-         Name "Spacer"
-         Slot LayoutSlot "{65F7502A1B3E4C96}" {
-          SizeMode Fill
-         }
-        }
-        TextWidgetClass "{65F7502A1B3E4C97}" {
-         Name "SignalStrength"
-         Slot LayoutSlot "{65F7502A1B3E4C98}" {
-         }
-         Color 1 1 1 1
-         Text "100%"
-         "Font Size" 16
-        }
+       Size 10 10
+       Tiling None
+      }
+      TextWidgetClass "{65F7502A1B3E4C93}" {
+       Name "PlayerName"
+       Slot LayoutSlot "{65F7502A1B3E4C94}" {
+        HorizontalAlign 1
+        VerticalAlign 1
+        Padding 0 0 8 0
+       }
+       Color 1 1 1 1
+       Text "Player Name"
+       "Font Size" 18
+      }
+      SizeLayoutWidgetClass "{65F7502A1B3E4C95}" {
+       Name "Spacer"
+       Slot LayoutSlot "{65F7502A1B3E4C96}" {
+        SizeMode Fill
        }
       }
-      HorizontalLayoutWidgetClass "{65F7502A1B3E4C99}" {
-       Name "InfoRow"
-       Slot LayoutSlot "{65F7502A1B3E4C9A}" {
-        Padding 0 0 0 4
+      TextWidgetClass "{65F7502A1B3E4C97}" {
+       Name "NetworkIP"
+       Slot LayoutSlot "{65F7502A1B3E4C98}" {
+        HorizontalAlign 1
+        VerticalAlign 1
+        Padding 0 0 20 0
        }
-       {
-        TextWidgetClass "{65F7502A1B3E4C9B}" {
-         Name "NetworkIP"
-         Slot LayoutSlot "{65F7502A1B3E4C9C}" {
-          Padding 0 0 8 0
-         }
-         Color 0.7 0.7 0.7 1
-         Text "IP: 192.168.1.100"
-         "Font Size" 14
-        }
-        SizeLayoutWidgetClass "{65F7502A1B3E4C9D}" {
-         Name "Spacer2"
-         Slot LayoutSlot "{65F7502A1B3E4C9E}" {
-          SizeMode Fill
-         }
-        }
-        TextWidgetClass "{65F7502A1B3E4C9F}" {
-         Name "Distance"
-         Slot LayoutSlot "{65F7502A1B3E4CA0}" {
-         }
-         Color 0.7 0.7 0.7 1
-         Text "125m"
-         "Font Size" 14
-        }
-       }
-      }
-      TextWidgetClass "{65F7502A1B3E4CA1}" {
-       Name "Capabilities"
-       Slot LayoutSlot "{65F7502A1B3E4CA2}" {
-       }
-       Color 0.791 0.713 0.009 1
-       Text "[GPS] [CAM] [DISP]"
-       "Font Size" 14
+       Color 1 1 1 1
+       Text "192.168.0.0"
+       "Font Size" 16
       }
      }
     }

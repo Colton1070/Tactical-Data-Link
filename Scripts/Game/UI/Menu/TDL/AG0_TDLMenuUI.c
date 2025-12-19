@@ -1,44 +1,50 @@
-//------------------------------------------------------------------------------------------------
-// AG0_TDLMenuUI.c
-//------------------------------------------------------------------------------------------------
 modded enum ChimeraMenuPreset
 {
     AG0_TDLMenu
 }
 
-enum ETDLMenuView
+//------------------------------------------------------------------------------------------------
+// Panel content types - what's showing in the side panel
+enum ETDLPanelContent
 {
-    NETWORK,
-    MEMBER_DETAIL,
-    MAP
+    NONE,           // Panel hidden, map only
+    NETWORK_LIST,   // Member list
+    MEMBER_DETAIL,  // Selected member details
+    SETTINGS        // Future: settings/config
 }
 
+//------------------------------------------------------------------------------------------------
+//! TDL ATAK-style interface menu - Map-centric with overlay panels
 class AG0_TDLMenuUI : ChimeraMenuBase
 {
-    protected ETDLMenuView m_eCurrentView = ETDLMenuView.NETWORK;
+    // Panel state
+    protected ETDLPanelContent m_eActivePanel = ETDLPanelContent.NETWORK_LIST;
     
     // Core references
     protected AG0_TDLDeviceComponent m_ActiveDevice;
     protected Widget m_wRoot;
     protected InputManager m_InputManager;
     
-    // Selected member for detail view
-    protected ref AG0_TDLNetworkMember m_SelectedMember;
-    protected RplId m_SelectedDeviceId;
-    
-    // Panel widgets
-    protected Widget m_wNetworkPanel;
-    protected Widget m_wDetailPanel;
+    // Map view - always active
+    protected ref AG0_TDLMapView m_MapView;
+    protected CanvasWidget m_wMapCanvas;
     protected Widget m_wMapPanel;
     
-    // Network panel widgets
+    // Side panel structure
+    protected Widget m_wSidePanel;
+    protected TextWidget m_wPanelTitle;
+    protected Widget m_wCloseButton;
+    protected Widget m_wNetworkContent;
+    protected Widget m_wDetailContent;
+    
+    // Network content widgets
     protected Widget m_wScrollContainer;
     protected ScrollLayoutWidget m_wScrollLayout;
-    protected Widget m_wNetworkGrid;
+    protected Widget m_wMemberList;
     protected TextWidget m_wDeviceName;
     protected TextWidget m_wNetworkStatus;
     
-    // Detail panel widgets
+    // Detail content widgets
     protected TextWidget m_wDetailPlayerName;
     protected TextWidget m_wDetailSignalStrength;
     protected TextWidget m_wDetailNetworkIP;
@@ -47,15 +53,30 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected Widget m_wViewFeedButton;
     protected Widget m_wBackButton;
     
-    // Map panel widgets
-    protected CanvasWidget m_wMapCanvas;
-    protected ref AG0_TDLMapView m_MapView;
-    protected Widget m_wMapViewButton;
-    protected Widget m_wMapBackButton;
+    // Toolbar widgets
+    protected Widget m_wToolbar;
+    protected Widget m_wMenuButton;
+    protected Widget m_wNetworkButton;
+    
+    // Zoom/compass controls
     protected Widget m_wZoomInButton;
     protected Widget m_wZoomOutButton;
-    protected TextWidget m_wGridReference;
-    protected TextWidget m_wZoomLevel;
+    protected Widget m_wCompassButton;
+    protected bool m_bTrackUp = true;  // Default to track-up mode
+    
+    // Self marker widget
+	protected Widget m_wSelfMarkerWidget;
+	protected TextWidget m_wGPSStatus;
+	protected TextWidget m_wCallsign;
+	protected TextWidget m_wGrid;
+	protected TextWidget m_wAltitude;
+	protected TextWidget m_wHeading;
+	protected TextWidget m_wSpeed;
+	protected TextWidget m_wError;
+    
+    // Selected member for detail view
+    protected ref AG0_TDLNetworkMember m_SelectedMember;
+    protected RplId m_SelectedDeviceId;
     
     // State tracking
     protected ref array<RplId> m_aCachedMemberIds = {};
@@ -73,19 +94,25 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         m_wRoot = GetRootWidget();
         m_InputManager = GetGame().GetInputManager();
         
-        // Find panels
-        m_wNetworkPanel = m_wRoot.FindAnyWidget("NetworkPanel");
-        m_wDetailPanel = m_wRoot.FindAnyWidget("DetailPanel");
+        // Map panel (always visible)
         m_wMapPanel = m_wRoot.FindAnyWidget("MapPanel");
+        m_wMapCanvas = CanvasWidget.Cast(m_wRoot.FindAnyWidget("MapCanvas"));
         
-        // Network panel widgets
+        // Side panel structure
+        m_wSidePanel = m_wRoot.FindAnyWidget("SidePanel");
+        m_wPanelTitle = TextWidget.Cast(m_wRoot.FindAnyWidget("PanelTitle"));
+        m_wCloseButton = m_wRoot.FindAnyWidget("CloseButton");
+        m_wNetworkContent = m_wRoot.FindAnyWidget("NetworkContent");
+        m_wDetailContent = m_wRoot.FindAnyWidget("DetailContent");
+        
+        // Network content widgets
         m_wScrollContainer = m_wRoot.FindAnyWidget("ScrollLayout");
         m_wScrollLayout = ScrollLayoutWidget.Cast(m_wScrollContainer);
-        m_wNetworkGrid = m_wRoot.FindAnyWidget("NetworkGrid");
+        m_wMemberList = m_wRoot.FindAnyWidget("MemberList");
         m_wDeviceName = TextWidget.Cast(m_wRoot.FindAnyWidget("DeviceName"));
         m_wNetworkStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("NetworkStatus"));
         
-        // Detail panel widgets
+        // Detail content widgets
         m_wDetailPlayerName = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailPlayerName"));
         m_wDetailSignalStrength = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailSignalStrength"));
         m_wDetailNetworkIP = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailNetworkIP"));
@@ -94,170 +121,210 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         m_wViewFeedButton = m_wRoot.FindAnyWidget("ViewFeedButton");
         m_wBackButton = m_wRoot.FindAnyWidget("BackButton");
         
-        // Map panel widgets
-        m_wMapCanvas = CanvasWidget.Cast(m_wRoot.FindAnyWidget("MapCanvas"));
-        m_wMapBackButton = m_wRoot.FindAnyWidget("MapBackButton");
+        // Toolbar
+        m_wToolbar = m_wRoot.FindAnyWidget("Toolbar");
+        m_wMenuButton = m_wRoot.FindAnyWidget("MenuButton");
+        m_wNetworkButton = m_wRoot.FindAnyWidget("NetworkButton");
+        
+        // Zoom/compass
         m_wZoomInButton = m_wRoot.FindAnyWidget("ZoomInButton");
         m_wZoomOutButton = m_wRoot.FindAnyWidget("ZoomOutButton");
-        m_wGridReference = TextWidget.Cast(m_wRoot.FindAnyWidget("GridReference"));
-        m_wZoomLevel = TextWidget.Cast(m_wRoot.FindAnyWidget("ZoomLevel"));
+        m_wCompassButton = m_wRoot.FindAnyWidget("CompassButton");
+        
+        // Self marker
+        m_wSelfMarkerWidget = m_wRoot.FindAnyWidget("SelfMarkerWidget");
+		m_wGPSStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("GPSStatus"));
+		m_wCallsign = TextWidget.Cast(m_wRoot.FindAnyWidget("Callsign"));
+		m_wGrid = TextWidget.Cast(m_wRoot.FindAnyWidget("Grid"));
+		m_wAltitude = TextWidget.Cast(m_wRoot.FindAnyWidget("Altitude"));
+		m_wHeading = TextWidget.Cast(m_wRoot.FindAnyWidget("Heading"));
+		m_wSpeed = TextWidget.Cast(m_wRoot.FindAnyWidget("Speed"));
+		m_wError = TextWidget.Cast(m_wRoot.FindAnyWidget("Error"));
         
         // Initialize map view
-        if (m_wMapCanvas)
+        InitMapView();
+        
+        // Hook up button handlers
+        HookButtonHandlers();
+        
+        // Find active TDL device
+        FindActiveDevice();
+        
+        // Start with network panel open
+        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+        
+        // Initial data load
+        RefreshNetworkList();
+        UpdateSelfMarker();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void InitMapView()
+    {
+        if (!m_wMapCanvas)
         {
-            m_MapView = new AG0_TDLMapView();
-            if (!m_MapView.Init(m_wMapCanvas))
-            {
-                Print("[TDLMenu] Failed to initialize map view", LogLevel.WARNING);
-                m_MapView = null;
-            }
-        }
-        
-        // Setup map button handler (in network panel header)
-        m_wMapViewButton = m_wRoot.FindAnyWidget("MapViewButton");
-        if (m_wMapViewButton)
-        {
-            ButtonWidget btn = ButtonWidget.Cast(m_wMapViewButton);
-            if (btn)
-            {
-                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
-                handler.Init(this, "map");
-                btn.AddHandler(handler);
-            }
-        }
-        
-        // Setup map panel button handlers
-        SetupMapButtons();
-        
-        // Setup detail button handlers
-        SetupDetailButtons();
-        
-        // Find a TDL device
-        if (!FindTDLDevice())
-        {
-            UpdateEmptyState();
+            Print("[TDLMenu] MapCanvas not found", LogLevel.ERROR);
             return;
         }
         
-        // Start in network view
-        ShowNetworkView();
-        
-        // Initial populate
-        UpdateDeviceInfo();
-        UpdateMemberGrid();
-        
-        // Setup input handlers
-        m_InputManager.AddActionListener("MenuBack", EActionTrigger.DOWN, OnBack);
-        
-        if (!m_aMemberCards.IsEmpty())
-            SetFocusToCard(0);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    override void OnMenuClose()
-    {
-        if (m_InputManager)
+        m_MapView = new AG0_TDLMapView();
+        if (!m_MapView.Init(m_wMapCanvas))
         {
-            m_InputManager.RemoveActionListener("MenuBack", EActionTrigger.DOWN, OnBack);
+            Print("[TDLMenu] Failed to initialize map view", LogLevel.ERROR);
+            return;
         }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    override void OnMenuUpdate(float tDelta)
-    {
-        super.OnMenuUpdate(tDelta);
         
-        // Update map if visible
-        if (m_eCurrentView == ETDLMenuView.MAP && m_MapView)
-        {
-            UpdateMapView();
-            m_MapView.Draw();
-            UpdateMapUI();
-        }
+        // Center on player, default zoom
+        m_MapView.CenterOnPlayer();
+        m_MapView.SetZoom(0.15);
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void SetupDetailButtons()
+    protected void HookButtonHandlers()
     {
+        // Close button
+        if (m_wCloseButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wCloseButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnClosePanelClicked);
+        }
+        
+        // Back button (detail -> network)
         if (m_wBackButton)
         {
-            ButtonWidget btn = ButtonWidget.Cast(m_wBackButton);
-            if (btn)
-            {
-                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
-                handler.Init(this, "back");
-                btn.AddHandler(handler);
-            }
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wBackButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnBackClicked);
         }
         
+        // Network toggle button
+        if (m_wNetworkButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wNetworkButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnNetworkButtonClicked);
+        }
+        
+        // View feed button
         if (m_wViewFeedButton)
         {
-            ButtonWidget btn = ButtonWidget.Cast(m_wViewFeedButton);
-            if (btn)
-            {
-                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
-                handler.Init(this, "viewfeed");
-                btn.AddHandler(handler);
-            }
-        }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void SetupMapButtons()
-    {
-        if (m_wMapBackButton)
-        {
-            ButtonWidget btn = ButtonWidget.Cast(m_wMapBackButton);
-            if (btn)
-            {
-                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
-                handler.Init(this, "mapback");
-                btn.AddHandler(handler);
-            }
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wViewFeedButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnViewFeedClickedInternal);
         }
         
+        // Zoom controls
         if (m_wZoomInButton)
         {
-            ButtonWidget btn = ButtonWidget.Cast(m_wZoomInButton);
-            if (btn)
-            {
-                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
-                handler.Init(this, "zoomin");
-                btn.AddHandler(handler);
-            }
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wZoomInButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnZoomInClickedInternal);
         }
         
         if (m_wZoomOutButton)
         {
-            ButtonWidget btn = ButtonWidget.Cast(m_wZoomOutButton);
-            if (btn)
-            {
-                AG0_TDLDetailButtonHandler handler = new AG0_TDLDetailButtonHandler();
-                handler.Init(this, "zoomout");
-                btn.AddHandler(handler);
-            }
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wZoomOutButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnZoomOutClickedInternal);
+        }
+        
+        // Compass toggle
+        if (m_wCompassButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wCompassButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnCompassClickedInternal);
         }
     }
     
     //------------------------------------------------------------------------------------------------
-    // VIEW SWITCHING
+    // PANEL MANAGEMENT
     //------------------------------------------------------------------------------------------------
-    protected void ShowNetworkView()
+    protected void SetPanelContent(ETDLPanelContent content)
     {
-        m_eCurrentView = ETDLMenuView.NETWORK;
+        m_eActivePanel = content;
         
-        if (m_wNetworkPanel)
-            m_wNetworkPanel.SetVisible(true);
-        if (m_wDetailPanel)
-            m_wDetailPanel.SetVisible(false);
-        if (m_wMapPanel)
-            m_wMapPanel.SetVisible(false);
+        // Panel visibility
+        bool showPanel = (content != ETDLPanelContent.NONE);
+        if (m_wSidePanel)
+            m_wSidePanel.SetVisible(showPanel);
         
-        if (!m_aMemberCards.IsEmpty())
+        if (!showPanel)
+            return;
+        
+        // Content visibility within panel
+        if (m_wNetworkContent)
+            m_wNetworkContent.SetVisible(content == ETDLPanelContent.NETWORK_LIST);
+        
+        if (m_wDetailContent)
+            m_wDetailContent.SetVisible(content == ETDLPanelContent.MEMBER_DETAIL);
+        
+        // Update panel title
+        if (m_wPanelTitle)
         {
-            int idx = Math.Max(0, m_iFocusedCardIndex);
-            SetFocusToCard(idx);
+            switch (content)
+            {
+                case ETDLPanelContent.NETWORK_LIST:
+                    m_wPanelTitle.SetText("CONTACTS");
+                    break;
+                case ETDLPanelContent.MEMBER_DETAIL:
+                    m_wPanelTitle.SetText("CONTACT DETAILS");
+                    break;
+                case ETDLPanelContent.SETTINGS:
+                    m_wPanelTitle.SetText("SETTINGS");
+                    break;
+            }
         }
+        
+        // Set focus appropriately
+        SetPanelFocus(content);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void SetPanelFocus(ETDLPanelContent content)
+    {
+        switch (content)
+        {
+            case ETDLPanelContent.NETWORK_LIST:
+                if (!m_aMemberCards.IsEmpty())
+                    SetFocusToCard(Math.Max(0, m_iFocusedCardIndex));
+                break;
+                
+            case ETDLPanelContent.MEMBER_DETAIL:
+                if (m_wBackButton)
+                    GetGame().GetWorkspace().SetFocusedWidget(m_wBackButton);
+                break;
+                
+            case ETDLPanelContent.NONE:
+                // Focus could go to a map control or toolbar button
+                if (m_wNetworkButton)
+                    GetGame().GetWorkspace().SetFocusedWidget(m_wNetworkButton);
+                break;
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void ToggleSidePanel()
+    {
+        if (m_eActivePanel == ETDLPanelContent.NONE)
+            SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+        else
+            SetPanelContent(ETDLPanelContent.NONE);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -265,121 +332,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     {
         m_SelectedMember = member;
         m_SelectedDeviceId = deviceId;
-        m_eCurrentView = ETDLMenuView.MEMBER_DETAIL;
-        
-        if (m_wNetworkPanel)
-            m_wNetworkPanel.SetVisible(false);
-        if (m_wDetailPanel)
-            m_wDetailPanel.SetVisible(true);
-        if (m_wMapPanel)
-            m_wMapPanel.SetVisible(false);
         
         PopulateDetailView();
-        
-        if (m_wBackButton)
-            GetGame().GetWorkspace().SetFocusedWidget(m_wBackButton);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void ShowMapView()
-    {
-        m_eCurrentView = ETDLMenuView.MAP;
-        
-        if (m_wNetworkPanel)
-            m_wNetworkPanel.SetVisible(false);
-        if (m_wDetailPanel)
-            m_wDetailPanel.SetVisible(false);
-        if (m_wMapPanel)
-            m_wMapPanel.SetVisible(true);
-        
-        // Center on player when opening
-        if (m_MapView)
-        {
-            m_MapView.CenterOnPlayer();
-            m_MapView.SetZoom(0.3);
-        }
-        
-        if (m_wMapBackButton)
-            GetGame().GetWorkspace().SetFocusedWidget(m_wMapBackButton);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void UpdateMapView()
-    {
-        if (!m_MapView || !m_ActiveDevice)
-            return;
-        
-        m_MapView.ClearMarkers();
-        
-        // Add self marker
-        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-    	if (player)
-		{
-		    vector playerPos = player.GetOrigin();
-		    float playerHeading = GetPlayerHeading(player);
-		    m_MapView.AddSelfMarker(playerPos, playerHeading);
-		    m_MapView.SetTrackUp(playerHeading); // <-- add this
-		}
-        
-        // Add network member markers
-        if (m_ActiveDevice.HasNetworkMemberData())
-        {
-            AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
-            if (membersData)
-            {
-                int count = membersData.Count();
-                for (int i = 0; i < count; i++)
-                {
-                    AG0_TDLNetworkMember member = membersData.Get(i);
-                    if (!member)
-                        continue;
-                    
-                    // Skip self - compare via RplComponent
-                    RplComponent deviceRpl = RplComponent.Cast(m_ActiveDevice.GetOwner().FindComponent(RplComponent));
-                    if (deviceRpl && member.GetRplId() == deviceRpl.Id())
-                        continue;
-                    
-                    vector memberPos = member.GetPosition();
-                    string name = member.GetPlayerName();
-                    float signal = member.GetSignalStrength();
-                    
-                    m_MapView.AddMemberMarker(memberPos, name, signal);
-                }
-            }
-        }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void UpdateMapUI()
-    {
-        if (!m_MapView)
-            return;
-        
-        // Update grid reference
-        if (m_wGridReference)
-        {
-            vector center = m_MapView.GetCenter();
-            string gridRef = SCR_MapEntity.GetGridLabel(center, 2, 4, " ");
-            m_wGridReference.SetTextFormat("GRID: %1", gridRef);
-        }
-        
-        // Update zoom level display
-        if (m_wZoomLevel)
-        {
-            float zoom = m_MapView.GetZoom();
-            int zoomPct = Math.Round((1.0 - zoom) * 100);
-            m_wZoomLevel.SetTextFormat("ZOOM: %1%%", zoomPct);
-        }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected float GetPlayerHeading(IEntity player)
-    {
-        if (!player)
-            return 0;
-        
-        vector angles = player.GetAngles();
-        return angles[1];
+        SetPanelContent(ETDLPanelContent.MEMBER_DETAIL);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -392,339 +347,476 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             m_wDetailPlayerName.SetText(m_SelectedMember.GetPlayerName());
         
         if (m_wDetailSignalStrength)
-            m_wDetailSignalStrength.SetTextFormat("Signal: %1%%", Math.Round(m_SelectedMember.GetSignalStrength()));
+            m_wDetailSignalStrength.SetTextFormat("%1 dBm", m_SelectedMember.GetSignalStrength().ToString());
         
         if (m_wDetailNetworkIP)
-            m_wDetailNetworkIP.SetTextFormat("IP: %1", m_SelectedMember.GetNetworkIP());
+            m_wDetailNetworkIP.SetText("192.168.0." + m_SelectedMember.GetNetworkIP().ToString());
         
-        if (m_wDetailDistance && m_ActiveDevice)
+        // Calculate distance
+        if (m_wDetailDistance)
         {
-            float dist = m_ActiveDevice.GetDistanceToMember(m_SelectedDeviceId);
-            m_wDetailDistance.SetTextFormat("Distance: %1m", Math.Round(dist));
+            IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+            if (player)
+            {
+                float dist = vector.Distance(player.GetOrigin(), m_SelectedMember.GetPosition());
+                m_wDetailDistance.SetTextFormat("%1 m", Math.Round(dist).ToString());
+            }
         }
         
+        // Capabilities
         if (m_wDetailCapabilities)
-            m_wDetailCapabilities.SetText(BuildCapabilitiesString(m_SelectedMember.GetCapabilities()));
+        {
+            string caps = BuildCapabilitiesString(m_SelectedMember.GetCapabilities());
+            m_wDetailCapabilities.SetText(caps);
+        }
         
+        // Show/hide video button based on capability
         if (m_wViewFeedButton)
         {
-            bool canView = CanViewFeed();
-            m_wViewFeedButton.SetVisible(canView);
-            m_wViewFeedButton.SetEnabled(canView);
+            bool hasVideo = (m_SelectedMember.GetCapabilities() & AG0_ETDLDeviceCapability.VIDEO_SOURCE) != 0;
+            m_wViewFeedButton.SetVisible(hasVideo);
         }
     }
     
     //------------------------------------------------------------------------------------------------
-    protected string BuildCapabilitiesString(int capFlags)
+    protected string BuildCapabilitiesString(int caps)
     {
-        string caps = "";
-        
-        if (capFlags & AG0_ETDLDeviceCapability.GPS_PROVIDER)
-            caps += "[GPS] ";
-        if (capFlags & AG0_ETDLDeviceCapability.VIDEO_SOURCE)
-            caps += "[CAM] ";
-        if (capFlags & AG0_ETDLDeviceCapability.DISPLAY_OUTPUT)
-            caps += "[DISP] ";
-        if (capFlags & AG0_ETDLDeviceCapability.INFORMATION)
-            caps += "[INFO] ";
-        
-        return caps;
+        string result = "";
+        if ((caps & AG0_ETDLDeviceCapability.GPS_PROVIDER) != 0) result += "[GPS] ";
+        if ((caps & AG0_ETDLDeviceCapability.VIDEO_SOURCE) != 0) result += "[CAM] ";
+        if ((caps & AG0_ETDLDeviceCapability.DISPLAY_OUTPUT) != 0) result += "[DISP] ";
+        if ((caps & AG0_ETDLDeviceCapability.INFORMATION) != 0) result += "[INFO] ";
+        return result;
     }
     
     //------------------------------------------------------------------------------------------------
-    protected bool CanViewFeed()
+    // BUTTON HANDLERS (internal - protected)
+    //------------------------------------------------------------------------------------------------
+    protected void OnClosePanelClicked()
     {
-        if (!m_SelectedMember)
-            return false;
-        
-        if (!(m_SelectedMember.GetCapabilities() & AG0_ETDLDeviceCapability.VIDEO_SOURCE))
-            return false;
-        
-        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (!pc)
-            return false;
-        
-        return pc.IsSourceBroadcasting(m_SelectedDeviceId);
+        SetPanelContent(ETDLPanelContent.NONE);
     }
     
     //------------------------------------------------------------------------------------------------
-    // PUBLIC BUTTON HANDLERS (called by AG0_TDLDetailButtonHandler)
-    //------------------------------------------------------------------------------------------------
-    void OnViewFeedClicked()
+    protected void OnBackClicked()
     {
-        Print("TDL_MENU: View Feed clicked", LogLevel.DEBUG);
-        
-        RplComponent rpl = RplComponent.Cast(Replication.FindItem(m_SelectedDeviceId));
-        if (!rpl)
-        {
-            Print("TDL_MENU: Could not resolve RplId", LogLevel.WARNING);
-            return;
-        }
-        
-        AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
-            rpl.GetEntity().FindComponent(AG0_TDLDeviceComponent));
-        
-        if (!device)
-        {
-            Print("TDL_MENU: Could not find TDL device", LogLevel.WARNING);
-            return;
-        }
-        
-        AG0_PlayerCameraOverrideComponent camOverride = GetPlayerCameraOverride();
-        if (!camOverride)
-        {
-            Print("TDL_MENU: No camera override component", LogLevel.WARNING);
-            return;
-        }
-        
-        camOverride.SetViewedDevice(device);
-        Close();
+        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
     }
     
     //------------------------------------------------------------------------------------------------
-    void OnDetailBackClicked()
+    protected void OnNetworkButtonClicked()
     {
-        ShowNetworkView();
+        ToggleSidePanel();
     }
     
     //------------------------------------------------------------------------------------------------
-    void OnMapViewClicked()
+    protected void OnViewFeedClickedInternal()
     {
-        ShowMapView();
+        if (m_SelectedMember)
+            Print("[TDLMenu] View feed clicked for " + m_SelectedMember.GetPlayerName(), LogLevel.NORMAL);
     }
     
     //------------------------------------------------------------------------------------------------
-    void OnMapBackClicked()
-    {
-        ShowNetworkView();
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    void OnZoomInClicked()
+    protected void OnZoomInClickedInternal()
     {
         if (m_MapView)
             m_MapView.ZoomIn(0.05);
     }
     
     //------------------------------------------------------------------------------------------------
-    void OnZoomOutClicked()
+    protected void OnZoomOutClickedInternal()
     {
         if (m_MapView)
             m_MapView.ZoomOut(0.05);
     }
     
     //------------------------------------------------------------------------------------------------
-    protected AG0_PlayerCameraOverrideComponent GetPlayerCameraOverride()
+    protected void OnCompassClickedInternal()
     {
-        CameraManager camMgr = GetGame().GetCameraManager();
-        if (!camMgr)
-            return null;
-        
-        CameraBase camera = camMgr.CurrentCamera();
-        if (!camera)
-            return null;
-        
-        return AG0_PlayerCameraOverrideComponent.Cast(
-            camera.FindComponent(AG0_PlayerCameraOverrideComponent));
+        m_bTrackUp = !m_bTrackUp;
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void OnBack()
+    // PUBLIC BUTTON HANDLERS (for external callers like DetailButtonHandler)
+    //------------------------------------------------------------------------------------------------
+    void OnDetailBackClicked()
     {
-        if (m_eCurrentView == ETDLMenuView.MEMBER_DETAIL)
-        {
-            ShowNetworkView();
-        }
-        else if (m_eCurrentView == ETDLMenuView.MAP)
-        {
-            ShowNetworkView();
-        }
-        else
-        {
-            Close();
-        }
+        OnBackClicked();
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void OnClose()
+    void OnViewFeedClicked()
     {
-        Close();
+        OnViewFeedClickedInternal();
     }
     
     //------------------------------------------------------------------------------------------------
-    // DEVICE AND DATA MANAGEMENT
-    //------------------------------------------------------------------------------------------------
-    protected bool FindTDLDevice()
+    void OnZoomInClicked()
     {
-        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (!pc)
-            return false;
+        OnZoomInClickedInternal();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    void OnZoomOutClicked()
+    {
+        OnZoomOutClickedInternal();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // UPDATE LOOP
+    //------------------------------------------------------------------------------------------------
+    override void OnMenuUpdate(float tDelta)
+    {
+        super.OnMenuUpdate(tDelta);
         
-        array<AG0_TDLDeviceComponent> devices = pc.GetPlayerTDLDevices();
+        // Always update map (it's always visible)
+        UpdateMapView(tDelta);
         
-        foreach (AG0_TDLDeviceComponent device : devices)
+        // Always update self marker
+        UpdateSelfMarker();
+        
+        // Periodic network refresh
+        m_fUpdateTimer += tDelta;
+        if (m_fUpdateTimer >= UPDATE_INTERVAL)
         {
-            if (device.IsPowered() && 
-                device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
-                device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
-            {
-                m_ActiveDevice = device;
-                return true;
-            }
+            m_fUpdateTimer = 0;
+            
+            if (m_eActivePanel == ETDLPanelContent.NETWORK_LIST)
+                RefreshNetworkList();
+            else if (m_eActivePanel == ETDLPanelContent.MEMBER_DETAIL)
+                PopulateDetailView();  // Refresh distance, signal, etc.
         }
         
-        return false;
+        // Handle input
+        HandleInput();
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void UpdateDeviceInfo()
+    protected void UpdateMapView(float tDelta)
     {
-        if (!m_ActiveDevice)
+        if (!m_MapView || !m_ActiveDevice)
             return;
         
-        if (m_wDeviceName)
+        // Update rotation based on mode
+        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+        if (player)
         {
-            string deviceName = "TDL Device";
-            if (m_ActiveDevice.GetOwner())
-                deviceName = m_ActiveDevice.GetOwner().GetName();
-            m_wDeviceName.SetText(deviceName);
-        }
-        
-        if (m_wNetworkStatus)
-        {
-            if (m_ActiveDevice.IsInNetwork())
+            // Always center on player
+            m_MapView.CenterOnPlayer();
+            
+            if (m_bTrackUp)
             {
-                int networkId = m_ActiveDevice.GetCurrentNetworkID();
-                int memberCount = m_ActiveDevice.GetConnectedMembers().Count();
-                m_wNetworkStatus.SetTextFormat("Network %1 - %2 members", networkId, memberCount);
+                // Track-up: rotate map so player heading points up
+                vector angles = player.GetYawPitchRoll();
+                m_MapView.SetTrackUp(angles[0]);
             }
             else
             {
-                m_wNetworkStatus.SetText("Not connected");
+                // North-up: no rotation
+                m_MapView.SetRotation(0);
             }
         }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void UpdateEmptyState()
-    {
-        if (m_wDeviceName)
-            m_wDeviceName.SetText("No TDL Device");
-            
-        if (m_wNetworkStatus)
-            m_wNetworkStatus.SetText("No compatible device found");
-            
-        if (m_wNetworkGrid)
-        {
-            Widget child = m_wNetworkGrid.GetChildren();
-            while (child)
-            {
-                Widget next = child.GetSibling();
-                child.RemoveFromHierarchy();
-                child = next;
-            }
-        }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    // MEMBER GRID
-    //------------------------------------------------------------------------------------------------
-    protected void UpdateMemberGrid()
-    {
-        if (!m_wNetworkGrid || !m_ActiveDevice) return;
         
-        Widget child = m_wNetworkGrid.GetChildren();
-        while (child)
+        // Clear and rebuild markers
+        m_MapView.ClearMarkers();
+        
+        // Add self marker
+        if (player)
         {
-            Widget next = child.GetSibling();
-            child.RemoveFromHierarchy();
-            child = next;
+            vector playerPos = player.GetOrigin();
+            float playerHeading = player.GetYawPitchRoll()[0];
+            m_MapView.AddSelfMarker(playerPos, playerHeading);
+        }
+        
+        // Add network member markers
+        array<ref AG0_TDLNetworkMember> members = {};
+		AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+		if (membersData)
+		{
+		    map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
+		    foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
+		    {
+		        members.Insert(member);
+		    }
+		}
+        foreach (AG0_TDLNetworkMember member : members)
+        {
+            m_MapView.AddMemberMarker(member.GetPosition(), member.GetPlayerName(), member.GetSignalStrength());
+        }
+        
+        // Draw
+        m_MapView.Draw();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void UpdateSelfMarker()
+	{
+	    IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+	    if (!player)
+	        return;
+	    
+	    vector pos = player.GetOrigin();
+	    vector angles = player.GetYawPitchRoll();
+	    
+	    // GPS Status
+	    if (m_wGPSStatus)
+	        m_wGPSStatus.SetText("GPS: 3D FIX");  // TODO: actual GPS state from device
+	    
+	    // Callsign
+	    if (m_wCallsign)
+	    {
+	        string callsign = "UNKNOWN";
+	        if (m_ActiveDevice)
+	            callsign = m_ActiveDevice.GetDisplayName();
+	        m_wCallsign.SetText(callsign);
+	    }
+	    
+	    // Grid coordinates
+	    if (m_wGrid)
+	        m_wGrid.SetTextFormat("%1, %2", Math.Round(pos[0]).ToString(), Math.Round(pos[2]).ToString());
+	    
+	    // Altitude (Y axis in Arma)
+	    if (m_wAltitude)
+	        m_wAltitude.SetTextFormat("%1 MSL", Math.Round(pos[1]).ToString());
+	    
+	    // Heading
+	    if (m_wHeading)
+	    {
+	        float heading = angles[0];
+	        if (heading < 0) heading += 360;
+	        m_wHeading.SetTextFormat("%1°M", Math.Round(heading).ToString());
+	    }
+	    
+	    // Speed - need velocity from physics or character controller
+	    if (m_wSpeed)
+	    {
+	        Physics phys = player.GetPhysics();
+	        if (phys)
+	        {
+	            float speed = phys.GetVelocity().Length() * 2.237;  // m/s to MPH
+	            m_wSpeed.SetTextFormat("%1 MPH", Math.Round(speed).ToString());
+	        }
+	        else
+	        {
+	            m_wSpeed.SetText("-- MPH");
+	        }
+	    }
+	    
+	    // Error/accuracy - placeholder since we don't have real GPS error
+	    if (m_wError)
+	        m_wError.SetText("+/- 5m");  // TODO: actual accuracy from device
+	}
+    
+    //------------------------------------------------------------------------------------------------
+    protected void HandleInput()
+    {
+        // ESC or B button behavior depends on panel state
+        if (m_InputManager.GetActionTriggered("MenuBack"))
+        {
+            switch (m_eActivePanel)
+            {
+                case ETDLPanelContent.MEMBER_DETAIL:
+                    SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+                    break;
+                    
+                case ETDLPanelContent.NETWORK_LIST:
+                    SetPanelContent(ETDLPanelContent.NONE);
+                    break;
+                    
+                case ETDLPanelContent.NONE:
+                    Close();
+                    break;
+            }
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // DEVICE DISCOVERY
+    //------------------------------------------------------------------------------------------------
+    protected void FindActiveDevice()
+    {
+        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+        if (!player)
+            return;
+        
+        // Check held gadget first
+        SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
+            player.FindComponent(SCR_GadgetManagerComponent)
+        );
+        if (gadgetMgr)
+        {
+            IEntity heldGadget = gadgetMgr.GetHeldGadget();
+            if (heldGadget)
+            {
+                AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+                    heldGadget.FindComponent(AG0_TDLDeviceComponent)
+                );
+                if (device && device.CanAccessNetwork() && 
+                    device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
+                    device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
+                {
+                    m_ActiveDevice = device;
+                    if (m_wDeviceName)
+                        m_wDeviceName.SetText(device.GetDisplayName());
+                    return;
+                }
+            }
+        }
+        
+        // Check inventory
+        InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
+            player.FindComponent(InventoryStorageManagerComponent)
+        );
+        if (storage)
+        {
+            array<IEntity> items = {};
+            storage.GetItems(items);
+            
+            foreach (IEntity item : items)
+            {
+                AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+                    item.FindComponent(AG0_TDLDeviceComponent)
+                );
+                if (device && device.CanAccessNetwork() &&
+                    device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
+                    device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
+                {
+                    m_ActiveDevice = device;
+                    if (m_wDeviceName)
+                        m_wDeviceName.SetText(device.GetDisplayName());
+                    return;
+                }
+            }
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // NETWORK LIST
+    //------------------------------------------------------------------------------------------------
+    protected void RefreshNetworkList()
+    {
+        if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+            return;
+        
+        array<ref AG0_TDLNetworkMember> members = {};
+		AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+		if (membersData)
+		{
+		    map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
+		    foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
+		    {
+		        members.Insert(member);
+		    }
+		}
+        
+        // Check if rebuild needed
+        bool needsRebuild = false;
+        if (members.Count() != m_aCachedMemberIds.Count())
+        {
+            needsRebuild = true;
+        }
+        else
+        {
+            foreach (int i, AG0_TDLNetworkMember member : members)
+            {
+                if (i >= m_aCachedMemberIds.Count() || m_aCachedMemberIds[i] != member.GetRplId())
+                {
+                    needsRebuild = true;
+                    break;
+                }
+            }
+        }
+        
+        if (needsRebuild)
+            RebuildMemberCards(members);
+        else
+            UpdateMemberCards(members);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void RebuildMemberCards(array<ref AG0_TDLNetworkMember> members)
+    {
+        // Clear existing
+        foreach (Widget card : m_aMemberCards)
+        {
+            if (card)
+                card.RemoveFromHierarchy();
         }
         m_aMemberCards.Clear();
+        m_aCachedMemberIds.Clear();
         
-        if (!m_ActiveDevice.HasNetworkMemberData()) return;
+        if (!m_wMemberList)
+            return;
         
-        AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
-        if (!membersData) return;
-        
-        int count = membersData.Count();
-        for (int i = 0; i < count; i++)
+        // Create cards
+        foreach (int index, AG0_TDLNetworkMember member : members)
         {
-            AG0_TDLNetworkMember member = membersData.Get(i);
-            if (!member) continue;
-            
-            CreateMemberCard(member, i);
+            CreateMemberCard(member, index);
+            m_aCachedMemberIds.Insert(member.GetRplId());
         }
         
-        if (!m_aMemberCards.IsEmpty() && m_iFocusedCardIndex >= 0)
-        {
-            int newIndex = Math.Min(m_iFocusedCardIndex, m_aMemberCards.Count() - 1);
-            SetFocusToCard(newIndex);
-        }
+        // Reset focus
+        if (!m_aMemberCards.IsEmpty())
+            SetFocusToCard(0);
     }
     
     //------------------------------------------------------------------------------------------------
     protected void CreateMemberCard(AG0_TDLNetworkMember member, int index)
+	{
+	    Widget card = GetGame().GetWorkspace().CreateWidgets(MEMBER_CARD_LAYOUT, m_wMemberList);
+	    if (!card) return;
+	    
+	    ButtonWidget button = ButtonWidget.Cast(card);
+	    if (button)
+	    {
+	        AG0_TDLMemberCardHandler handler = new AG0_TDLMemberCardHandler();
+	        handler.Init(this, member.GetRplId(), member);
+	        button.AddHandler(handler);
+	    }
+	    
+	    UpdateCardWidgets(card, member);
+	    m_aMemberCards.Insert(card);
+	}
+    
+    //------------------------------------------------------------------------------------------------
+    protected void UpdateMemberCards(array<ref AG0_TDLNetworkMember> members)
     {
-        Widget card = GetGame().GetWorkspace().CreateWidgets(MEMBER_CARD_LAYOUT, m_wNetworkGrid);
-        if (!card) return;
-        
-        int col = index % 2;
-        int row = index / 2;
-        GridSlot.SetColumn(card, col);
-        GridSlot.SetRow(card, row);
-        
-        GridLayoutWidget grid = GridLayoutWidget.Cast(m_wNetworkGrid);
-        if (grid)
+        foreach (int i, Widget card : m_aMemberCards)
         {
-            grid.SetRowFillWeight(row, 1);
-            grid.SetColumnFillWeight(col, 1);
+            if (i >= members.Count())
+                break;
+            
+            UpdateCardWidgets(card, members[i]);
         }
-        
-        ButtonWidget button = ButtonWidget.Cast(card);
-        if (button)
-        {
-            AG0_TDLMemberCardHandler handler = new AG0_TDLMemberCardHandler();
-            handler.Init(this, member.GetRplId(), member);
-            button.AddHandler(handler);
-        }
-        
-        UpdateCardWidgets(card, member);
-        
-        m_aMemberCards.Insert(card);
     }
     
     //------------------------------------------------------------------------------------------------
     protected void UpdateCardWidgets(Widget card, AG0_TDLNetworkMember member)
-    {
-        if (!card || !member) return;
-        
-        TextWidget nameText = TextWidget.Cast(card.FindAnyWidget("PlayerName"));
-        if (nameText)
-            nameText.SetText(member.GetPlayerName());
-        
-        TextWidget signalText = TextWidget.Cast(card.FindAnyWidget("SignalStrength"));
-        if (signalText)
-            signalText.SetTextFormat("%1%%", Math.Round(member.GetSignalStrength()));
-        
-        TextWidget ipText = TextWidget.Cast(card.FindAnyWidget("NetworkIP"));
-        if (ipText)
-            ipText.SetTextFormat("IP: %1", member.GetNetworkIP());
-        
-        TextWidget distText = TextWidget.Cast(card.FindAnyWidget("Distance"));
-        if (distText && m_ActiveDevice)
-        {
-            float dist = m_ActiveDevice.GetDistanceToMember(member.GetRplId());
-            distText.SetTextFormat("%1m", Math.Round(dist));
-        }
-        
-        TextWidget capsText = TextWidget.Cast(card.FindAnyWidget("Capabilities"));
-        if (capsText)
-            capsText.SetText(BuildCapabilitiesString(member.GetCapabilities()));
-    }
+	{
+	    if (!card || !member) return;
+	    
+	    TextWidget nameText = TextWidget.Cast(card.FindAnyWidget("PlayerName"));
+	    if (nameText)
+	        nameText.SetText(member.GetPlayerName());
+	    
+	    TextWidget ipText = TextWidget.Cast(card.FindAnyWidget("NetworkIP"));
+	    if (ipText)
+	        ipText.SetText("192.168.0." + member.GetNetworkIP().ToString());
+	    
+	    // Status dot color based on signal strength
+	    ImageWidget statusDot = ImageWidget.Cast(card.FindAnyWidget("StatusDot"));
+	    if (statusDot)
+	    {
+	        float signal = member.GetSignalStrength();
+	        if (signal >= 60)
+	            statusDot.SetColor(Color.FromRGBA(0, 200, 0, 255));      // Green - good
+	        else if (signal >= 30)
+	            statusDot.SetColor(Color.FromRGBA(200, 200, 0, 255));    // Yellow - weak
+	        else
+	            statusDot.SetColor(Color.FromRGBA(200, 0, 0, 255));      // Red - poor
+	    }
+	}
     
-    //------------------------------------------------------------------------------------------------
-    // FOCUS MANAGEMENT
     //------------------------------------------------------------------------------------------------
     protected void SetFocusToCard(int index)
     {
@@ -742,42 +834,47 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    // CALLBACKS FROM MEMBER CARDS
+    //------------------------------------------------------------------------------------------------
     void OnMemberCardFocused(RplId memberId)
-    {
-        for (int i = 0; i < m_aMemberCards.Count(); i++)
-        {
-            Widget card = m_aMemberCards[i];
-            AG0_TDLMemberCardHandler handler = AG0_TDLMemberCardHandler.Cast(
-                ButtonWidget.Cast(card).FindHandler(AG0_TDLMemberCardHandler)
-            );
-            
-            if (handler && handler.GetMemberRplId() == memberId)
-            {
-                m_iFocusedCardIndex = i;
-                break;
-            }
-        }
-        
-        if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
-            return;
-        
-        AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMembersData().GetByRplId(memberId);
-        if (member)
-            PrintFormat("TDL Menu: Focused on member %1", member.GetPlayerName());
-    }
+	{
+	    for (int i = 0; i < m_aMemberCards.Count(); i++)
+	    {
+	        Widget card = m_aMemberCards[i];
+	        AG0_TDLMemberCardHandler handler = AG0_TDLMemberCardHandler.Cast(
+	            ButtonWidget.Cast(card).FindHandler(AG0_TDLMemberCardHandler)
+	        );
+	        
+	        if (handler && handler.GetMemberRplId() == memberId)
+	        {
+	            m_iFocusedCardIndex = i;
+	            break;
+	        }
+	    }
+	}
     
     //------------------------------------------------------------------------------------------------
     void OnMemberCardClicked(RplId memberId, int button)
+	{
+	    if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+	        return;
+	    
+	    AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMember(memberId);
+	    if (!member)
+	        return;
+	    
+	    PrintFormat("TDL Menu: Selected member %1", member.GetPlayerName());
+	    ShowDetailView(member, memberId);
+	}
+
+    
+    //------------------------------------------------------------------------------------------------
+    override void OnMenuClose()
     {
-        if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
-            return;
+        m_MapView = null;
+        m_aMemberCards.Clear();
+        m_aCachedMemberIds.Clear();
         
-        AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMembersData().GetByRplId(memberId);
-        if (!member)
-            return;
-        
-        PrintFormat("TDL Menu: Selected member %1", member.GetPlayerName());
-        
-        ShowDetailView(member, memberId);
+        super.OnMenuClose();
     }
 }

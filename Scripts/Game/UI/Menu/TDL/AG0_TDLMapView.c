@@ -282,31 +282,30 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     // World position to screen position (canvas pixel coordinates)
     void WorldToScreen(vector worldPos, out float screenX, out float screenY)
-    {
-        // Offset from view center
-        float offsetX = worldPos[0] - m_vCenterWorld[0];
-        float offsetZ = worldPos[2] - m_vCenterWorld[2];
-        
-        // Apply rotation
-        float rotRad = m_fRotation * Math.DEG2RAD;
-        float cosR = Math.Cos(rotRad);
-        float sinR = Math.Sin(rotRad);
-        
-        float rotatedX = offsetX * cosR - offsetZ * sinR;
-        float rotatedZ = offsetX * sinR + offsetZ * cosR;
-        
-        // Use aspect-corrected view size (same as DrawMapTexture)
-        float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
-        float viewWorldSizeX = m_fMapSizeX * m_fZoom;
-        
-        // Scale to screen based on zoom and view width
-        float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
-        
-        // Convert to screen coords (center of canvas is center of view)
-        screenX = (m_fCanvasWidth * 0.5) + (rotatedX * pixelsPerWorldUnit);
-        // Flip Y for screen coordinates
-        screenY = (m_fCanvasHeight * 0.5) - (rotatedZ * pixelsPerWorldUnit);
-    }
+	{
+	    // Offset from view center
+	    float offsetX = worldPos[0] - m_vCenterWorld[0];
+	    float offsetZ = worldPos[2] - m_vCenterWorld[2];
+	    
+	    // Apply rotation (negated to match texture rotation direction)
+	    float rotRad = -m_fRotation * Math.DEG2RAD;
+	    float cosR = Math.Cos(rotRad);
+	    float sinR = Math.Sin(rotRad);
+	    
+	    float rotatedX = offsetX * cosR - offsetZ * sinR;
+	    float rotatedZ = offsetX * sinR + offsetZ * cosR;
+	    
+	    // Use aspect-corrected view size (same as DrawMapTexture)
+	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+	    
+	    // Scale to screen based on zoom and view width
+	    float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
+	    
+	    // Convert to screen coords (center of canvas is center of view)
+	    screenX = (m_fCanvasWidth * 0.5) + (rotatedX * pixelsPerWorldUnit);
+	    // Flip Y for screen coordinates
+	    screenY = (m_fCanvasHeight * 0.5) - (rotatedZ * pixelsPerWorldUnit);
+	}
     
     //------------------------------------------------------------------------------------------------
     // Screen position to world position
@@ -531,6 +530,7 @@ class AG0_TDLMapView
 	    ImageDrawCommand cmd = new ImageDrawCommand();
 	    cmd.m_pTexture = m_pMapTexture;
 	    
+	    // Calculate view size in world units at current zoom
 	    float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
 	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
 	    float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
@@ -538,12 +538,13 @@ class AG0_TDLMapView
 	    // Diagonal of the view rectangle (covers any rotation)
 	    float diagonal = Math.Sqrt(viewWorldSizeX * viewWorldSizeX + viewWorldSizeZ * viewWorldSizeZ);
 	    
-	    // Sample square region sized to diagonal
+	    // Sample square region sized to diagonal, centered on view center
 	    float viewMinX = m_vCenterWorld[0] - diagonal * 0.5;
 	    float viewMaxX = m_vCenterWorld[0] + diagonal * 0.5;
 	    float viewMinZ = m_vCenterWorld[2] - diagonal * 0.5;
 	    float viewMaxZ = m_vCenterWorld[2] + diagonal * 0.5;
 	    
+	    // Convert to UVs
 	    float u0, v0, u1, v1;
 	    WorldToUV(Vector(viewMinX, 0, viewMaxZ), u0, v0);
 	    WorldToUV(Vector(viewMaxX, 0, viewMinZ), u1, v1);
@@ -553,16 +554,27 @@ class AG0_TDLMapView
 	    cmd.m_fUV[2] = u1;
 	    cmd.m_fUV[3] = v1;
 	    
-	    // Draw size must use same scale factor as UV sampling
+	    // Draw size matches the diagonal in screen space
 	    float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
 	    float drawSize = diagonal * pixelsPerWorldUnit;
+	    float halfDraw = drawSize * 0.5;
 	    
-	    float offsetX = (m_fCanvasWidth - drawSize) * 0.5;
-	    float offsetY = (m_fCanvasHeight - drawSize) * 0.5;
+	    // Pivot at origin - we'll manually compute offset so rotated center lands at canvas center
+	    float rotRad = m_fRotation * Math.DEG2RAD;
+	    float cosR = Math.Cos(rotRad);
+	    float sinR = Math.Sin(rotRad);
+	    
+	    // Image center is at (halfDraw, halfDraw) from pivot
+	    // After rotation around pivot (0,0), center moves to:
+	    //   x' = halfDraw * cos - halfDraw * sin
+	    //   y' = halfDraw * sin + halfDraw * cos
+	    // We want position + rotatedCenter = canvasCenter
+	    float offsetX = (m_fCanvasWidth * 0.5) - halfDraw * (cosR - sinR);
+	    float offsetY = (m_fCanvasHeight * 0.5) - halfDraw * (sinR + cosR);
 	    
 	    cmd.m_Position = Vector(offsetX, offsetY, 0);
 	    cmd.m_Size = Vector(drawSize, drawSize, 0);
-	    cmd.m_Pivot = Vector(drawSize * 0.5, drawSize * 0.5, 0);
+	    cmd.m_Pivot = Vector(0, 0, 0);
 	    cmd.m_fRotation = m_fRotation;
 	    cmd.m_iColor = 0xFFFFFFFF;
 	    cmd.m_iFlags = WidgetFlags.STRETCH;
