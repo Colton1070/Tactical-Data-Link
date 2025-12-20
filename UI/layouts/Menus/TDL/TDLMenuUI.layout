@@ -151,12 +151,13 @@ FrameWidgetClass {
       ScrollLayoutWidgetClass "{672744B6FAAB2B3F}" {
        Name "ScrollLayout"
        Slot FrameWidgetSlot "{672744B6FAAB2B1B}" {
+        Anchor 0 0 1 0
         PositionX 22.348
         OffsetLeft 22.348
         PositionY 102.954
         OffsetTop 102.954
-        SizeX 553.119
-        OffsetRight -575.467
+        SizeX -36.44
+        OffsetRight 14.092
         SizeY 849.019
         OffsetBottom -951.973
        }
@@ -463,6 +464,64 @@ FrameWidgetClass {
          {
           ImageWidgetClass "{67275C19E8581FF7}" {
            Name "CompassImage"
+           Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+            Padding 5 5 5 5
+           }
+           Texture "{6943A873BDA3844C}UI/Textures/Icons/tdl_compass_circle.edds"
+           Size 48 48
+           "Blend Mode" Additive
+          }
+          ImageWidgetClass "{672776CABC09ADEF}" {
+           Name "HeadingIndicator"
+           Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+            Padding 5 5 5 5
+           }
+           Texture "{F804D09B9119D791}UI/Textures/Icons/tdl_north_arrow.edds"
+           Size 32 32
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+    ButtonWidgetClass "{672776CA6A21725E}" {
+     Name "TrackButton"
+     Slot LayoutSlot "{672776CC9A09F557}" {
+     }
+     components {
+      SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
+       m_aEffects {
+        SCR_ButtonEffectColor "{672744BF0F6BAD47}" {
+         m_eEvents 6149
+         m_sWidgetName "TrackImage"
+         m_fAnimationTime 0.08
+         m_cDefault 0.75 0.75 0.75 1
+         m_cHovered 0.2 0.8 0.8 1
+         m_cActivated 0.2 0.8 0.8 1
+         m_cActivatedHovered 0.3 1 1 1
+         m_cClicked 0.3 1 1 1
+         m_cFocusGained 0.2 0.8 0.8 1
+         m_cFocusLost 0.75 0.75 0.75 1
+        }
+       }
+       m_bFocusOnMouseEnter 1
+      }
+     }
+     style blank
+     {
+      SizeLayoutWidgetClass "{672776CA6A217253}" {
+       Name "SizeLayout0"
+       Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+       }
+       {
+        OverlayWidgetClass "{672776CA6A217257}" {
+         Name "Overlay0"
+         Slot AlignableSlot "{67275C1BB68F4311}" {
+         }
+         {
+          ImageWidgetClass "{672776CA6A217255}" {
+           Name "TrackImage"
            Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
             Padding 5 5 5 5
            }

@@ -17,6 +17,14 @@ enum ETDLPanelContent
 //! TDL ATAK-style interface menu - Map-centric with overlay panels
 class AG0_TDLMenuUI : ChimeraMenuBase
 {
+    // Persistent state (survives menu open/close within session)
+    static protected ETDLPanelContent s_eLastPanel = ETDLPanelContent.NETWORK_LIST;
+    static protected float s_fLastZoom = 0.15;
+    static protected vector s_vLastCenter;
+    static protected bool s_bLastPlayerTracking = true;
+    static protected bool s_bLastTrackUp = true;
+    static protected bool s_bHasSavedState = false;
+    
     // Panel state
     protected ETDLPanelContent m_eActivePanel = ETDLPanelContent.NETWORK_LIST;
 	protected ref AG0_TDLMapCanvasDragHandler m_DragHandler;
@@ -64,6 +72,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected Widget m_wZoomInButton;
     protected Widget m_wZoomOutButton;
     protected Widget m_wCompassButton;
+    protected Widget m_wTrackButton;
+    protected ImageWidget m_wHeadingIndicator;
     protected bool m_bTrackUp = true;  // Default to track-up mode
     
     // Self marker widget
@@ -140,6 +150,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wZoomInButton = m_wRoot.FindAnyWidget("ZoomInButton");
 	    m_wZoomOutButton = m_wRoot.FindAnyWidget("ZoomOutButton");
 	    m_wCompassButton = m_wRoot.FindAnyWidget("CompassButton");
+	    m_wTrackButton = m_wRoot.FindAnyWidget("TrackButton");
+	    m_wHeadingIndicator = ImageWidget.Cast(m_wRoot.FindAnyWidget("HeadingIndicator"));
 	    
 	    // Self marker widget
 	    m_wSelfMarkerWidget = m_wRoot.FindAnyWidget("SelfMarkerWidget");
@@ -156,18 +168,32 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    {
 	        m_MapView = new AG0_TDLMapView();
 	        m_MapView.Init(m_wMapCanvas);
+	        
+	        // Restore state from previous session or use defaults
+	        if (s_bHasSavedState)
+	        {
+	            m_MapView.SetCenter(s_vLastCenter);
+	            m_MapView.SetZoom(s_fLastZoom);
+	            m_bPlayerTracking = s_bLastPlayerTracking;
+	            m_bTrackUp = s_bLastTrackUp;
+	        }
+	        else
+	        {
+	            m_MapView.CenterOnPlayer();
+	            m_MapView.SetZoom(0.15);
+	        }
 	    }
 	    
 	    // Get active TDL device
 	    FindActiveDevice();
 	    
-	    // Set initial panel state
-	    SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+	    // Restore or set initial panel state
+	    if (s_bHasSavedState)
+	        SetPanelContent(s_eLastPanel);
+	    else
+	        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
 		
 		HookButtonHandlers();
-	    
-	    // Reset tracking state
-	    m_bPlayerTracking = true;
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -261,6 +287,16 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             );
             if (comp)
                 comp.m_OnClicked.Insert(OnCompassClickedInternal);
+        }
+        
+        // Track player toggle
+        if (m_wTrackButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wTrackButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnTrackClickedInternal);
         }
     }
     
@@ -449,6 +485,16 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    protected void OnTrackClickedInternal()
+    {
+        m_bPlayerTracking = !m_bPlayerTracking;
+        
+        // If re-enabling tracking, immediately center on player
+        if (m_bPlayerTracking && m_MapView)
+            m_MapView.CenterOnPlayer();
+    }
+    
+    //------------------------------------------------------------------------------------------------
     // PUBLIC BUTTON HANDLERS (for external callers like DetailButtonHandler)
     //------------------------------------------------------------------------------------------------
     void OnDetailBackClicked()
@@ -545,6 +591,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    {
 	        m_MapView.SetRotation(0);
 	    }
+	    
+	    // Update heading indicator to point north
+	    if (m_wHeadingIndicator)
+	        m_wHeadingIndicator.SetRotation(m_MapView.GetRotation());
 	    
 	    m_MapView.ClearMarkers();
 	    
@@ -898,6 +948,17 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        m_DragHandler.m_OnDragStart.Remove(OnMapDragStart);
 	        m_DragHandler.CancelDrag();
 	    }
+		
+	    // Save state to static for next open
+	    if (m_MapView)
+	    {
+	        s_fLastZoom = m_MapView.GetZoom();
+	        s_vLastCenter = m_MapView.GetCenter();
+	    }
+	    s_eLastPanel = m_eActivePanel;
+	    s_bLastPlayerTracking = m_bPlayerTracking;
+	    s_bLastTrackUp = m_bTrackUp;
+	    s_bHasSavedState = true;
 		
         m_MapView = null;
         m_aMemberCards.Clear();
