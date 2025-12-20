@@ -126,7 +126,7 @@ FrameWidgetClass {
              Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
               Padding 5 5 5 5
              }
-             Texture "{017A81F8B9559BEE}UI/Textures/Icons/tdl_close_x.edds"
+             Texture "{D727847DBF6D9798}UI/Textures/Icons/tdl_settings.edds"
              Size 48 48
              "Blend Mode" Additive
             }
@@ -220,6 +220,12 @@ FrameWidgetClass {
        Slot LayoutSlot "{672744B7815A6828}" {
        }
        Text "DetailNetworkIP"
+      }
+      TextWidgetClass "{672881134AA803DC}" {
+       Name "DetailGrid"
+       Slot LayoutSlot "{672744B7815A6828}" {
+       }
+       Text "DetailGrid"
       }
       TextWidgetClass "{672744B7918B7844}" {
        Name "DetailDistance"

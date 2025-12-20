@@ -7,7 +7,8 @@ FrameWidgetClass {
   OffsetRight -64
   SizeY 64
   OffsetBottom -64
-  Alignment 0.5 0.5
+  Alignment 0 0
+  SizeToContent 1
  }
  Clipping False
  {
@@ -20,7 +21,7 @@ FrameWidgetClass {
    {
     SizeLayoutWidgetClass "{67282DAD044856EC}" {
      Name "SizeLayout0"
-     Slot LayoutSlot {
+     Slot LayoutSlot "{67288117ED7EB4EE}" {
      }
      {
       OverlayWidgetClass "{67282DAD044856E2}" {

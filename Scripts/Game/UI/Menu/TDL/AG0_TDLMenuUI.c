@@ -58,6 +58,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected TextWidget m_wDetailPlayerName;
     protected TextWidget m_wDetailSignalStrength;
     protected TextWidget m_wDetailNetworkIP;
+	protected TextWidget m_wDetailGrid;
     protected TextWidget m_wDetailDistance;
     protected TextWidget m_wDetailCapabilities;
     protected Widget m_wViewFeedButton;
@@ -161,6 +162,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wDetailPlayerName = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailPlayerName"));
 	    m_wDetailSignalStrength = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailSignalStrength"));
 	    m_wDetailNetworkIP = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailNetworkIP"));
+		m_wDetailGrid = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailGrid"));
 	    m_wDetailDistance = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailDistance"));
 	    m_wDetailCapabilities = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailCapabilities"));
 	    m_wViewFeedButton = m_wRoot.FindAnyWidget("ViewFeedButton");
@@ -480,48 +482,56 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     
     //------------------------------------------------------------------------------------------------
     protected void PopulateDetailView()
-    {
-        // Re-fetch member to get current position data
-        if (m_ActiveDevice && m_SelectedDeviceId != RplId.Invalid())
-            m_SelectedMember = m_ActiveDevice.GetNetworkMember(m_SelectedDeviceId);
-        
-        if (!m_SelectedMember)
-            return;
-        
-        if (m_wDetailPlayerName)
-            m_wDetailPlayerName.SetText(m_SelectedMember.GetPlayerName());
-        
-        if (m_wDetailSignalStrength)
-            m_wDetailSignalStrength.SetTextFormat("%1 dBm", m_SelectedMember.GetSignalStrength().ToString());
-        
-        if (m_wDetailNetworkIP)
-            m_wDetailNetworkIP.SetText("192.168.0." + m_SelectedMember.GetNetworkIP().ToString());
-        
-        // Calculate distance
-        if (m_wDetailDistance)
-        {
-            IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-            if (player)
-            {
-                float dist = vector.Distance(player.GetOrigin(), m_SelectedMember.GetPosition());
-                m_wDetailDistance.SetTextFormat("%1 m", Math.Round(dist).ToString());
-            }
-        }
-        
-        // Capabilities
-        if (m_wDetailCapabilities)
-        {
-            string caps = BuildCapabilitiesString(m_SelectedMember.GetCapabilities());
-            m_wDetailCapabilities.SetText(caps);
-        }
-        
-        // Show/hide video button based on capability
-        if (m_wViewFeedButton)
-        {
-            bool hasVideo = (m_SelectedMember.GetCapabilities() & AG0_ETDLDeviceCapability.VIDEO_SOURCE) != 0;
-            m_wViewFeedButton.SetVisible(hasVideo);
-        }
-    }
+	{
+	    // Re-fetch member to get current position data
+	    if (m_ActiveDevice && m_SelectedDeviceId != RplId.Invalid())
+	        m_SelectedMember = m_ActiveDevice.GetNetworkMember(m_SelectedDeviceId);
+	    
+	    if (!m_SelectedMember)
+	        return;
+	    
+	    if (m_wDetailPlayerName)
+	        m_wDetailPlayerName.SetText(m_SelectedMember.GetPlayerName());
+	    
+	    if (m_wDetailSignalStrength)
+	        m_wDetailSignalStrength.SetTextFormat("%1 dBm", m_SelectedMember.GetSignalStrength().ToString());
+	    
+	    if (m_wDetailNetworkIP)
+	        m_wDetailNetworkIP.SetText("192.168.0." + m_SelectedMember.GetNetworkIP().ToString());
+	    
+	    // Grid coordinates using proper military grid format
+	    if (m_wDetailGrid)
+	    {
+	        vector memberPos = m_SelectedMember.GetPosition();
+	        string gridLabel = SCR_MapEntity.GetGridLabel(memberPos, 2, 4, " ");
+	        m_wDetailGrid.SetText(gridLabel);
+	    }
+	    
+	    // Calculate distance
+	    if (m_wDetailDistance)
+	    {
+	        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+	        if (player)
+	        {
+	            float dist = vector.Distance(player.GetOrigin(), m_SelectedMember.GetPosition());
+	            m_wDetailDistance.SetTextFormat("%1 m", Math.Round(dist).ToString());
+	        }
+	    }
+	    
+	    // Capabilities
+	    if (m_wDetailCapabilities)
+	    {
+	        string caps = BuildCapabilitiesString(m_SelectedMember.GetCapabilities());
+	        m_wDetailCapabilities.SetText(caps);
+	    }
+	    
+	    // Show/hide video button based on capability
+	    if (m_wViewFeedButton)
+	    {
+	        bool hasVideo = (m_SelectedMember.GetCapabilities() & AG0_ETDLDeviceCapability.VIDEO_SOURCE) != 0;
+	        m_wViewFeedButton.SetVisible(hasVideo);
+	    }
+	}
     
     //------------------------------------------------------------------------------------------------
     protected string BuildCapabilitiesString(int caps)
@@ -804,7 +814,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    
 	    // Grid coordinates
 	    if (m_wGrid)
-	        m_wGrid.SetTextFormat("%1, %2", Math.Round(pos[0]).ToString(), Math.Round(pos[2]).ToString());
+		{
+		    string gridLabel = SCR_MapEntity.GetGridLabel(pos, 2, 4, " ");
+		    m_wGrid.SetText(gridLabel);
+		}
 	    
 	    // Altitude (Y axis in Arma)
 	    if (m_wAltitude)
@@ -843,147 +856,155 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     
     //------------------------------------------------------------------------------------------------
-    //! Update self marker position and rotation on the map overlay
-    protected void UpdateSelfMapMarker(IEntity player)
-    {
-        if (!m_wSelfMapMarker || !m_MapView || !m_wMarkerOverlay)
-            return;
-        
-        vector playerPos = player.GetOrigin();
-        float playerHeading = player.GetYawPitchRoll()[0];
-        
-        // Convert world position to screen position via MapView
-        float screenX, screenY;
-        m_MapView.WorldToScreen(playerPos, screenX, screenY);
-        
-        // Get overlay frame offset (markers are children of overlay)
-        float overlayX, overlayY;
-        m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
-        
-        WorkspaceWidget workspace = GetGame().GetWorkspace();
-        overlayX = workspace.DPIUnscale(overlayX);
-        overlayY = workspace.DPIUnscale(overlayY);
-        
-        // Position marker directly - layout uses Alignment 0.5 0.5 so it's pre-centered
-        float localX = screenX - overlayX;
-        float localY = screenY - overlayY;
-        
-        FrameSlot.SetPos(m_wSelfMapMarker, localX, localY);
-        
-        // Rotate marker to show heading (accounting for map rotation)
-        ImageWidget markerImage = ImageWidget.Cast(m_wSelfMapMarker.FindAnyWidget("MarkerImage"));
-		if (markerImage)
-		{
-		    float markerRotation = playerHeading + m_MapView.GetRotation();
-		    markerImage.SetRotation(markerRotation);
-		}
-        
-        m_wSelfMapMarker.SetVisible(true);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    //! Update network member markers - creates/destroys/positions as needed
-    protected void UpdateMemberMapMarkers()
-    {
-        if (!m_MapView || !m_wMarkerOverlay || !m_ActiveDevice)
-            return;
-        
-        // Get current network members
-        array<ref AG0_TDLNetworkMember> members = {};
-        AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
-        if (membersData)
-        {
-            map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
-            foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
-            {
-                members.Insert(member);
-            }
-        }
-        
-        // Track which members we process this frame
-        ref set<RplId> processedIds = new set<RplId>();
-        
-        // Get overlay offset for positioning
-        float overlayX, overlayY;
-        m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
-        WorkspaceWidget workspace = GetGame().GetWorkspace();
-        overlayX = workspace.DPIUnscale(overlayX);
-        overlayY = workspace.DPIUnscale(overlayY);
-        
-        // Get canvas bounds to check visibility
-        float canvasW, canvasH;
-        m_wMapCanvas.GetScreenSize(canvasW, canvasH);
-        canvasW = workspace.DPIUnscale(canvasW);
-        canvasH = workspace.DPIUnscale(canvasH);
-        
-        float margin = MARKER_SIZE;
-        
-        foreach (AG0_TDLNetworkMember member : members)
-        {
-            RplId memberId = member.GetRplId();
-            vector memberPos = member.GetPosition();
-            
-            // Convert to screen position
-            float screenX, screenY;
-            m_MapView.WorldToScreen(memberPos, screenX, screenY);
-            
-            // Check if on screen (with some margin for partially visible markers)
-            bool isVisible = (screenX >= -margin && screenX <= canvasW + margin &&
-                              screenY >= -margin && screenY <= canvasH + margin);
-            
-            if (!isVisible)
-            {
-                // Off screen - destroy marker if it exists
-                if (m_mMemberMarkers.Contains(memberId))
-                {
-                    Widget marker = m_mMemberMarkers.Get(memberId);
-                    if (marker)
-                        marker.RemoveFromHierarchy();
-                    m_mMemberMarkers.Remove(memberId);
-                }
-                continue;
-            }
-            
-            processedIds.Insert(memberId);
-            
-            // Get or create marker widget
-            Widget marker;
-            if (m_mMemberMarkers.Contains(memberId))
-            {
-                marker = m_mMemberMarkers.Get(memberId);
-            }
-            else
-            {
-                marker = CreateMemberMapMarker(member);
-                if (!marker)
-                    continue;
-                m_mMemberMarkers.Set(memberId, marker);
-            }
-            
-            // Position marker directly - layout uses Alignment 0.5 0.5 so it's pre-centered
-            float localX = screenX - overlayX;
-            float localY = screenY - overlayY;
-            
-            FrameSlot.SetPos(marker, localX, localY);
-            marker.SetVisible(true);
-        }
-        
-        // Cleanup orphaned markers (members no longer in network)
-        array<RplId> toRemove = {};
-        foreach (RplId id, Widget w : m_mMemberMarkers)
-        {
-            if (!processedIds.Contains(id))
-                toRemove.Insert(id);
-        }
-        
-        foreach (RplId id : toRemove)
-        {
-            Widget marker = m_mMemberMarkers.Get(id);
-            if (marker)
-                marker.RemoveFromHierarchy();
-            m_mMemberMarkers.Remove(id);
-        }
-    }
+	//! Update self marker position and rotation on the map overlay
+	protected void UpdateSelfMapMarker(IEntity player)
+	{
+	    if (!m_wSelfMapMarker || !m_MapView || !m_wMarkerOverlay)
+	        return;
+	    
+	    vector playerPos = player.GetOrigin();
+	    float playerHeading = player.GetYawPitchRoll()[0];
+	    
+	    // Get overlay position in layout coords
+	    WorkspaceWidget workspace = GetGame().GetWorkspace();
+	    float overlayX, overlayY;
+	    m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
+	    overlayX = workspace.DPIUnscale(overlayX);
+	    overlayY = workspace.DPIUnscale(overlayY);
+	    
+	    // Convert world position to layout coordinates
+	    float screenX, screenY;
+	    m_MapView.WorldToScreen(playerPos, screenX, screenY);
+	    
+	    // Calculate local position within overlay
+	    float localX = screenX - overlayX;
+	    float localY = screenY - overlayY;
+	    
+	    FrameSlot.SetPos(m_wSelfMapMarker, localX, localY);
+	    
+	    // Rotate marker to show heading (accounting for map rotation)
+	    ImageWidget markerImage = ImageWidget.Cast(m_wSelfMapMarker.FindAnyWidget("MarkerImage"));
+	    if (markerImage)
+	    {
+	        float markerRotation = playerHeading + m_MapView.GetRotation();
+	        markerImage.SetRotation(markerRotation);
+	    }
+	    
+	    m_wSelfMapMarker.SetVisible(true);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Update network member markers - creates/destroys/positions as needed
+	protected void UpdateMemberMapMarkers()
+	{
+	    if (!m_MapView || !m_wMarkerOverlay || !m_ActiveDevice)
+	        return;
+	    
+	    // Get our own device's RplId to filter it out
+	    RplId selfDeviceId = m_ActiveDevice.GetDeviceRplId();
+	    
+	    // Get current network members
+	    array<ref AG0_TDLNetworkMember> members = {};
+	    AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+	    if (membersData)
+	    {
+	        map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
+	        foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
+	        {
+	            members.Insert(member);
+	        }
+	    }
+	    
+	    // Track which members we process this frame
+	    ref set<RplId> processedIds = new set<RplId>();
+	    
+	    // Get overlay position in layout coords (same approach as NVG code)
+	    WorkspaceWidget workspace = GetGame().GetWorkspace();
+	    float overlayX, overlayY;
+	    m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
+	    overlayX = workspace.DPIUnscale(overlayX);
+	    overlayY = workspace.DPIUnscale(overlayY);
+	    
+	    // Get canvas bounds in layout coordinates for visibility check
+	    float canvasW, canvasH;
+	    m_wMapCanvas.GetScreenSize(canvasW, canvasH);
+	    canvasW = workspace.DPIUnscale(canvasW);
+	    canvasH = workspace.DPIUnscale(canvasH);
+	    
+	    float margin = MARKER_SIZE;
+	    
+	    foreach (AG0_TDLNetworkMember member : members)
+	    {
+	        RplId memberId = member.GetRplId();
+	        
+	        // Skip our own device - we show it with the self marker instead
+	        if (memberId == selfDeviceId)
+	            continue;
+	        
+	        vector memberPos = member.GetPosition();
+	        
+	        // Convert to layout coordinates
+	        float screenX, screenY;
+	        m_MapView.WorldToScreen(memberPos, screenX, screenY);
+	        
+	        // Calculate local position within overlay
+	        float localX = screenX - overlayX;
+	        float localY = screenY - overlayY;
+	        
+	        // Check if on screen (with some margin for partially visible markers)
+	        bool isVisible = (localX >= -margin && localX <= canvasW + margin &&
+	                          localY >= -margin && localY <= canvasH + margin);
+	        
+	        if (!isVisible)
+	        {
+	            // Off screen - destroy marker if it exists
+	            if (m_mMemberMarkers.Contains(memberId))
+	            {
+	                Widget marker = m_mMemberMarkers.Get(memberId);
+	                if (marker)
+	                    marker.RemoveFromHierarchy();
+	                m_mMemberMarkers.Remove(memberId);
+	            }
+	            continue;
+	        }
+	        
+	        processedIds.Insert(memberId);
+	        
+	        // Get or create marker widget
+	        Widget marker;
+	        if (m_mMemberMarkers.Contains(memberId))
+	        {
+	            marker = m_mMemberMarkers.Get(memberId);
+	        }
+	        else
+	        {
+	            marker = CreateMemberMapMarker(member);
+	            if (!marker)
+	                continue;
+	            m_mMemberMarkers.Set(memberId, marker);
+	        }
+	        
+	        // Position marker
+	        FrameSlot.SetPos(marker, localX, localY);
+	        marker.SetVisible(true);
+	    }
+	    
+	    // Cleanup orphaned markers (members no longer in network)
+	    array<RplId> toRemove = {};
+	    foreach (RplId id, Widget w : m_mMemberMarkers)
+	    {
+	        if (!processedIds.Contains(id))
+	            toRemove.Insert(id);
+	    }
+	    
+	    foreach (RplId id : toRemove)
+	    {
+	        Widget marker = m_mMemberMarkers.Get(id);
+	        if (marker)
+	            marker.RemoveFromHierarchy();
+	        m_mMemberMarkers.Remove(id);
+	    }
+	}
     
     //------------------------------------------------------------------------------------------------
     //! Create a clickable marker widget for a network member
@@ -1248,6 +1269,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        AG0_TDLMemberCardHandler handler = new AG0_TDLMemberCardHandler();
 	        handler.Init(this, member.GetRplId(), member);
 	        button.AddHandler(handler);
+	        
+	        // First card: set UP navigation to settings button
+	        if (index == 0)
+	        {
+	            button.SetNavigation(WidgetNavigationDirection.UP, WidgetNavigationRuleType.EXPLICIT, "SettingsButton");
+	        }
 	    }
 	    
 	    UpdateCardWidgets(card, member);

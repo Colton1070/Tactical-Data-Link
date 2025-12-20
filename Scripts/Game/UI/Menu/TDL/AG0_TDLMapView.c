@@ -277,9 +277,17 @@ class AG0_TDLMapView
     }
     
     //------------------------------------------------------------------------------------------------
-    // World position to screen position (canvas pixel coordinates)
-    void WorldToScreen(vector worldPos, out float screenX, out float screenY)
+	// World position to screen position (layout coordinates for widget positioning)
+	void WorldToScreen(vector worldPos, out float screenX, out float screenY)
 	{
+	    // CRITICAL: Get fresh canvas dimensions in layout coordinates
+	    // Don't use cached m_fCanvasWidth/Height as they're in screen pixels
+	    WorkspaceWidget workspace = GetGame().GetWorkspace();
+	    float screenW, screenH;
+	    m_wCanvas.GetScreenSize(screenW, screenH);
+	    float canvasWidth = workspace.DPIUnscale(screenW);
+	    float canvasHeight = workspace.DPIUnscale(screenH);
+	    
 	    // Offset from view center
 	    float offsetX = worldPos[0] - m_vCenterWorld[0];
 	    float offsetZ = worldPos[2] - m_vCenterWorld[2];
@@ -292,16 +300,15 @@ class AG0_TDLMapView
 	    float rotatedX = offsetX * cosR - offsetZ * sinR;
 	    float rotatedZ = offsetX * sinR + offsetZ * cosR;
 	    
-	    // Use aspect-corrected view size (same as DrawMapTexture)
+	    // Use aspect-corrected view size
 	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
 	    
-	    // Scale to screen based on zoom and view width
-	    float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
+	    // Scale using LAYOUT dimensions
+	    float pixelsPerWorldUnit = canvasWidth / viewWorldSizeX;
 	    
-	    // Convert to screen coords (center of canvas is center of view)
-	    screenX = (m_fCanvasWidth * 0.5) + (rotatedX * pixelsPerWorldUnit);
-	    // Flip Y for screen coordinates
-	    screenY = (m_fCanvasHeight * 0.5) - (rotatedZ * pixelsPerWorldUnit);
+	    // Convert to layout coords (center of canvas is center of view)
+	    screenX = (canvasWidth * 0.5) + (rotatedX * pixelsPerWorldUnit);
+	    screenY = (canvasHeight * 0.5) - (rotatedZ * pixelsPerWorldUnit);
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -602,22 +609,27 @@ class AG0_TDLMapView
         };
         m_aDrawCommands.Insert(bg);
     }
-    
-    //------------------------------------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
 	protected void DrawBuildings()
 	{
 	    if (m_aCachedBuildings.IsEmpty())
 	        return;
 	    
-	    float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
+	    // Get layout dimensions to match WorldToScreen output
+	    WorkspaceWidget workspace = GetGame().GetWorkspace();
+	    float canvasWidth = workspace.DPIUnscale(m_fCanvasWidth);
+	    float canvasHeight = workspace.DPIUnscale(m_fCanvasHeight);
+	    
+	    float pixelsPerWorldUnit = canvasWidth / (m_fMapSizeX * m_fZoom);
 	    
 	    foreach (AG0_TDLBuildingData bldg : m_aCachedBuildings)
 	    {
-	        // Get screen center
+	        // Get screen center (now in layout coordinates)
 	        float centerX, centerY;
 	        WorldToScreen(bldg.m_vCenter, centerX, centerY);
 	        
-	        // Calculate screen-space half-dimensions
+	        // Calculate screen-space half-dimensions (in layout pixels)
 	        float halfW = bldg.m_fHalfWidth * pixelsPerWorldUnit;
 	        float halfL = bldg.m_fHalfLength * pixelsPerWorldUnit;
 	        
@@ -625,21 +637,20 @@ class AG0_TDLMapView
 	        if (halfW < 1 && halfL < 1)
 	            continue;
 	        
-	        // Skip if center is way off screen
+	        // Skip if center is way off screen (using layout dimensions)
 	        float margin = Math.Max(halfW, halfL) + 20;
-	        if (centerX < -margin || centerX > m_fCanvasWidth + margin ||
-	            centerY < -margin || centerY > m_fCanvasHeight + margin)
+	        if (centerX < -margin || centerX > canvasWidth + margin ||
+	            centerY < -margin || centerY > canvasHeight + margin)
 	            continue;
 	        
 	        // Calculate rotated corners
-	        // Total rotation = building yaw + map rotation
-	        float totalRot = (bldg.m_fYaw + m_fRotation) * Math.DEG2RAD;
+	        // Building yaw needs to be combined with map rotation
+	        // Use NEGATIVE m_fRotation to match WorldToScreen's coordinate transform
+	        float totalRot = (bldg.m_fYaw - m_fRotation) * Math.DEG2RAD;
 	        float cosR = Math.Cos(totalRot);
 	        float sinR = Math.Sin(totalRot);
 	        
 	        // Local corners (unrotated)
-	        // Note: on map, X is east-west, Z is north-south
-	        // In screen space, we flip Z for Y
 	        array<float> localX = {-halfW, halfW, halfW, -halfW};
 	        array<float> localY = {-halfL, -halfL, halfL, halfL};
 	        
@@ -650,27 +661,27 @@ class AG0_TDLMapView
 	            float rotX = localX[i] * cosR - localY[i] * sinR;
 	            float rotY = localX[i] * sinR + localY[i] * cosR;
 	            verts.Insert(centerX + rotX);
-	            verts.Insert(centerY - rotY); // Flip Y for screen coords
+	            verts.Insert(centerY + rotY);  // No flip needed - WorldToScreen handles it
 	        }
 	        
 	        // Draw outline - expand corners outward
-			PolygonDrawCommand outline = new PolygonDrawCommand();
-			outline.m_iColor = 0xFF000000;
-			
-			float outlineOffset = 1.5;
-			array<float> outlineVerts = {};
-			array<float> outLocalX = {-halfW - outlineOffset, halfW + outlineOffset, halfW + outlineOffset, -halfW - outlineOffset};
-			array<float> outLocalY = {-halfL - outlineOffset, -halfL - outlineOffset, halfL + outlineOffset, halfL + outlineOffset};
-			
-			for (int j = 0; j < 4; j++)
-			{
-			    float rotX = outLocalX[j] * cosR - outLocalY[j] * sinR;
-			    float rotY = outLocalX[j] * sinR + outLocalY[j] * cosR;
-			    outlineVerts.Insert(centerX + rotX);
-			    outlineVerts.Insert(centerY - rotY);
-			}
-			outline.m_Vertices = outlineVerts;
-			m_aDrawCommands.Insert(outline);
+	        PolygonDrawCommand outline = new PolygonDrawCommand();
+	        outline.m_iColor = 0xFF000000;
+	        
+	        float outlineOffset = 1.5;
+	        array<float> outlineVerts = {};
+	        array<float> outLocalX = {-halfW - outlineOffset, halfW + outlineOffset, halfW + outlineOffset, -halfW - outlineOffset};
+	        array<float> outLocalY = {-halfL - outlineOffset, -halfL - outlineOffset, halfL + outlineOffset, halfL + outlineOffset};
+	        
+	        for (int j = 0; j < 4; j++)
+	        {
+	            float rotX = outLocalX[j] * cosR - outLocalY[j] * sinR;
+	            float rotY = outLocalX[j] * sinR + outLocalY[j] * cosR;
+	            outlineVerts.Insert(centerX + rotX);
+	            outlineVerts.Insert(centerY + rotY);  // No flip needed
+	        }
+	        outline.m_Vertices = outlineVerts;
+	        m_aDrawCommands.Insert(outline);
 	        
 	        // Draw filled building
 	        PolygonDrawCommand fill = new PolygonDrawCommand();
