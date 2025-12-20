@@ -14,6 +14,21 @@ FrameWidgetClass {
     OffsetBottom -1080
    }
   }
+  ButtonWidgetClass "{672776DF191E1E28}" {
+   Name "MapDragSurface"
+   Slot FrameWidgetSlot "{672776DF61B9C9F0}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX -1820
+    OffsetRight 0
+    SizeY -1050
+    OffsetBottom 0
+   }
+   style blank
+  }
   OverlayWidgetClass "{671E54EF901D0A38}" {
    Name "SidePanel"
    Slot FrameWidgetSlot "{671E54EF901D0976}" {
@@ -502,7 +517,7 @@ FrameWidgetClass {
            Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
             Padding 5 5 5 5
            }
-           Texture "{017A81F8B9559BEE}UI/Textures/Icons/tdl_close_x.edds"
+           Texture "{FA13349C64F76DC5}UI/Textures/Icons/tdl_plus.edds"
            Size 48 48
            "Blend Mode" Additive
           }
@@ -553,7 +568,7 @@ FrameWidgetClass {
            Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
             Padding 5 5 5 5
            }
-           Texture "{017A81F8B9559BEE}UI/Textures/Icons/tdl_close_x.edds"
+           Texture "{FD66C624115C3FD7}UI/Textures/Icons/tdl_minus.edds"
            Size 48 48
            "Blend Mode" Additive
           }

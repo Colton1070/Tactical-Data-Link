@@ -31,14 +31,11 @@ class AG0_TDLMapView
     // Member markers
     protected ref array<ref AG0_TDLMapMarker> m_aMarkers = {};
     
-    // Building cache
+    // Building cache - progressive grid-based
     protected ref array<ref AG0_TDLBuildingData> m_aCachedBuildings = {};
-    protected vector m_vCacheCenterWorld;
-    protected float m_fCacheZoom;
-    protected float m_fCacheRadius;
-    protected bool m_bBuildingCacheDirty = true;
-    protected const float CACHE_BUFFER_MULT = 1.5;      // Query 1.5x viewport size
-    protected const float CACHE_INVALIDATE_DIST = 100;  // Re-query if moved 100m from cache center
+    protected ref set<int> m_QuerydCells = new set<int>();
+    protected const float CELL_SIZE = 500.0;
+    protected const float CACHE_BUFFER_MULT = 1.5;
     
     // Colors
     protected int m_iSelfMarkerColor = 0xFF00FF00;      // Green for self
@@ -247,17 +244,17 @@ class AG0_TDLMapView
     
     //------------------------------------------------------------------------------------------------
     protected void ClampCenterToBounds()
-    {
-        float halfViewX = (m_fMapSizeX * m_fZoom) * 0.5;
-        float halfViewZ = (m_fMapSizeY * m_fZoom) * 0.5;
-        
-        m_vCenterWorld[0] = Math.Clamp(m_vCenterWorld[0], 
-            m_fMapOffsetX + halfViewX, 
-            m_fMapOffsetX + m_fMapSizeX - halfViewX);
-        m_vCenterWorld[2] = Math.Clamp(m_vCenterWorld[2], 
-            m_fMapOffsetY + halfViewZ, 
-            m_fMapOffsetY + m_fMapSizeY - halfViewZ);
-    }
+	{
+	    // Allow centering anywhere on the map, with some margin off edges
+	    float margin = 200; // Allow 200m past map edge
+	    
+	    m_vCenterWorld[0] = Math.Clamp(m_vCenterWorld[0], 
+	        m_fMapOffsetX - margin, 
+	        m_fMapOffsetX + m_fMapSizeX + margin);
+	    m_vCenterWorld[2] = Math.Clamp(m_vCenterWorld[2], 
+	        m_fMapOffsetY - margin, 
+	        m_fMapOffsetY + m_fMapSizeY + margin);
+	}
     
     //------------------------------------------------------------------------------------------------
     protected float GetWorldUnitsPerPixel()
@@ -379,47 +376,52 @@ class AG0_TDLMapView
     }
     
     //------------------------------------------------------------------------------------------------
-    // BUILDING CACHE
+    // BUILDING CACHE - Progressive Grid-Based
+    //------------------------------------------------------------------------------------------------
+    protected int GetCellIndex(int cellX, int cellZ)
+    {
+        int gridWidth = Math.Ceil(m_fMapSizeX / CELL_SIZE) + 1;
+        return cellZ * gridWidth + cellX;
+    }
+    
     //------------------------------------------------------------------------------------------------
     protected void UpdateBuildingCache()
-	{
-	    // Check if cache is still valid
-	    float distFromCache = vector.Distance(m_vCenterWorld, m_vCacheCenterWorld);
-	    bool zoomChanged = Math.AbsFloat(m_fZoom - m_fCacheZoom) > 0.05;
-	    
-	    if (!m_bBuildingCacheDirty && distFromCache < CACHE_INVALIDATE_DIST && !zoomChanged)
-	        return;
-	    
-	    m_aCachedBuildings.Clear();
-	    
-	    // Calculate query bounds - use larger area for better coverage
-	    float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
-	    float viewWorldSizeX = m_fMapSizeX * m_fZoom * CACHE_BUFFER_MULT * 2.0; // Doubled buffer
-	    float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
-	    
-	    vector queryMin = Vector(
-	        m_vCenterWorld[0] - viewWorldSizeX * 0.5,
-	        -1000,
-	        m_vCenterWorld[2] - viewWorldSizeZ * 0.5
-	    );
-	    vector queryMax = Vector(
-	        m_vCenterWorld[0] + viewWorldSizeX * 0.5,
-	        1000,
-	        m_vCenterWorld[2] + viewWorldSizeZ * 0.5
-	    );
-	    
-	    // Use BaseWorld spatial query to find building entities directly
-	    BaseWorld world = GetGame().GetWorld();
-	    if (!world)
-	        return;
-	    
-	    world.QueryEntitiesByAABB(queryMin, queryMax, QueryBuildingCallback, null, EQueryEntitiesFlags.STATIC);
-	    
-	    // Update cache state
-	    m_vCacheCenterWorld = m_vCenterWorld;
-	    m_fCacheZoom = m_fZoom;
-	    m_bBuildingCacheDirty = false;
-	}
+    {
+        if (m_fCanvasHeight <= 0 || m_fCanvasWidth <= 0)
+            return;
+        
+        // Calculate visible cell range with buffer
+        float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
+        float viewWorldSizeX = m_fMapSizeX * m_fZoom * CACHE_BUFFER_MULT;
+        float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
+        
+        int minCellX = Math.Floor((m_vCenterWorld[0] - viewWorldSizeX * 0.5) / CELL_SIZE);
+        int maxCellX = Math.Floor((m_vCenterWorld[0] + viewWorldSizeX * 0.5) / CELL_SIZE);
+        int minCellZ = Math.Floor((m_vCenterWorld[2] - viewWorldSizeZ * 0.5) / CELL_SIZE);
+        int maxCellZ = Math.Floor((m_vCenterWorld[2] + viewWorldSizeZ * 0.5) / CELL_SIZE);
+        
+        BaseWorld world = GetGame().GetWorld();
+        if (!world)
+            return;
+        
+        // Only query cells we haven't seen before
+        for (int cz = minCellZ; cz <= maxCellZ; cz++)
+        {
+            for (int cx = minCellX; cx <= maxCellX; cx++)
+            {
+                int cellIndex = GetCellIndex(cx, cz);
+                if (m_QuerydCells.Contains(cellIndex))
+                    continue;
+                
+                m_QuerydCells.Insert(cellIndex);
+                
+                vector cellMin = Vector(cx * CELL_SIZE, -1000, cz * CELL_SIZE);
+                vector cellMax = Vector((cx + 1) * CELL_SIZE, 1000, (cz + 1) * CELL_SIZE);
+                
+                world.QueryEntitiesByAABB(cellMin, cellMax, QueryBuildingCallback, null, EQueryEntitiesFlags.STATIC);
+            }
+        }
+    }
 	
 	//------------------------------------------------------------------------------------------------
 	protected bool QueryBuildingCallback(IEntity entity)
@@ -482,9 +484,10 @@ class AG0_TDLMapView
     }
     
     //------------------------------------------------------------------------------------------------
-    void InvalidateBuildingCache()
+    void ClearBuildingCache()
     {
-        m_bBuildingCacheDirty = true;
+        m_aCachedBuildings.Clear();
+        m_QuerydCells.Clear();
     }
     
     //------------------------------------------------------------------------------------------------
@@ -502,7 +505,7 @@ class AG0_TDLMapView
 	    if (m_fCanvasHeight <= 0 || m_fCanvasWidth <= 0)
 	        return;
         
-        // Update building cache if needed
+        // Update building cache - only queries new cells
         UpdateBuildingCache();
         
         // Clear previous commands
@@ -517,6 +520,9 @@ class AG0_TDLMapView
         // Draw buildings (under markers)
         DrawBuildings();
         
+		//Draw grid (over buildings)
+		DrawGrid();
+		
         // Draw markers (on top)
         DrawMarkers();
         
@@ -690,6 +696,72 @@ class AG0_TDLMapView
             DrawMarker(marker, screenX, screenY);
         }
     }
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawGrid()
+	{
+	    // Calculate visible world bounds (use diagonal for rotation coverage)
+	    float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
+	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+	    float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
+	    float diagonal = Math.Sqrt(viewWorldSizeX * viewWorldSizeX + viewWorldSizeZ * viewWorldSizeZ) * 0.5;
+	    
+	    float minX = m_vCenterWorld[0] - diagonal;
+	    float maxX = m_vCenterWorld[0] + diagonal;
+	    float minZ = m_vCenterWorld[2] - diagonal;
+	    float maxZ = m_vCenterWorld[2] + diagonal;
+	    
+	    // Minor lines (100m) - only draw when zoomed in enough to see them
+	    if (m_fZoom < 0.3)
+	    {
+	        float minorSpacing = 100.0;
+	        int minorColor = 0x40000000; // Very transparent black
+	        
+	        DrawGridLines(minX, maxX, minZ, maxZ, minorSpacing, minorColor, 1.0);
+	    }
+	    
+	    // Major lines (1000m) - always visible
+	    float majorSpacing = 1000.0;
+	    int majorColor = 0x60000000; // Semi-transparent black
+	    
+	    DrawGridLines(minX, maxX, minZ, maxZ, majorSpacing, majorColor, 2.0);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawGridLines(float minX, float maxX, float minZ, float maxZ, float spacing, int color, float width)
+	{
+	    // Snap bounds to grid
+	    float startX = Math.Floor(minX / spacing) * spacing;
+	    float startZ = Math.Floor(minZ / spacing) * spacing;
+	    
+	    // Vertical lines (constant X, vary Z)
+	    for (float x = startX; x <= maxX; x += spacing)
+	    {
+	        float x0, y0, x1, y1;
+	        WorldToScreen(Vector(x, 0, minZ), x0, y0);
+	        WorldToScreen(Vector(x, 0, maxZ), x1, y1);
+	        
+	        LineDrawCommand line = new LineDrawCommand();
+	        line.m_iColor = color;
+	        line.m_fWidth = width;
+	        line.m_Vertices = {x0, y0, x1, y1};
+	        m_aDrawCommands.Insert(line);
+	    }
+	    
+	    // Horizontal lines (constant Z, vary X)
+	    for (float z = startZ; z <= maxZ; z += spacing)
+	    {
+	        float x0, y0, x1, y1;
+	        WorldToScreen(Vector(minX, 0, z), x0, y0);
+	        WorldToScreen(Vector(maxX, 0, z), x1, y1);
+	        
+	        LineDrawCommand line = new LineDrawCommand();
+	        line.m_iColor = color;
+	        line.m_fWidth = width;
+	        line.m_Vertices = {x0, y0, x1, y1};
+	        m_aDrawCommands.Insert(line);
+	    }
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void DrawMarker(AG0_TDLMapMarker marker, float screenX, float screenY)

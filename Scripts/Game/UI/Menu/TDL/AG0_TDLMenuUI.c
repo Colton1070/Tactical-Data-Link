@@ -19,6 +19,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 {
     // Panel state
     protected ETDLPanelContent m_eActivePanel = ETDLPanelContent.NETWORK_LIST;
+	protected ref AG0_TDLMapCanvasDragHandler m_DragHandler;
+	protected bool m_bPlayerTracking = true;
     
     // Core references
     protected AG0_TDLDeviceComponent m_ActiveDevice;
@@ -90,73 +92,83 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     
     //------------------------------------------------------------------------------------------------
     override void OnMenuOpen()
-    {
-        m_wRoot = GetRootWidget();
-        m_InputManager = GetGame().GetInputManager();
-        
-        // Map panel (always visible)
-        m_wMapPanel = m_wRoot.FindAnyWidget("MapPanel");
-        m_wMapCanvas = CanvasWidget.Cast(m_wRoot.FindAnyWidget("MapCanvas"));
-        
-        // Side panel structure
-        m_wSidePanel = m_wRoot.FindAnyWidget("SidePanel");
-        m_wPanelTitle = TextWidget.Cast(m_wRoot.FindAnyWidget("PanelTitle"));
-        m_wCloseButton = m_wRoot.FindAnyWidget("CloseButton");
-        m_wNetworkContent = m_wRoot.FindAnyWidget("NetworkContent");
-        m_wDetailContent = m_wRoot.FindAnyWidget("DetailContent");
-        
-        // Network content widgets
-        m_wScrollContainer = m_wRoot.FindAnyWidget("ScrollLayout");
-        m_wScrollLayout = ScrollLayoutWidget.Cast(m_wScrollContainer);
-        m_wMemberList = m_wRoot.FindAnyWidget("MemberList");
-        m_wDeviceName = TextWidget.Cast(m_wRoot.FindAnyWidget("DeviceName"));
-        m_wNetworkStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("NetworkStatus"));
-        
-        // Detail content widgets
-        m_wDetailPlayerName = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailPlayerName"));
-        m_wDetailSignalStrength = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailSignalStrength"));
-        m_wDetailNetworkIP = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailNetworkIP"));
-        m_wDetailDistance = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailDistance"));
-        m_wDetailCapabilities = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailCapabilities"));
-        m_wViewFeedButton = m_wRoot.FindAnyWidget("ViewFeedButton");
-        m_wBackButton = m_wRoot.FindAnyWidget("BackButton");
-        
-        // Toolbar
-        m_wToolbar = m_wRoot.FindAnyWidget("Toolbar");
-        m_wMenuButton = m_wRoot.FindAnyWidget("MenuButton");
-        m_wNetworkButton = m_wRoot.FindAnyWidget("NetworkButton");
-        
-        // Zoom/compass
-        m_wZoomInButton = m_wRoot.FindAnyWidget("ZoomInButton");
-        m_wZoomOutButton = m_wRoot.FindAnyWidget("ZoomOutButton");
-        m_wCompassButton = m_wRoot.FindAnyWidget("CompassButton");
-        
-        // Self marker
-        m_wSelfMarkerWidget = m_wRoot.FindAnyWidget("SelfMarkerWidget");
-		m_wGPSStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("GPSStatus"));
-		m_wCallsign = TextWidget.Cast(m_wRoot.FindAnyWidget("Callsign"));
-		m_wGrid = TextWidget.Cast(m_wRoot.FindAnyWidget("Grid"));
-		m_wAltitude = TextWidget.Cast(m_wRoot.FindAnyWidget("Altitude"));
-		m_wHeading = TextWidget.Cast(m_wRoot.FindAnyWidget("Heading"));
-		m_wSpeed = TextWidget.Cast(m_wRoot.FindAnyWidget("Speed"));
-		m_wError = TextWidget.Cast(m_wRoot.FindAnyWidget("Error"));
-        
-        // Initialize map view
-        InitMapView();
-        
-        // Hook up button handlers
-        HookButtonHandlers();
-        
-        // Find active TDL device
-        FindActiveDevice();
-        
-        // Start with network panel open
-        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
-        
-        // Initial data load
-        RefreshNetworkList();
-        UpdateSelfMarker();
-    }
+	{
+	    m_wRoot = GetRootWidget();
+	    m_InputManager = GetGame().GetInputManager();
+	    
+	    // Map panel (always visible)
+	    m_wMapPanel = m_wRoot.FindAnyWidget("MapPanel");
+	    m_wMapCanvas = CanvasWidget.Cast(m_wRoot.FindAnyWidget("MapCanvas"));
+	    
+	    Widget dragSurface = m_wRoot.FindAnyWidget("MapDragSurface");
+		if (dragSurface)
+		{
+		    m_DragHandler = new AG0_TDLMapCanvasDragHandler();
+		    dragSurface.AddHandler(m_DragHandler);
+		    m_DragHandler.m_OnDragStart.Insert(OnMapDragStart);
+		}
+	    
+	    // Side panel structure
+	    m_wSidePanel = m_wRoot.FindAnyWidget("SidePanel");
+	    m_wPanelTitle = TextWidget.Cast(m_wRoot.FindAnyWidget("PanelTitle"));
+	    m_wCloseButton = m_wRoot.FindAnyWidget("CloseButton");
+	    m_wNetworkContent = m_wRoot.FindAnyWidget("NetworkContent");
+	    m_wDetailContent = m_wRoot.FindAnyWidget("DetailContent");
+	    
+	    // Network content widgets
+	    m_wScrollContainer = m_wRoot.FindAnyWidget("ScrollLayout");
+	    m_wScrollLayout = ScrollLayoutWidget.Cast(m_wScrollContainer);
+	    m_wMemberList = m_wRoot.FindAnyWidget("MemberList");
+	    m_wDeviceName = TextWidget.Cast(m_wRoot.FindAnyWidget("DeviceName"));
+	    m_wNetworkStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("NetworkStatus"));
+	    
+	    // Detail content widgets
+	    m_wDetailPlayerName = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailPlayerName"));
+	    m_wDetailSignalStrength = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailSignalStrength"));
+	    m_wDetailNetworkIP = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailNetworkIP"));
+	    m_wDetailDistance = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailDistance"));
+	    m_wDetailCapabilities = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailCapabilities"));
+	    m_wViewFeedButton = m_wRoot.FindAnyWidget("ViewFeedButton");
+	    m_wBackButton = m_wRoot.FindAnyWidget("BackButton");
+	    
+	    // Toolbar widgets
+	    m_wToolbar = m_wRoot.FindAnyWidget("Toolbar");
+	    m_wMenuButton = m_wRoot.FindAnyWidget("MenuButton");
+	    m_wNetworkButton = m_wRoot.FindAnyWidget("NetworkButton");
+	    
+	    // Zoom/compass controls
+	    m_wZoomInButton = m_wRoot.FindAnyWidget("ZoomInButton");
+	    m_wZoomOutButton = m_wRoot.FindAnyWidget("ZoomOutButton");
+	    m_wCompassButton = m_wRoot.FindAnyWidget("CompassButton");
+	    
+	    // Self marker widget
+	    m_wSelfMarkerWidget = m_wRoot.FindAnyWidget("SelfMarkerWidget");
+	    m_wGPSStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("GPSStatus"));
+	    m_wCallsign = TextWidget.Cast(m_wRoot.FindAnyWidget("Callsign"));
+	    m_wGrid = TextWidget.Cast(m_wRoot.FindAnyWidget("Grid"));
+	    m_wAltitude = TextWidget.Cast(m_wRoot.FindAnyWidget("Altitude"));
+	    m_wHeading = TextWidget.Cast(m_wRoot.FindAnyWidget("Heading"));
+	    m_wSpeed = TextWidget.Cast(m_wRoot.FindAnyWidget("Speed"));
+	    m_wError = TextWidget.Cast(m_wRoot.FindAnyWidget("Error"));
+	    
+	    // Initialize map view
+	    if (m_wMapCanvas)
+	    {
+	        m_MapView = new AG0_TDLMapView();
+	        m_MapView.Init(m_wMapCanvas);
+	    }
+	    
+	    // Get active TDL device
+	    FindActiveDevice();
+	    
+	    // Set initial panel state
+	    SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+		
+		HookButtonHandlers();
+	    
+	    // Reset tracking state
+	    m_bPlayerTracking = true;
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void InitMapView()
@@ -462,91 +474,101 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         OnZoomOutClickedInternal();
     }
     
+	protected void OnMapDragStart()
+	{
+	    m_bPlayerTracking = false;
+	}
+	
+	void EnablePlayerTracking()
+	{
+	    m_bPlayerTracking = true;
+	}
+	
     //------------------------------------------------------------------------------------------------
     // UPDATE LOOP
     //------------------------------------------------------------------------------------------------
     override void OnMenuUpdate(float tDelta)
-    {
-        super.OnMenuUpdate(tDelta);
-        
-        // Always update map (it's always visible)
-        UpdateMapView(tDelta);
-        
-        // Always update self marker
-        UpdateSelfMarker();
-        
-        // Periodic network refresh
-        m_fUpdateTimer += tDelta;
-        if (m_fUpdateTimer >= UPDATE_INTERVAL)
-        {
-            m_fUpdateTimer = 0;
-            
-            if (m_eActivePanel == ETDLPanelContent.NETWORK_LIST)
-                RefreshNetworkList();
-            else if (m_eActivePanel == ETDLPanelContent.MEMBER_DETAIL)
-                PopulateDetailView();  // Refresh distance, signal, etc.
-        }
-        
-        // Handle input
-        HandleInput();
-    }
+	{
+	    super.OnMenuUpdate(tDelta);
+	    
+	    // Process drag input
+	    if (m_DragHandler && m_MapView)
+	    {
+	        int deltaX, deltaY;
+	        if (m_DragHandler.GetDragDelta(deltaX, deltaY))
+	        {
+	            m_MapView.Pan(deltaX, -deltaY);
+	        }
+	    }
+	    
+	    // Always update map (it's always visible)
+	    UpdateMapView(tDelta);
+	    
+	    // Always update self marker
+	    UpdateSelfMarker();
+	    
+	    // Periodic network refresh
+	    m_fUpdateTimer += tDelta;
+	    if (m_fUpdateTimer >= UPDATE_INTERVAL)
+	    {
+	        m_fUpdateTimer = 0;
+	        
+	        if (m_eActivePanel == ETDLPanelContent.NETWORK_LIST)
+	            RefreshNetworkList();
+	        else if (m_eActivePanel == ETDLPanelContent.MEMBER_DETAIL)
+	            PopulateDetailView();
+	    }
+	    
+	    // Handle input
+	    HandleInput();
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void UpdateMapView(float tDelta)
-    {
-        if (!m_MapView || !m_ActiveDevice)
-            return;
-        
-        // Update rotation based on mode
-        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-        if (player)
-        {
-            // Always center on player
-            m_MapView.CenterOnPlayer();
-            
-            if (m_bTrackUp)
-            {
-                // Track-up: rotate map so player heading points up
-                vector angles = player.GetYawPitchRoll();
-                m_MapView.SetTrackUp(angles[0]);
-            }
-            else
-            {
-                // North-up: no rotation
-                m_MapView.SetRotation(0);
-            }
-        }
-        
-        // Clear and rebuild markers
-        m_MapView.ClearMarkers();
-        
-        // Add self marker
-        if (player)
-        {
-            vector playerPos = player.GetOrigin();
-            float playerHeading = player.GetYawPitchRoll()[0];
-            m_MapView.AddSelfMarker(playerPos, playerHeading);
-        }
-        
-        // Add network member markers
-        array<ref AG0_TDLNetworkMember> members = {};
-		AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
-		if (membersData)
-		{
-		    map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
-		    foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
-		    {
-		        members.Insert(member);
-		    }
-		}
-        foreach (AG0_TDLNetworkMember member : members)
-        {
-            m_MapView.AddMemberMarker(member.GetPosition(), member.GetPlayerName(), member.GetSignalStrength());
-        }
-        
-        // Draw
-        m_MapView.Draw();
-    }
+	{
+	    if (!m_MapView || !m_ActiveDevice)
+	        return;
+	    
+	    IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+	    if (!player)
+	        return;
+	    
+	    if (m_bPlayerTracking)
+	        m_MapView.CenterOnPlayer();
+	    
+	    if (m_bTrackUp)
+	    {
+	        vector angles = player.GetYawPitchRoll();
+	        m_MapView.SetTrackUp(angles[0]);
+	    }
+	    else
+	    {
+	        m_MapView.SetRotation(0);
+	    }
+	    
+	    m_MapView.ClearMarkers();
+	    
+	    vector playerPos = player.GetOrigin();
+	    float playerHeading = player.GetYawPitchRoll()[0];
+	    m_MapView.AddSelfMarker(playerPos, playerHeading);
+	    
+	    array<ref AG0_TDLNetworkMember> members = {};
+	    AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+	    if (membersData)
+	    {
+	        map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
+	        foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
+	        {
+	            members.Insert(member);
+	        }
+	    }
+	    foreach (AG0_TDLNetworkMember member : members)
+	    {
+	        m_MapView.AddMemberMarker(member.GetPosition(), member.GetPlayerName(), member.GetSignalStrength());
+	    }
+	    
+	    m_MapView.Draw();
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void UpdateSelfMarker()
@@ -871,6 +893,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     override void OnMenuClose()
     {
+		if (m_DragHandler)
+	    {
+	        m_DragHandler.m_OnDragStart.Remove(OnMapDragStart);
+	        m_DragHandler.CancelDrag();
+	    }
+		
         m_MapView = null;
         m_aMemberCards.Clear();
         m_aCachedMemberIds.Clear();
