@@ -1,5 +1,5 @@
 MetaFileClass {
- Name "{8BCC4289D6F467BD}UI/Textures/Icons/tdl_zoom_container.edds"
+ Name "{7EA399A15183315E}UI/Textures/Icons/tdl_menu_drawer.edds"
  Configurations {
   PNGResourceClass PC : "{DC555BD399D92412}Configs/System/ResourceTypes/PC/TextureUnspecified.conf" {
   }

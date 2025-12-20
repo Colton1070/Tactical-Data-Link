@@ -61,7 +61,16 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected TextWidget m_wDetailDistance;
     protected TextWidget m_wDetailCapabilities;
     protected Widget m_wViewFeedButton;
+    protected Widget m_wViewLocationButton;
     protected Widget m_wBackButton;
+    
+    // Settings content widgets
+    protected Widget m_wSettingsContent;
+    protected Widget m_wSettingsButton;
+    protected Widget m_wCallsignEditBoxRoot;
+    protected ref AG0_EditBoxComponent m_CallsignEditBox;
+    protected Widget m_wCallsignSaveButton;
+    protected Widget m_wSettingsBackButton;
     
     // Toolbar widgets
     protected Widget m_wToolbar;
@@ -126,6 +135,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    Widget dragSurface = m_wRoot.FindAnyWidget("MapDragSurface");
 		if (dragSurface)
 		{
+		    // Prevent gamepad navigation from focusing this widget
+		    dragSurface.SetFlags(WidgetFlags.NOFOCUS);
+		    
 		    m_DragHandler = new AG0_TDLMapCanvasDragHandler();
 		    dragSurface.AddHandler(m_DragHandler);
 		    m_DragHandler.m_OnDragStart.Insert(OnMapDragStart);
@@ -152,7 +164,17 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wDetailDistance = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailDistance"));
 	    m_wDetailCapabilities = TextWidget.Cast(m_wRoot.FindAnyWidget("DetailCapabilities"));
 	    m_wViewFeedButton = m_wRoot.FindAnyWidget("ViewFeedButton");
+	    m_wViewLocationButton = m_wRoot.FindAnyWidget("ViewLocationButton");
 	    m_wBackButton = m_wRoot.FindAnyWidget("BackButton");
+	    
+	    // Settings content widgets
+	    m_wSettingsContent = m_wRoot.FindAnyWidget("SettingsContent");
+	    m_wSettingsButton = m_wRoot.FindAnyWidget("SettingsButton");
+	    m_wCallsignEditBoxRoot = m_wRoot.FindAnyWidget("CallsignEditBox");
+	    if (m_wCallsignEditBoxRoot)
+	        m_CallsignEditBox = AG0_EditBoxComponent.FindComponent(m_wCallsignEditBoxRoot);
+	    m_wCallsignSaveButton = m_wRoot.FindAnyWidget("CallsignSaveButton");
+	    m_wSettingsBackButton = m_wRoot.FindAnyWidget("SettingsBackButton");
 	    
 	    // Toolbar widgets
 	    m_wToolbar = m_wRoot.FindAnyWidget("Toolbar");
@@ -281,6 +303,16 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 comp.m_OnClicked.Insert(OnViewFeedClickedInternal);
         }
         
+        // View location button (go to member position)
+        if (m_wViewLocationButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wViewLocationButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnViewLocationClickedInternal);
+        }
+        
         // Zoom controls
         if (m_wZoomInButton)
         {
@@ -319,6 +351,36 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             if (comp)
                 comp.m_OnClicked.Insert(OnTrackClickedInternal);
         }
+        
+        // Settings button (in network panel header)
+        if (m_wSettingsButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wSettingsButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnSettingsButtonClicked);
+        }
+        
+        // Callsign save button
+        if (m_wCallsignSaveButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wCallsignSaveButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnCallsignSaveClicked);
+        }
+        
+        // Settings back button
+        if (m_wSettingsBackButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wSettingsBackButton.FindHandler(SCR_ModularButtonComponent)
+            );
+            if (comp)
+                comp.m_OnClicked.Insert(OnSettingsBackClicked);
+        }
     }
     
     //------------------------------------------------------------------------------------------------
@@ -342,6 +404,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         if (m_wDetailContent)
             m_wDetailContent.SetVisible(content == ETDLPanelContent.MEMBER_DETAIL);
+        
+        if (m_wSettingsContent)
+            m_wSettingsContent.SetVisible(content == ETDLPanelContent.SETTINGS);
         
         // Update panel title
         if (m_wPanelTitle)
@@ -379,6 +444,13 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                     GetGame().GetWorkspace().SetFocusedWidget(m_wBackButton);
                 break;
                 
+            case ETDLPanelContent.SETTINGS:
+                if (m_CallsignEditBox)
+                    m_CallsignEditBox.Focus();
+                else if (m_wSettingsBackButton)
+                    GetGame().GetWorkspace().SetFocusedWidget(m_wSettingsBackButton);
+                break;
+                
             case ETDLPanelContent.NONE:
                 // Focus could go to a map control or toolbar button
                 if (m_wNetworkButton)
@@ -409,6 +481,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void PopulateDetailView()
     {
+        // Re-fetch member to get current position data
+        if (m_ActiveDevice && m_SelectedDeviceId != RplId.Invalid())
+            m_SelectedMember = m_ActiveDevice.GetNetworkMember(m_SelectedDeviceId);
+        
         if (!m_SelectedMember)
             return;
         
@@ -486,6 +562,16 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    protected void OnViewLocationClickedInternal()
+    {
+        if (!m_SelectedMember || !m_MapView)
+            return;
+        
+        m_MapView.SetCenter(m_SelectedMember.GetPosition());
+        m_bPlayerTracking = false;
+    }
+    
+    //------------------------------------------------------------------------------------------------
     protected void OnZoomInClickedInternal()
     {
         if (m_MapView)
@@ -516,6 +602,51 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    protected void OnSettingsButtonClicked()
+    {
+        ShowSettingsPanel();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void OnCallsignSaveClicked()
+    {
+        if (!m_CallsignEditBox || !m_ActiveDevice)
+            return;
+        
+        string newCallsign = m_CallsignEditBox.GetText();
+        
+        // Use player controller to RPC the change
+        SCR_PlayerController playerController = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (playerController)
+        {
+            playerController.RequestSetDeviceCallsign(m_ActiveDevice.GetDeviceRplId(), newCallsign);
+            Print(string.Format("[TDLMenu] Requested callsign change to: %1", newCallsign), LogLevel.NORMAL);
+        }
+        
+        // Return to network list
+        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void OnSettingsBackClicked()
+    {
+        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void ShowSettingsPanel()
+    {
+        // Populate edit box with current callsign
+        if (m_CallsignEditBox && m_ActiveDevice)
+        {
+            string currentCallsign = m_ActiveDevice.GetCustomCallsign();
+            m_CallsignEditBox.SetText(currentCallsign);
+        }
+        
+        SetPanelContent(ETDLPanelContent.SETTINGS);
+    }
+    
+    //------------------------------------------------------------------------------------------------
     // PUBLIC BUTTON HANDLERS (for external callers like DetailButtonHandler)
     //------------------------------------------------------------------------------------------------
     void OnDetailBackClicked()
@@ -527,6 +658,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     void OnViewFeedClicked()
     {
         OnViewFeedClickedInternal();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    void OnViewLocationClicked()
+    {
+        OnViewLocationClickedInternal();
     }
     
     //------------------------------------------------------------------------------------------------
@@ -951,6 +1088,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             switch (m_eActivePanel)
             {
                 case ETDLPanelContent.MEMBER_DETAIL:
+                    SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+                    break;
+                    
+                case ETDLPanelContent.SETTINGS:
                     SetPanelContent(ETDLPanelContent.NETWORK_LIST);
                     break;
                     

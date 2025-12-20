@@ -84,7 +84,7 @@ FrameWidgetClass {
        "Font Size" 32
       }
       ButtonWidgetClass "{67237B37113AD91D}" {
-       Name "CloseButton"
+       Name "SettingsButton"
        Slot LayoutSlot "{67237B37113AD9E5}" {
         HorizontalAlign 1
         VerticalAlign 1
@@ -94,7 +94,7 @@ FrameWidgetClass {
          m_aEffects {
           SCR_ButtonEffectColor "{67237B37193CC41B}" {
            m_eEvents 6149
-           m_sWidgetName "CloseImage"
+           m_sWidgetName "SettingsImage"
            m_fAnimationTime 0.08
            m_cDefault 0.75 0.75 0.75 1
            m_cHovered 0.9 0.2 0.2 1
@@ -122,7 +122,7 @@ FrameWidgetClass {
            }
            {
             ImageWidgetClass "{67275C1BB4F61D14}" {
-             Name "CloseImage"
+             Name "SettingsImage"
              Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
               Padding 5 5 5 5
              }
@@ -145,6 +145,7 @@ FrameWidgetClass {
       VerticalAlign 3
       Padding 5 100 5 5
      }
+     "Is Visible" 0
      {
       TextWidgetClass "{672744B6AF200BED}" {
        Name "DeviceName"
@@ -232,6 +233,39 @@ FrameWidgetClass {
        }
        Text "DetailCapabilities"
       }
+      ButtonWidgetClass "{67282DBA2A8414AD}" {
+       Name "ViewLocationButton"
+       Slot LayoutSlot "{672744B7F13077A9}" {
+       }
+       components {
+        SCR_ModularButtonComponent "{672744B4318F20C9}" {
+         m_aEffects {
+          SCR_ButtonEffectColor "{672744B46F15C2EF}" {
+           m_eEvents 6149
+           m_sWidgetName "ViewLocationText"
+           m_fAnimationTime 0.08
+           m_cDefault 0.75 0.75 0.75 1
+           m_cHovered 0.2 0.8 0.8 1
+           m_cActivated 0.2 0.8 0.8 1
+           m_cActivatedHovered 0.3 1 1 1
+           m_cClicked 0.3 1 1 1
+           m_cFocusGained 0.2 0.8 0.8 1
+           m_cFocusLost 0.75 0.75 0.75 1
+          }
+         }
+         m_bFocusOnMouseEnter 1
+        }
+       }
+       style blank
+       {
+        TextWidgetClass "{67282DBA2A8414AC}" {
+         Name "ViewLocationText"
+         Slot ButtonWidgetSlot "{672744B3DCF248EE}" {
+         }
+         Text "View Location"
+        }
+       }
+      }
       ButtonWidgetClass "{672744B7F13077D6}" {
        Name "ViewFeedButton"
        Slot LayoutSlot "{672744B7F13077A9}" {
@@ -300,18 +334,173 @@ FrameWidgetClass {
       }
      }
     }
+    VerticalLayoutWidgetClass "{67282DB654861726}" {
+     Name "SettingsContent"
+     Slot OverlayWidgetSlot "{672744B744EC4BC7}" {
+      HorizontalAlign 3
+      VerticalAlign 3
+      Padding 0 100 0 0
+     }
+     "Is Visible" 0
+     {
+      RichTextWidgetClass "{67282DB32926A25D}" {
+       Name "CallsignText"
+       Slot LayoutSlot "{67282D8E78942445}" {
+        Padding 10 10 10 10
+       }
+       Text "Set Callsign"
+      }
+      FrameWidgetClass "{67282DB5ABF5B61B}" {
+       Name "CallsignEditBoxFrame"
+       Slot LayoutSlot "{67282DB5ABF5B628}" {
+        Padding 10 10 10 10
+       }
+       {
+        ButtonWidgetClass "{67282DB59DDA83DA}" {
+         Name "CallsignEditBox"
+         Slot FrameWidgetSlot "{67282DB59DDA8392}" {
+          Anchor 0 0 1 0
+          PositionX 0
+          OffsetLeft 0
+          PositionY 0
+          OffsetTop 0
+          SizeX -499.559
+          OffsetRight 0
+          SizeY 48
+          OffsetBottom -48
+         }
+         components {
+          AG0_EditBoxComponent "{67282DB5F8F41964}" {
+           m_cOutlineDefault 0.157 0.27 0.263 0.3
+           m_cOutlineFocused 0 0.799 0.793 1
+          }
+         }
+         style blank
+         {
+          SizeLayoutWidgetClass "{67282DB2A459FF00}" {
+           Name "SizeLayout0"
+           Slot ButtonWidgetSlot "{67282DB2A459FF29}" {
+            HorizontalAlign 3
+            VerticalAlign 3
+           }
+           {
+            OverlayWidgetClass "{67282DB2A1888B30}" {
+             Name "Overlay0"
+             Slot AlignableSlot "{67282DB2A1888CD7}" {
+              HorizontalAlign 3
+              VerticalAlign 3
+             }
+             {
+              ImageWidgetClass "{67282DB22C9E4C98}" {
+               Name "Outline"
+               Slot OverlayWidgetSlot "{67282D8E789427EC}" {
+                HorizontalAlign 3
+                VerticalAlign 3
+               }
+              }
+              EditBoxWidgetClass "{67282DB284A32DA4}" {
+               Name "EditBox"
+               Slot OverlayWidgetSlot "{67282DB284A32D46}" {
+                HorizontalAlign 3
+                VerticalAlign 3
+               }
+               components {
+                SCR_EventHandlerComponent "{67282DB2E48680F8}" {
+                }
+               }
+               "Font Size" 36
+               "Placeholder text" "Callsign"
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+      ButtonWidgetClass "{67282DB3D6342202}" {
+       Name "CallsignSaveButton"
+       Slot LayoutSlot "{672744B7F13077A9}" {
+        Padding 0 5 0 5
+       }
+       components {
+        SCR_ModularButtonComponent "{672744B43F32BE8C}" {
+         m_aEffects {
+          SCR_ButtonEffectColor "{672744B4046ACA52}" {
+           m_eEvents 6149
+           m_sWidgetName "CallsignSaveText"
+           m_fAnimationTime 0.08
+           m_cDefault 0.75 0.75 0.75 1
+           m_cHovered 0.2 0.8 0.8 1
+           m_cActivated 0.2 0.8 0.8 1
+           m_cActivatedHovered 0.3 1 1 1
+           m_cClicked 0.3 1 1 1
+           m_cFocusGained 0.2 0.8 0.8 1
+           m_cFocusLost 0.75 0.75 0.75 1
+          }
+         }
+         m_bFocusOnMouseEnter 1
+        }
+       }
+       style blank
+       {
+        TextWidgetClass "{67282DB3D6342203}" {
+         Name "CallsignSaveText"
+         Slot ButtonWidgetSlot "{672744B7C302E982}" {
+         }
+         Text "Save"
+        }
+       }
+      }
+      ButtonWidgetClass "{67282DB07B4BACEE}" {
+       Name "SettingsBackButton"
+       Slot LayoutSlot "{672744B7F13077A9}" {
+        Padding 0 5 0 5
+       }
+       components {
+        SCR_ModularButtonComponent "{672744B43F32BE8C}" {
+         m_aEffects {
+          SCR_ButtonEffectColor "{672744B4046ACA52}" {
+           m_eEvents 6149
+           m_sWidgetName "CallsignSaveText"
+           m_fAnimationTime 0.08
+           m_cDefault 0.75 0.75 0.75 1
+           m_cHovered 0.2 0.8 0.8 1
+           m_cActivated 0.2 0.8 0.8 1
+           m_cActivatedHovered 0.3 1 1 1
+           m_cClicked 0.3 1 1 1
+           m_cFocusGained 0.2 0.8 0.8 1
+           m_cFocusLost 0.75 0.75 0.75 1
+          }
+         }
+         m_bFocusOnMouseEnter 1
+        }
+       }
+       style blank
+       {
+        TextWidgetClass "{67282DB07B4BACE8}" {
+         Name "SettingsBackButton"
+         Slot ButtonWidgetSlot "{672744B7C302E982}" {
+         }
+         Text "Back"
+        }
+       }
+      }
+     }
+    }
    }
   }
   HorizontalLayoutWidgetClass "{672744B4B0157132}" {
    Name "Toolbar"
    Slot FrameWidgetSlot "{672744B4B015712F}" {
     Anchor 0 0 1 0.09
-    PositionX 0
-    OffsetLeft 0
+    PositionX 20
+    OffsetLeft 20
     PositionY 0
     OffsetTop 0
-    SizeX 22.725
-    OffsetRight -22.725
+    SizeX -20.821
+    OffsetRight 0
     SizeY 0
     OffsetBottom 0
    }
@@ -357,7 +546,7 @@ FrameWidgetClass {
            Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
             Padding 5 5 5 5
            }
-           Texture "{017A81F8B9559BEE}UI/Textures/Icons/tdl_close_x.edds"
+           Texture "{7EA399A15183315E}UI/Textures/Icons/tdl_menu_drawer.edds"
            Size 48 48
            "Blend Mode" Additive
           }

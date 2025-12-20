@@ -21,6 +21,8 @@ class AG0_TDLDetailButtonHandler : ScriptedWidgetComponent
             m_Menu.OnDetailBackClicked();
         else if (m_sAction == "viewfeed")
             m_Menu.OnViewFeedClicked();
+        else if (m_sAction == "viewlocation")
+            m_Menu.OnViewLocationClicked();
         else if (m_sAction == "zoomin")
             m_Menu.OnZoomInClicked();
         else if (m_sAction == "zoomout")

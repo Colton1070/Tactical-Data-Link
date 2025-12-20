@@ -131,6 +131,32 @@ modded class SCR_PlayerController
         m_bVideoSourcesDirty = true;
         Print(string.Format("TDL_PLAYERCONTROLLER: Updated broadcasting sources: %1", broadcastingSources.Count()), LogLevel.DEBUG);
     }
+	
+	//------------------------------------------------------------------------------------------------
+	// Callsign Management
+	//------------------------------------------------------------------------------------------------
+	void RequestSetDeviceCallsign(RplId deviceRplId, string callsign)
+	{
+	    Rpc(RpcAsk_SetDeviceCallsign, deviceRplId, callsign);
+	}
+	
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_SetDeviceCallsign(RplId deviceRplId, string callsign)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return;
+	    
+	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
+	    if (!device)
+	        return;
+	    
+	    // Future: verify player actually has access to this device
+	    // Could check IsHoldingDevice or inventory containment
+	    
+	    // Server-side call - SetCustomCallsign handles the logic + bump + system notify
+	    device.SetCustomCallsign(callsign);
+	}
     
     //------------------------------------------------------------------------------------------------
     // Video source management

@@ -33,7 +33,6 @@ FrameWidgetClass {
      }
      components {
       SCR_ModularButtonComponent "{67282DA7CFAA10A3}" {
-       Enabled 0
        m_aEffects {
         SCR_ButtonEffectColor "{67237B37193CC41B}" {
          m_eEvents 6145
@@ -49,6 +48,7 @@ FrameWidgetClass {
       }
      }
      style blank
+     "no focus" 1
      {
       SizeLayoutWidgetClass "{67282DAC4DB65891}" {
        Name "SizeLayout0"
