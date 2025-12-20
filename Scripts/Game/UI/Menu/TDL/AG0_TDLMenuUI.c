@@ -865,22 +865,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    vector playerPos = player.GetOrigin();
 	    float playerHeading = player.GetYawPitchRoll()[0];
 	    
-	    // Get overlay position in layout coords
-	    WorkspaceWidget workspace = GetGame().GetWorkspace();
-	    float overlayX, overlayY;
-	    m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
-	    overlayX = workspace.DPIUnscale(overlayX);
-	    overlayY = workspace.DPIUnscale(overlayY);
+	    // Convert world position to layout coordinates for widget positioning
+	    float layoutX, layoutY;
+	    m_MapView.WorldToLayout(playerPos, layoutX, layoutY);
 	    
-	    // Convert world position to layout coordinates
-	    float screenX, screenY;
-	    m_MapView.WorldToScreen(playerPos, screenX, screenY);
-	    
-	    // Calculate local position within overlay
-	    float localX = screenX - overlayX;
-	    float localY = screenY - overlayY;
-	    
-	    FrameSlot.SetPos(m_wSelfMapMarker, localX, localY);
+	    FrameSlot.SetPos(m_wSelfMapMarker, layoutX, layoutY);
 	    
 	    // Rotate marker to show heading (accounting for map rotation)
 	    ImageWidget markerImage = ImageWidget.Cast(m_wSelfMapMarker.FindAnyWidget("MarkerImage"));
@@ -918,18 +907,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    // Track which members we process this frame
 	    ref set<RplId> processedIds = new set<RplId>();
 	    
-	    // Get overlay position in layout coords (same approach as NVG code)
-	    WorkspaceWidget workspace = GetGame().GetWorkspace();
-	    float overlayX, overlayY;
-	    m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
-	    overlayX = workspace.DPIUnscale(overlayX);
-	    overlayY = workspace.DPIUnscale(overlayY);
-	    
 	    // Get canvas bounds in layout coordinates for visibility check
+	    WorkspaceWidget workspace = GetGame().GetWorkspace();
 	    float canvasW, canvasH;
 	    m_wMapCanvas.GetScreenSize(canvasW, canvasH);
-	    canvasW = workspace.DPIUnscale(canvasW);
-	    canvasH = workspace.DPIUnscale(canvasH);
+	    float layoutCanvasW = workspace.DPIUnscale(canvasW);
+	    float layoutCanvasH = workspace.DPIUnscale(canvasH);
 	    
 	    float margin = MARKER_SIZE;
 	    
@@ -943,17 +926,13 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        
 	        vector memberPos = member.GetPosition();
 	        
-	        // Convert to layout coordinates
-	        float screenX, screenY;
-	        m_MapView.WorldToScreen(memberPos, screenX, screenY);
-	        
-	        // Calculate local position within overlay
-	        float localX = screenX - overlayX;
-	        float localY = screenY - overlayY;
+	        // Convert to layout coordinates for widget positioning
+	        float layoutX, layoutY;
+	        m_MapView.WorldToLayout(memberPos, layoutX, layoutY);
 	        
 	        // Check if on screen (with some margin for partially visible markers)
-	        bool isVisible = (localX >= -margin && localX <= canvasW + margin &&
-	                          localY >= -margin && localY <= canvasH + margin);
+	        bool isVisible = (layoutX >= -margin && layoutX <= layoutCanvasW + margin &&
+	                          layoutY >= -margin && layoutY <= layoutCanvasH + margin);
 	        
 	        if (!isVisible)
 	        {
@@ -984,8 +963,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	            m_mMemberMarkers.Set(memberId, marker);
 	        }
 	        
-	        // Position marker
-	        FrameSlot.SetPos(marker, localX, localY);
+	        // Position marker using layout coordinates
+	        FrameSlot.SetPos(marker, layoutX, layoutY);
 	        marker.SetVisible(true);
 	    }
 	    
