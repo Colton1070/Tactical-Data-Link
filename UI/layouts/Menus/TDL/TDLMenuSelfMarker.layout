@@ -1,0 +1,45 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ Slot FrameWidgetSlot "{67282DAB2DBBB87E}" {
+  OffsetLeft 0
+  OffsetTop 0
+  SizeX 64
+  OffsetRight -64
+  SizeY 64
+  OffsetBottom -64
+  Alignment 0.5 0.5
+ }
+ Clipping False
+ {
+  VerticalLayoutWidgetClass "{67282DAD044856F4}" {
+   Name "VerticalLayout0"
+   Slot FrameWidgetSlot "{67282DACB1B2737C}" {
+    Alignment 0.5 0.5
+    SizeToContent 1
+   }
+   {
+    SizeLayoutWidgetClass "{67282DAD044856EC}" {
+     Name "SizeLayout0"
+     Slot LayoutSlot {
+     }
+     {
+      OverlayWidgetClass "{67282DAD044856E2}" {
+       Name "Overlay0"
+       Slot AlignableSlot "{67282DAC5716BE1E}" {
+       }
+       {
+        ImageWidgetClass "{67282DAD044856E0}" {
+         Name "MarkerImage"
+         Slot OverlayWidgetSlot "{67282DAC521A24F8}" {
+         }
+         Texture "{2B7433CAAAD56DBB}UI/Textures/Icons/tdl_arrow.edds"
+         Size 64 64
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

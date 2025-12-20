@@ -1,0 +1,79 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ Slot FrameWidgetSlot "{67282DAAFA7D8ECA}" {
+  OffsetLeft 0
+  OffsetTop 0
+  SizeX 64
+  OffsetRight -64
+  SizeY 64
+  OffsetBottom -64
+  Alignment 0.5 0.5
+ }
+ Clipping False
+ {
+  VerticalLayoutWidgetClass "{67282DACB1B26C93}" {
+   Name "VerticalLayout0"
+   Slot FrameWidgetSlot "{67282DACB1B2737C}" {
+    Alignment 0.5 0.5
+    SizeToContent 1
+   }
+   {
+    TextWidgetClass "{67282DAC85CFD71E}" {
+     Name "DeviceIdentifier"
+     Slot LayoutSlot "{67282DADF93D22A8}" {
+     }
+     Text "DeviceIdentifier"
+     "Font Size" 16
+     "Min Font Size" 16
+     "Horizontal Alignment" Center
+    }
+    ButtonWidgetClass "{67282DAC70F57208}" {
+     Name "MarkerButton"
+     Slot LayoutSlot "{67282DADF93D2179}" {
+     }
+     components {
+      SCR_ModularButtonComponent "{67282DA7CFAA10A3}" {
+       Enabled 0
+       m_aEffects {
+        SCR_ButtonEffectColor "{67237B37193CC41B}" {
+         m_eEvents 6145
+         m_eInputDevices 60
+         m_sWidgetName "MarkerImage"
+         m_fAnimationTime 0.08
+         m_cDefault 0.051 1 1 0
+         m_cFocusGained 0.051 1 0.242 1
+         m_cFocusLost 0.051 1 1 1
+        }
+       }
+       m_eEventReturnValue 2147483645
+      }
+     }
+     style blank
+     {
+      SizeLayoutWidgetClass "{67282DAC4DB65891}" {
+       Name "SizeLayout0"
+       Slot ButtonWidgetSlot "{67282DAC4DB65F76}" {
+       }
+       {
+        OverlayWidgetClass "{67282DAC5716BE3B}" {
+         Name "Overlay0"
+         Slot AlignableSlot "{67282DAC5716BE1E}" {
+         }
+         {
+          ImageWidgetClass "{67282DAC521A242A}" {
+           Name "MarkerImage"
+           Slot OverlayWidgetSlot "{67282DAC521A24F8}" {
+           }
+           Texture "{16B1268A35EBB0EE}UI/Textures/Icons/tdl_buddy.edds"
+           Size 32 32
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

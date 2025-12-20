@@ -76,7 +76,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected ImageWidget m_wHeadingIndicator;
     protected bool m_bTrackUp = true;  // Default to track-up mode
     
-    // Self marker widget
+    // Self marker widget (info panel - existing)
 	protected Widget m_wSelfMarkerWidget;
 	protected TextWidget m_wGPSStatus;
 	protected TextWidget m_wCallsign;
@@ -85,6 +85,13 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	protected TextWidget m_wHeading;
 	protected TextWidget m_wSpeed;
 	protected TextWidget m_wError;
+    
+    // Map marker overlay system (widget-based, clickable)
+    protected Widget m_wMarkerOverlay;                                      // Parent frame for all markers
+    protected Widget m_wSelfMapMarker;                                      // Player's position marker on map
+    protected ref map<RplId, Widget> m_mMemberMarkers = new map<RplId, Widget>();  // Network member markers
+    protected const float MARKER_SIZE = 64.0;                               // Marker widget size in pixels
+    protected bool m_bMarkerFocused = false;                                // True when gamepad focus is on a map marker
     
     // Selected member for detail view
     protected ref AG0_TDLNetworkMember m_SelectedMember;
@@ -97,8 +104,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected const float UPDATE_INTERVAL = 0.5;
     protected int m_iFocusedCardIndex = -1;
     
+    // Gamepad map pan settings
+    protected const float STICK_PAN_SPEED = 400.0;      // Pixels per second at full deflection
+    protected const float STICK_DEADZONE = 0.15;        // Ignore small stick movements
+    
     // Layout paths
     protected const ResourceName MEMBER_CARD_LAYOUT = "{7C025C99261C96C5}UI/layouts/Menus/TDL/TDLMemberCardUI.layout";
+    protected const ResourceName SELF_MARKER_LAYOUT = "{A242BD2B06D27E00}UI/layouts/Menus/TDL/TDLMenuSelfMarker.layout";
+    protected const ResourceName MEMBER_MARKER_LAYOUT = "{23872C52B88FDB59}UI/layouts/Menus/TDL/TDLMenuBuddyMarker.layout";
     
     //------------------------------------------------------------------------------------------------
     override void OnMenuOpen()
@@ -182,6 +195,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	            m_MapView.CenterOnPlayer();
 	            m_MapView.SetZoom(0.15);
 	        }
+	    }
+	    
+	    // Setup marker overlay (sibling to MapCanvas, sits on top)
+	    m_wMarkerOverlay = m_wRoot.FindAnyWidget("MarkerOverlay");
+	    if (m_wMarkerOverlay)
+	    {
+	        // Create self marker widget
+	        m_wSelfMapMarker = GetGame().GetWorkspace().CreateWidgets(SELF_MARKER_LAYOUT, m_wMarkerOverlay);
 	    }
 	    
 	    // Get active TDL device
@@ -537,13 +558,30 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	{
 	    super.OnMenuUpdate(tDelta);
 	    
-	    // Process drag input
+	    // Process mouse drag input
 	    if (m_DragHandler && m_MapView)
 	    {
 	        int deltaX, deltaY;
 	        if (m_DragHandler.GetDragDelta(deltaX, deltaY))
 	        {
 	            m_MapView.Pan(deltaX, -deltaY);
+	            m_bPlayerTracking = false;
+	        }
+	    }
+	    
+	    // Process gamepad right stick pan input
+	    if (m_MapView && m_InputManager)
+	    {
+	        float panX = m_InputManager.GetActionValue("TDLPanHorizontal");
+	        float panY = m_InputManager.GetActionValue("TDLPanVertical");
+	        
+	        // Apply deadzone and convert to pan delta
+	        if (Math.AbsFloat(panX) > STICK_DEADZONE || Math.AbsFloat(panY) > STICK_DEADZONE)
+	        {
+	            float deltaX = -panX * STICK_PAN_SPEED * tDelta;
+	            float deltaY = panY * STICK_PAN_SPEED * tDelta;
+	            m_MapView.Pan(deltaX, -deltaY);  // Negate Y so stick-up pans view up
+	            m_bPlayerTracking = false;
 	        }
 	    }
 	    
@@ -596,28 +634,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    if (m_wHeadingIndicator)
 	        m_wHeadingIndicator.SetRotation(m_MapView.GetRotation());
 	    
-	    m_MapView.ClearMarkers();
-	    
-	    vector playerPos = player.GetOrigin();
-	    float playerHeading = player.GetYawPitchRoll()[0];
-	    m_MapView.AddSelfMarker(playerPos, playerHeading);
-	    
-	    array<ref AG0_TDLNetworkMember> members = {};
-	    AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
-	    if (membersData)
-	    {
-	        map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
-	        foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
-	        {
-	            members.Insert(member);
-	        }
-	    }
-	    foreach (AG0_TDLNetworkMember member : members)
-	    {
-	        m_MapView.AddMemberMarker(member.GetPosition(), member.GetPlayerName(), member.GetSignalStrength());
-	    }
-	    
+	    // Draw map background, buildings, grid (no canvas markers)
 	    m_MapView.Draw();
+	    
+	    // Update widget-based markers
+	    UpdateSelfMapMarker(player);
+	    UpdateMemberMapMarkers();
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -680,11 +702,252 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	}
     
     //------------------------------------------------------------------------------------------------
+    // MAP MARKER WIDGET MANAGEMENT
+    //------------------------------------------------------------------------------------------------
+    
+    //------------------------------------------------------------------------------------------------
+    //! Update self marker position and rotation on the map overlay
+    protected void UpdateSelfMapMarker(IEntity player)
+    {
+        if (!m_wSelfMapMarker || !m_MapView || !m_wMarkerOverlay)
+            return;
+        
+        vector playerPos = player.GetOrigin();
+        float playerHeading = player.GetYawPitchRoll()[0];
+        
+        // Convert world position to screen position via MapView
+        float screenX, screenY;
+        m_MapView.WorldToScreen(playerPos, screenX, screenY);
+        
+        // Get overlay frame offset (markers are children of overlay)
+        float overlayX, overlayY;
+        m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
+        
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        overlayX = workspace.DPIUnscale(overlayX);
+        overlayY = workspace.DPIUnscale(overlayY);
+        
+        // Position marker directly - layout uses Alignment 0.5 0.5 so it's pre-centered
+        float localX = screenX - overlayX;
+        float localY = screenY - overlayY;
+        
+        FrameSlot.SetPos(m_wSelfMapMarker, localX, localY);
+        
+        // Rotate marker to show heading (accounting for map rotation)
+        ImageWidget markerImage = ImageWidget.Cast(m_wSelfMapMarker.FindAnyWidget("MarkerImage"));
+		if (markerImage)
+		{
+		    float markerRotation = playerHeading + m_MapView.GetRotation();
+		    markerImage.SetRotation(markerRotation);
+		}
+        
+        m_wSelfMapMarker.SetVisible(true);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Update network member markers - creates/destroys/positions as needed
+    protected void UpdateMemberMapMarkers()
+    {
+        if (!m_MapView || !m_wMarkerOverlay || !m_ActiveDevice)
+            return;
+        
+        // Get current network members
+        array<ref AG0_TDLNetworkMember> members = {};
+        AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+        if (membersData)
+        {
+            map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
+            foreach (RplId rplId, AG0_TDLNetworkMember member : membersMap)
+            {
+                members.Insert(member);
+            }
+        }
+        
+        // Track which members we process this frame
+        ref set<RplId> processedIds = new set<RplId>();
+        
+        // Get overlay offset for positioning
+        float overlayX, overlayY;
+        m_wMarkerOverlay.GetScreenPos(overlayX, overlayY);
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        overlayX = workspace.DPIUnscale(overlayX);
+        overlayY = workspace.DPIUnscale(overlayY);
+        
+        // Get canvas bounds to check visibility
+        float canvasW, canvasH;
+        m_wMapCanvas.GetScreenSize(canvasW, canvasH);
+        canvasW = workspace.DPIUnscale(canvasW);
+        canvasH = workspace.DPIUnscale(canvasH);
+        
+        float margin = MARKER_SIZE;
+        
+        foreach (AG0_TDLNetworkMember member : members)
+        {
+            RplId memberId = member.GetRplId();
+            vector memberPos = member.GetPosition();
+            
+            // Convert to screen position
+            float screenX, screenY;
+            m_MapView.WorldToScreen(memberPos, screenX, screenY);
+            
+            // Check if on screen (with some margin for partially visible markers)
+            bool isVisible = (screenX >= -margin && screenX <= canvasW + margin &&
+                              screenY >= -margin && screenY <= canvasH + margin);
+            
+            if (!isVisible)
+            {
+                // Off screen - destroy marker if it exists
+                if (m_mMemberMarkers.Contains(memberId))
+                {
+                    Widget marker = m_mMemberMarkers.Get(memberId);
+                    if (marker)
+                        marker.RemoveFromHierarchy();
+                    m_mMemberMarkers.Remove(memberId);
+                }
+                continue;
+            }
+            
+            processedIds.Insert(memberId);
+            
+            // Get or create marker widget
+            Widget marker;
+            if (m_mMemberMarkers.Contains(memberId))
+            {
+                marker = m_mMemberMarkers.Get(memberId);
+            }
+            else
+            {
+                marker = CreateMemberMapMarker(member);
+                if (!marker)
+                    continue;
+                m_mMemberMarkers.Set(memberId, marker);
+            }
+            
+            // Position marker directly - layout uses Alignment 0.5 0.5 so it's pre-centered
+            float localX = screenX - overlayX;
+            float localY = screenY - overlayY;
+            
+            FrameSlot.SetPos(marker, localX, localY);
+            marker.SetVisible(true);
+        }
+        
+        // Cleanup orphaned markers (members no longer in network)
+        array<RplId> toRemove = {};
+        foreach (RplId id, Widget w : m_mMemberMarkers)
+        {
+            if (!processedIds.Contains(id))
+                toRemove.Insert(id);
+        }
+        
+        foreach (RplId id : toRemove)
+        {
+            Widget marker = m_mMemberMarkers.Get(id);
+            if (marker)
+                marker.RemoveFromHierarchy();
+            m_mMemberMarkers.Remove(id);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Create a clickable marker widget for a network member
+    protected Widget CreateMemberMapMarker(AG0_TDLNetworkMember member)
+    {
+        Widget marker = GetGame().GetWorkspace().CreateWidgets(MEMBER_MARKER_LAYOUT, m_wMarkerOverlay);
+        if (!marker)
+            return null;
+        
+        // Setup click handler on MarkerButton (inside the layout hierarchy)
+        ButtonWidget button = ButtonWidget.Cast(marker.FindAnyWidget("MarkerButton"));
+        if (button)
+        {
+            AG0_TDLMapMarkerHandler handler = new AG0_TDLMapMarkerHandler();
+            handler.Init(this, member.GetRplId());
+            button.AddHandler(handler);
+        }
+        
+        // Set device identifier label
+        TextWidget label = TextWidget.Cast(marker.FindAnyWidget("DeviceIdentifier"));
+        if (label)
+            label.SetText(member.GetPlayerName());
+        
+        return marker;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Cleanup all map markers
+    protected void CleanupAllMapMarkers()
+    {
+        // Destroy self marker
+        if (m_wSelfMapMarker)
+        {
+            m_wSelfMapMarker.RemoveFromHierarchy();
+            m_wSelfMapMarker = null;
+        }
+        
+        // Destroy all member markers
+        foreach (RplId id, Widget marker : m_mMemberMarkers)
+        {
+            if (marker)
+                marker.RemoveFromHierarchy();
+        }
+        m_mMemberMarkers.Clear();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Callback when a map marker is clicked
+    void OnMapMarkerClicked(RplId memberId)
+    {
+        if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+            return;
+        
+        AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMember(memberId);
+        if (!member)
+            return;
+        
+        PrintFormat("[TDLMenu] Map marker clicked: %1", member.GetPlayerName());
+        ShowDetailView(member, memberId);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Callback when a map marker gains focus (gamepad navigation)
+    void OnMapMarkerFocused(RplId memberId)
+    {
+        if (!m_ActiveDevice || !m_MapView)
+            return;
+        
+        AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMember(memberId);
+        if (!member)
+            return;
+        
+        // Pan map to center on the focused member
+        m_MapView.SetCenter(member.GetPosition());
+        m_bPlayerTracking = false;
+        m_bMarkerFocused = true;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Clear marker focus state (called when focus leaves markers)
+    void ClearMarkerFocus()
+    {
+        m_bMarkerFocused = false;
+    }
+    
+    //------------------------------------------------------------------------------------------------
     protected void HandleInput()
     {
-        // ESC or B button behavior depends on panel state
+        // ESC or B button behavior
         if (m_InputManager.GetActionTriggered("MenuBack"))
         {
+            // If focused on a map marker, return to toolbar instead of normal back behavior
+            if (m_bMarkerFocused)
+            {
+                m_bMarkerFocused = false;
+                if (m_wNetworkButton)
+                    GetGame().GetWorkspace().SetFocusedWidget(m_wNetworkButton);
+                return;
+            }
+            
+            // Normal panel-based back behavior
             switch (m_eActivePanel)
             {
                 case ETDLPanelContent.MEMBER_DETAIL:
@@ -959,6 +1222,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    s_bLastPlayerTracking = m_bPlayerTracking;
 	    s_bLastTrackUp = m_bTrackUp;
 	    s_bHasSavedState = true;
+		
+		// Cleanup map markers
+		CleanupAllMapMarkers();
 		
         m_MapView = null;
         m_aMemberCards.Clear();

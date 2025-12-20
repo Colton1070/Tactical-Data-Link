@@ -29,6 +29,20 @@ FrameWidgetClass {
    }
    style blank
   }
+  FrameWidgetClass "{67282DAA107C0E4B}" {
+   Name "MarkerOverlay"
+   Slot FrameWidgetSlot "{67282DAA107C0E33}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX -1820
+    OffsetRight 0
+    SizeY -1050
+    OffsetBottom 0
+   }
+  }
   OverlayWidgetClass "{671E54EF901D0A38}" {
    Name "SidePanel"
    Slot FrameWidgetSlot "{671E54EF901D0976}" {
@@ -173,13 +187,6 @@ FrameWidgetClass {
          Slot AlignableSlot "{672744B72240C235}" {
           HorizontalAlign 3
           VerticalAlign 3
-         }
-         {
-          ButtonWidgetClass "{672744BDD1E095C5}" : "{7C025C99261C96C5}UI/layouts/Menus/TDL/TDLMemberCardUI.layout" {
-           Name "MemberCard0"
-           Slot LayoutSlot "{65F049EE6A586DEF}" {
-           }
-          }
          }
         }
        }
