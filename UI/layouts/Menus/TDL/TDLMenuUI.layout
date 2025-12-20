@@ -466,7 +466,7 @@ FrameWidgetClass {
            Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
             Padding 5 5 5 5
            }
-           Texture "{017A81F8B9559BEE}UI/Textures/Icons/tdl_close_x.edds"
+           Texture "{B00DF20357CD4ACF}UI/Textures/Icons/tdl_target.edds"
            Size 48 48
            "Blend Mode" Additive
           }
