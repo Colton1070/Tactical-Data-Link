@@ -302,6 +302,7 @@ modded class SCR_PlayerController
 	    return m_aTDLConnectedPlayerIDs.Contains(playerId);
 	}
 	
+	
 	//------------------------------------------------------------------------------------------------
 	// Device management
 	//------------------------------------------------------------------------------------------------
@@ -309,22 +310,86 @@ modded class SCR_PlayerController
 	{
 	    array<AG0_TDLDeviceComponent> devices = {};
 	    
-	    IEntity controlledEntity = GetControlledEntity();
-	    if (!controlledEntity)
-	    {
-	        Print("TDL_CTRL_DEVICES: No controlled entity", LogLevel.DEBUG);
+	    IEntity playerEntity = GetControlledEntity();
+	    if (!playerEntity)
 	        return devices;
+	    
+	    // Check held gadgets
+	    SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
+	        playerEntity.FindComponent(SCR_GadgetManagerComponent));
+	    if (gadgetMgr)
+	    {
+	        IEntity heldGadget = gadgetMgr.GetHeldGadget();
+	        if (heldGadget)
+	        {
+	            AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
+	                heldGadget.FindComponent(AG0_TDLDeviceComponent));
+	            if (deviceComp && devices.Find(deviceComp) == -1)
+	                devices.Insert(deviceComp);
+	        }
 	    }
 	    
-	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-	    if (!system)
+	    // Check inventory
+	    InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
+	        playerEntity.FindComponent(InventoryStorageManagerComponent));
+	    if (storage)
 	    {
-	        Print("TDL_CTRL_DEVICES: No TDL system", LogLevel.DEBUG);
-	        return devices;
+	        array<IEntity> items = {};
+	        storage.GetItems(items);
+	        foreach (IEntity item : items)
+	        {
+	            AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
+	                item.FindComponent(AG0_TDLDeviceComponent));
+	            if (deviceComp && devices.Find(deviceComp) == -1)
+	                devices.Insert(deviceComp);
+	        }
 	    }
 	    
-	    devices = system.GetPlayerAllTDLDevices(controlledEntity);
-	    Print(string.Format("TDL_CTRL_DEVICES: Returning %1 devices", devices.Count()), LogLevel.DEBUG);
+	    // Check equipment slots (vest, backpack, etc.)
+	    ChimeraCharacter character = ChimeraCharacter.Cast(playerEntity);
+	    if (character)
+	    {
+	        EquipedLoadoutStorageComponent loadoutStorage = EquipedLoadoutStorageComponent.Cast(
+	            character.FindComponent(EquipedLoadoutStorageComponent));
+	        if (loadoutStorage)
+	        {
+	            array<typename> equipmentAreas = {
+	                LoadoutHeadCoverArea, LoadoutArmoredVestSlotArea, 
+	                LoadoutVestArea, LoadoutJacketArea, LoadoutBackpackArea
+	            };
+	            
+	            foreach (typename area : equipmentAreas)
+	            {
+	                IEntity container = loadoutStorage.GetClothFromArea(area);
+	                if (!container)
+	                    continue;
+	                
+	                // Check the container itself (e.g., vest with built-in TDL device)
+	                AG0_TDLDeviceComponent containerDevice = AG0_TDLDeviceComponent.Cast(
+	                    container.FindComponent(AG0_TDLDeviceComponent));
+	                if (containerDevice && devices.Find(containerDevice) == -1)
+	                    devices.Insert(containerDevice);
+	                
+	                // Check items stored in the container
+	                ClothNodeStorageComponent clothStorage = ClothNodeStorageComponent.Cast(
+	                    container.FindComponent(ClothNodeStorageComponent));
+	                if (!clothStorage)
+	                    continue;
+	                
+	                array<IEntity> clothItems = {};
+	                clothStorage.GetAll(clothItems);
+	                
+	                foreach (IEntity clothItem : clothItems)
+	                {
+	                    AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
+	                        clothItem.FindComponent(AG0_TDLDeviceComponent));
+	                    if (deviceComp && devices.Find(deviceComp) == -1)
+	                        devices.Insert(deviceComp);
+	                }
+	            }
+	        }
+	    }
+	    
 	    return devices;
 	}
 	

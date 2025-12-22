@@ -33,7 +33,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	protected bool m_bPlayerTracking = true;
     
     // Core references
-    protected AG0_TDLDeviceComponent m_ActiveDevice;
+    protected AG0_TDLDeviceComponent m_ActiveDevice;      // The ATAK/EUD display device
+    protected AG0_TDLDeviceComponent m_NetworkDevice;     // The radio providing network data
     protected Widget m_wRoot;
     protected InputManager m_InputManager;
     
@@ -236,6 +237,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    
 	    // Get active TDL device
 	    FindActiveDevice();
+	    
+	    // Find the network device (radio) for network data
+	    FindNetworkDevice();
 		
 		RefreshPlugins();
 	    
@@ -305,6 +309,90 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    }
 	    
 	    return false;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Get network member data directly from the player controller
+	//! This allows the ATAK (display-only device) to show data from the player's radio
+	protected AG0_TDLNetworkMembers GetNetworkMembersFromController()
+	{
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return null;
+	    
+	    return controller.GetAggregatedTDLMembers();
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Check if player has any network member data available (via any networked device)
+	protected bool HasNetworkMemberData()
+	{
+	    AG0_TDLNetworkMembers data = GetNetworkMembersFromController();
+	    return data && data.Count() > 0;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Get a specific network member by RplId from the player controller
+	protected AG0_TDLNetworkMember GetNetworkMemberById(RplId rplId)
+	{
+	    AG0_TDLNetworkMembers data = GetNetworkMembersFromController();
+	    if (!data)
+	        return null;
+	    
+	    return data.GetByRplId(rplId);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Find the player's network device (radio) that provides network data
+	protected void FindNetworkDevice()
+	{
+	    m_NetworkDevice = null;
+	    
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return;
+	    
+	    array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+	    foreach (AG0_TDLDeviceComponent device : devices)
+	    {
+	        // Look for a device with NETWORK_ACCESS that's in a network
+	        if (device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS) && device.IsInNetwork())
+	        {
+	            m_NetworkDevice = device;
+	            return;
+	        }
+	    }
+	    
+	    // If no device is in a network, just find one with NETWORK_ACCESS capability
+	    foreach (AG0_TDLDeviceComponent device : devices)
+	    {
+	        if (device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS))
+	        {
+	            m_NetworkDevice = device;
+	            return;
+	        }
+	    }
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Get all RplIds of devices owned by the player (for filtering self from buddy markers)
+	protected set<RplId> GetPlayerOwnDeviceIds()
+	{
+	    set<RplId> deviceIds = new set<RplId>();
+	    
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return deviceIds;
+	    
+	    array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+	    foreach (AG0_TDLDeviceComponent device : devices)
+	    {
+	        RplId deviceId = device.GetDeviceRplId();
+	        if (deviceId != RplId.Invalid())
+	            deviceIds.Insert(deviceId);
+	    }
+	    
+	    return deviceIds;
 	}
 	
 	void RefreshPlugins()
@@ -595,8 +683,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected void PopulateDetailView()
 	{
 	    // Re-fetch member to get current position data
-	    if (m_ActiveDevice && m_SelectedDeviceId != RplId.Invalid())
-	        m_SelectedMember = m_ActiveDevice.GetNetworkMember(m_SelectedDeviceId);
+	    if (m_SelectedDeviceId != RplId.Invalid())
+	        m_SelectedMember = GetNetworkMemberById(m_SelectedDeviceId);
 	    
 	    if (!m_SelectedMember)
 	        return;
@@ -725,17 +813,17 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void OnCallsignSaveClicked()
     {
-        if (!m_CallsignEditBox || !m_ActiveDevice)
+        if (!m_CallsignEditBox || !m_NetworkDevice)
             return;
         
         string newCallsign = m_CallsignEditBox.GetText();
         
-        // Use player controller to RPC the change
+        // Use player controller to RPC the change on the network device (radio)
         SCR_PlayerController playerController = SCR_PlayerController.Cast(GetGame().GetPlayerController());
         if (playerController)
         {
-            playerController.RequestSetDeviceCallsign(m_ActiveDevice.GetDeviceRplId(), newCallsign);
-            Print(string.Format("[TDLMenu] Requested callsign change to: %1", newCallsign), LogLevel.DEBUG);
+            playerController.RequestSetDeviceCallsign(m_NetworkDevice.GetDeviceRplId(), newCallsign);
+            Print(string.Format("[TDLMenu] Requested callsign change to: %1 for network device", newCallsign), LogLevel.DEBUG);
         }
         
         // Return to network list
@@ -751,10 +839,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void ShowSettingsPanel()
     {
-        // Populate edit box with current callsign
-        if (m_CallsignEditBox && m_ActiveDevice)
+        // Populate edit box with current callsign from network device
+        if (m_CallsignEditBox && m_NetworkDevice)
         {
-            string currentCallsign = m_ActiveDevice.GetCustomCallsign();
+            string currentCallsign = m_NetworkDevice.GetCustomCallsign();
             m_CallsignEditBox.SetText(currentCallsign);
         }
         
@@ -866,7 +954,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void UpdateMapView(float tDelta)
 	{
-	    if (!m_MapView || !m_ActiveDevice)
+	    if (!m_MapView)
 	        return;
 	    
 	    IEntity player = GetGame().GetPlayerController().GetControlledEntity();
@@ -924,12 +1012,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        }
 	    }
 	    
-	    // Callsign
+	    // Callsign - use network device (radio) callsign, not ATAK
 	    if (m_wCallsign)
 	    {
 	        string callsign = "UNKNOWN";
-	        if (m_ActiveDevice)
-	            callsign = m_ActiveDevice.GetDisplayName();
+	        if (m_NetworkDevice)
+	            callsign = m_NetworkDevice.GetDisplayName();
 	        m_wCallsign.SetText(callsign);
 	    }
 	    
@@ -1007,15 +1095,15 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	//! Update network member markers - creates/destroys/positions as needed
 	protected void UpdateMemberMapMarkers()
 	{
-	    if (!m_MapView || !m_wMarkerOverlay || !m_ActiveDevice)
+	    if (!m_MapView || !m_wMarkerOverlay)
 	        return;
 	    
-	    // Get our own device's RplId to filter it out
-	    RplId selfDeviceId = m_ActiveDevice.GetDeviceRplId();
+	    // Get all of the player's device RplIds to filter them out
+	    set<RplId> ownDeviceIds = GetPlayerOwnDeviceIds();
 	    
-	    // Get current network members
+	    // Get current network members from player controller
 	    array<ref AG0_TDLNetworkMember> members = {};
-	    AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+	    AG0_TDLNetworkMembers membersData = GetNetworkMembersFromController();
 	    if (membersData)
 	    {
 	        map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
@@ -1041,8 +1129,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    {
 	        RplId memberId = member.GetRplId();
 	        
-	        // Skip our own device - we show it with the self marker instead
-	        if (memberId == selfDeviceId)
+	        // Skip any of our own devices - we show self with the self marker
+	        if (ownDeviceIds.Contains(memberId))
 	            continue;
 	        
 	        vector memberPos = member.GetPosition();
@@ -1155,10 +1243,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //! Callback when a map marker is clicked
     void OnMapMarkerClicked(RplId memberId)
     {
-        if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+        if (!HasNetworkMemberData())
             return;
         
-        AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMember(memberId);
+        AG0_TDLNetworkMember member = GetNetworkMemberById(memberId);
         if (!member)
             return;
         
@@ -1170,10 +1258,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //! Callback when a map marker gains focus (gamepad navigation)
     void OnMapMarkerFocused(RplId memberId)
     {
-        if (!m_ActiveDevice || !m_MapView)
+        if (!m_MapView)
             return;
         
-        AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMember(memberId);
+        AG0_TDLNetworkMember member = GetNetworkMemberById(memberId);
         if (!member)
             return;
         
@@ -1226,77 +1314,132 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             }
         }
     }
-    
+	
     //------------------------------------------------------------------------------------------------
-    // DEVICE DISCOVERY
-    //------------------------------------------------------------------------------------------------
-    protected void FindActiveDevice()
-    {
-        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-        if (!player)
-            return;
-        
-        // Check held gadget first
-        SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
-            player.FindComponent(SCR_GadgetManagerComponent)
-        );
-        if (gadgetMgr)
-        {
-            IEntity heldGadget = gadgetMgr.GetHeldGadget();
-            if (heldGadget)
-            {
-                AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
-                    heldGadget.FindComponent(AG0_TDLDeviceComponent)
-                );
-                if (device && device.CanAccessNetwork() && 
-                    device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
-                    device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
-                {
-                    m_ActiveDevice = device;
-                    if (m_wDeviceName)
-                        m_wDeviceName.SetText(device.GetDisplayName());
-                    return;
-                }
-            }
-        }
-        
-        // Check inventory
-        InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
-            player.FindComponent(InventoryStorageManagerComponent)
-        );
-        if (storage)
-        {
-            array<IEntity> items = {};
-            storage.GetItems(items);
-            
-            foreach (IEntity item : items)
-            {
-                AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
-                    item.FindComponent(AG0_TDLDeviceComponent)
-                );
-                if (device && device.CanAccessNetwork() &&
-                    device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
-                    device.HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
-                {
-                    m_ActiveDevice = device;
-                    if (m_wDeviceName)
-                        m_wDeviceName.SetText(device.GetDisplayName());
-                    return;
-                }
-            }
-        }
-    }
+	// DEVICE DISCOVERY
+	//------------------------------------------------------------------------------------------------
+	protected void FindActiveDevice()
+	{
+	    IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+	    if (!player)
+	        return;
+	    
+	    // Check held gadget first
+	    SCR_GadgetManagerComponent gadgetMgr = SCR_GadgetManagerComponent.Cast(
+	        player.FindComponent(SCR_GadgetManagerComponent)
+	    );
+	    if (gadgetMgr)
+	    {
+	        IEntity heldGadget = gadgetMgr.GetHeldGadget();
+	        if (heldGadget)
+	        {
+	            AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+	                heldGadget.FindComponent(AG0_TDLDeviceComponent)
+	            );
+	            if (device && device.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
+	            {
+	                m_ActiveDevice = device;
+	                if (m_wDeviceName)
+	                    m_wDeviceName.SetText(device.GetDisplayName());
+	                return;
+	            }
+	        }
+	    }
+	    
+	    // Check inventory
+	    InventoryStorageManagerComponent storage = InventoryStorageManagerComponent.Cast(
+	        player.FindComponent(InventoryStorageManagerComponent)
+	    );
+	    if (storage)
+	    {
+	        array<IEntity> items = {};
+	        storage.GetItems(items);
+	        
+	        foreach (IEntity item : items)
+	        {
+	            AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+	                item.FindComponent(AG0_TDLDeviceComponent)
+	            );
+	            if (device && device.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
+	            {
+	                m_ActiveDevice = device;
+	                if (m_wDeviceName)
+	                    m_wDeviceName.SetText(device.GetDisplayName());
+	                return;
+	            }
+	        }
+	    }
+	    
+	    // Check equipment slots (vest, backpack, etc.)
+	    ChimeraCharacter character = ChimeraCharacter.Cast(player);
+	    if (character)
+	    {
+	        EquipedLoadoutStorageComponent loadoutStorage = EquipedLoadoutStorageComponent.Cast(
+	            character.FindComponent(EquipedLoadoutStorageComponent)
+	        );
+	        if (loadoutStorage)
+	        {
+	            array<typename> equipmentAreas = {
+	                LoadoutHeadCoverArea, LoadoutArmoredVestSlotArea, 
+	                LoadoutVestArea, LoadoutJacketArea, LoadoutBackpackArea
+	            };
+	            
+	            foreach (typename area : equipmentAreas)
+	            {
+	                IEntity container = loadoutStorage.GetClothFromArea(area);
+	                if (!container)
+	                    continue;
+	                
+	                // Check the container itself
+	                AG0_TDLDeviceComponent containerDevice = AG0_TDLDeviceComponent.Cast(
+	                    container.FindComponent(AG0_TDLDeviceComponent)
+	                );
+	                if (containerDevice && containerDevice.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
+	                {
+	                    m_ActiveDevice = containerDevice;
+	                    if (m_wDeviceName)
+	                        m_wDeviceName.SetText(containerDevice.GetDisplayName());
+	                    return;
+	                }
+	                
+	                // Check items stored in the container
+	                ClothNodeStorageComponent clothStorage = ClothNodeStorageComponent.Cast(
+	                    container.FindComponent(ClothNodeStorageComponent)
+	                );
+	                if (!clothStorage)
+	                    continue;
+	                
+	                array<IEntity> clothItems = {};
+	                clothStorage.GetAll(clothItems);
+	                
+	                foreach (IEntity clothItem : clothItems)
+	                {
+	                    AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+	                        clothItem.FindComponent(AG0_TDLDeviceComponent)
+	                    );
+	                    if (device && device.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
+	                    {
+	                        m_ActiveDevice = device;
+	                        if (m_wDeviceName)
+	                            m_wDeviceName.SetText(device.GetDisplayName());
+	                        return;
+	                    }
+	                }
+	            }
+	        }
+	    }
+	}
     
     //------------------------------------------------------------------------------------------------
     // NETWORK LIST
     //------------------------------------------------------------------------------------------------
     protected void RefreshNetworkList()
     {
-        if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+        if (!HasNetworkMemberData())
             return;
         
         array<ref AG0_TDLNetworkMember> members = {};
-		AG0_TDLNetworkMembers membersData = m_ActiveDevice.GetNetworkMembersData();
+		AG0_TDLNetworkMembers membersData = GetNetworkMembersFromController();
 		if (membersData)
 		{
 		    map<RplId, ref AG0_TDLNetworkMember> membersMap = membersData.ToMap();
@@ -1459,10 +1602,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     void OnMemberCardClicked(RplId memberId, int button)
 	{
-	    if (!m_ActiveDevice || !m_ActiveDevice.HasNetworkMemberData())
+	    if (!HasNetworkMemberData())
 	        return;
 	    
-	    AG0_TDLNetworkMember member = m_ActiveDevice.GetNetworkMember(memberId);
+	    AG0_TDLNetworkMember member = GetNetworkMemberById(memberId);
 	    if (!member)
 	        return;
 	    

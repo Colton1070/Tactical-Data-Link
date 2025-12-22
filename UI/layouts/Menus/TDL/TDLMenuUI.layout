@@ -1,6 +1,21 @@
 FrameWidgetClass {
  Name "rootFrame"
  {
+  ImageWidgetClass "{672C1C733C0EC9FC}" {
+   Name "Image0"
+   Slot FrameWidgetSlot "{672C1C733C0EC9E4}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX -1820
+    OffsetRight 0
+    SizeY -1050
+    OffsetBottom 0
+   }
+   Color 0 0 0 1
+  }
   HorizontalLayoutWidgetClass "{6728802FCEA8D316}" {
    Name "HorizontalLayout0"
    Slot FrameWidgetSlot "{6728802FCEA8D3E7}" {
@@ -23,7 +38,7 @@ FrameWidgetClass {
      {
       FrameWidgetClass "{6728802F8A53178F}" {
        Name "MainView"
-       Slot OverlayWidgetSlot {
+       Slot OverlayWidgetSlot "{672C1C7088C120D9}" {
         HorizontalAlign 3
         VerticalAlign 3
        }
@@ -439,7 +454,7 @@ FrameWidgetClass {
            {
             ImageWidgetClass "{672744B2BE578E9D}" {
              Name "BackgroundPanel"
-             Slot OverlayWidgetSlot {
+             Slot OverlayWidgetSlot "{672C1C7088C128E9}" {
               HorizontalAlign 3
               VerticalAlign 3
              }
@@ -449,7 +464,7 @@ FrameWidgetClass {
             }
             FrameWidgetClass "{672744B492164D1A}" {
              Name "SelfMarkerWidget"
-             Slot OverlayWidgetSlot {
+             Slot OverlayWidgetSlot "{672C1C7088C128C8}" {
               Padding 10 10 10 10
              }
              {
@@ -562,7 +577,7 @@ FrameWidgetClass {
     }
     OverlayWidgetClass "{671E54EF901D0A38}" {
      Name "SidePanel"
-     Slot LayoutSlot {
+     Slot LayoutSlot "{672C1C7088C12E65}" {
      }
      {
       ImageWidgetClass "{672744B0E801F614}" {
