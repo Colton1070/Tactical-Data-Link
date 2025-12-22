@@ -1,0 +1,65 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ {
+  OverlayWidgetClass "{672880545917863B}" {
+   Name "PTTOverlay"
+   Slot FrameWidgetSlot "{6728805459178621}" {
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX 442.052
+    OffsetRight -442.052
+    SizeY 321.288
+    OffsetBottom -321.288
+    SizeToContent 1
+   }
+   {
+    ImageWidgetClass "{6728805483511C82}" {
+     Name "Image0"
+     Slot OverlayWidgetSlot "{672880548351636E}" {
+      HorizontalAlign 3
+      VerticalAlign 3
+     }
+     Color 0.1059 0.1059 0.1059 0.8562
+     Texture "{7FE7439732AB00D0}UI/Textures/Icons/mpu5_plugin_panel.edds"
+     Size 192 96
+    }
+    VerticalLayoutWidgetClass "{67288054F73D6AEF}" {
+     Name "VerticalLayout0"
+     Slot OverlayWidgetSlot "{67288054F73D6AC9}" {
+      HorizontalAlign 3
+     }
+     {
+      HorizontalLayoutWidgetClass "{67288054FC954B91}" {
+       Name "HorizontalLayout0"
+       Slot LayoutSlot "{67288054FC954A6B}" {
+        Padding 10 10 10 10
+       }
+       {
+        ImageWidgetClass "{67288054F9441704}" {
+         Name "Image0"
+         Slot LayoutSlot "{67288054F94417E7}" {
+          Padding 0 0 10 0
+         }
+         Texture "{70F2782851360516}UI/Textures/Icons/mpu5_plugin.edds"
+         Size 72 72
+         Tiling None
+        }
+        TextWidgetClass "{672880549EC25E93}" {
+         Name "PTTText"
+         Slot LayoutSlot "{67288055D6AB5F27}" {
+          Padding 10 0 0 0
+         }
+         Text "PTT"\
+         "45.5"
+         "Vertical Alignment" Center
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

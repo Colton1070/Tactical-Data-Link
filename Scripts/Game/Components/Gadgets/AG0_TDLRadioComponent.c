@@ -75,7 +75,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	    }
 		if (m_BaseRadioComp)
 		{
-			//Print(string.Format("'%1' AG0_TDLRadioComponent::DropFillKey - Setting BaseRadioComp key to default: %2", GetOwner(), m_sDefaultCryptoKey), LogLevel.NORMAL);
+			//Print(string.Format("'%1' AG0_TDLRadioComponent::DropFillKey - Setting BaseRadioComp key to default: %2", GetOwner(), m_sDefaultCryptoKey), LogLevel.DEBUG);
 	
 			m_sCurrentCryptoKey = m_sDefaultCryptoKey;
 
@@ -97,7 +97,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 		PlayerManager playerManager = GetGame().GetPlayerManager();
 		if (m_BaseRadioComp && playerManager)
 		{
-			//Print(string.Format("'%1' AG0_TDLRadioComponent::FillKey - attempting to fill key", GetOwner()), LogLevel.NORMAL);
+			//Print(string.Format("'%1' AG0_TDLRadioComponent::FillKey - attempting to fill key", GetOwner()), LogLevel.DEBUG);
 			int userPlayerId = playerManager.GetPlayerIdFromControlledEntity(userEntity);
 			SCR_PlayerController playerController = SCR_PlayerController.Cast(playerManager.GetPlayerController(userPlayerId));
 			if(!playerController) {
@@ -131,16 +131,16 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	{
 		if(System.IsConsoleApp())
 			return; //fuck you
-		//Print("AG0_TDLRadioComponent: Activating crypto key input", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Activating crypto key input", LogLevel.DEBUG);
 		
 		ShowKeyDialog();
 
-		//Print("AG0_TDLRadioComponent: Not the player, fuck em.", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Not the player, fuck em.", LogLevel.DEBUG);
 	}
 	
 	protected void ShowKeyDialog()
 	{
-		//Print("AG0_TDLRadioComponent: Attempt show key dialog.", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Attempt show key dialog.", LogLevel.DEBUG);
 		// Prevent opening multiple dialogs
 		if (m_inputDialog)
 		{
@@ -156,7 +156,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 		// Make sure "dialog_cypherkey" preset exists in TDL_Dialogs.conf and has an "InputField" EditBoxWidget.
 		m_inputDialog = AG0_TDL_KeyDialog.CreateKeyDialog("ENTER CRYPTO KEY", "CRYPTO KEY INPUT");
 
-		//Print("AG0_TDLRadioComponent: Dialog created.", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Dialog created.", LogLevel.DEBUG);
 		// Check if dialog creation failed
 		if (!m_inputDialog || !m_inputDialog.GetRootWidget())
 		{
@@ -167,7 +167,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 
 		// Hook up callbacks
 		
-		//Print("AG0_TDLRadioComponent: Adding callbacks.", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Adding callbacks.", LogLevel.DEBUG);
 		
 		m_inputDialog.m_OnConfirm.Insert(OnDialogConfirm);
 		m_inputDialog.m_OnCancel.Insert(OnDialogCancel);
@@ -187,23 +187,23 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 
 		// Set initial text if needed (e.g., show current key)
 		// m_editBox.SetText(m_sCurrentCryptoKey);
-		//Print("AG0_TDLRadioComponent: Trying to focus widget.", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Trying to focus widget.", LogLevel.DEBUG);
 		// Focus the input field - This makes the dialog immediately usable
 		GetGame().GetWorkspace().SetFocusedWidget(m_editBox);
 		// No need to activate write mode manually, focus usually handles this for EditBox
 		m_editBox.ActivateWriteMode(); // Generally not needed if focused
-		//Print("AG0_TDLRadioComponent: Activating write mode.", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Activating write mode.", LogLevel.DEBUG);
 	}
 	
 	protected void OnKeyReplicated()
 	{
-		//Print(string.Format("'%1' AG0_TDLRadioComponent::OnKeyReplicated - Received Key: '%2'", GetOwner(), m_sCurrentCryptoKey), LogLevel.NORMAL);
+		//Print(string.Format("'%1' AG0_TDLRadioComponent::OnKeyReplicated - Received Key: '%2'", GetOwner(), m_sCurrentCryptoKey), LogLevel.DEBUG);
 		// Update the actual BaseRadioComponent everywhere
 		// This ensures consistency even if BaseRadioComponent itself doesn't replicate the key.
 		if (m_BaseRadioComp)
 		{
 
-			//Print(string.Format("'%1' AG0_TDLRadioComponent::OnKeyReplicated - Setting BaseRadioComp key to '%2'", GetOwner(), m_sCurrentCryptoKey), LogLevel.NORMAL);
+			//Print(string.Format("'%1' AG0_TDLRadioComponent::OnKeyReplicated - Setting BaseRadioComp key to '%2'", GetOwner(), m_sCurrentCryptoKey), LogLevel.DEBUG);
 
 			m_BaseRadioComp.SetEncryptionKey(m_sCurrentCryptoKey);
 		}
@@ -269,7 +269,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 		}
 
 		string enteredText = m_editBox.GetText();
-		//Print(string.Format("AG0_TDLRadioComponent: Crypto key entered locally: '%1' (Client)", enteredText), LogLevel.NORMAL);
+		//Print(string.Format("AG0_TDLRadioComponent: Crypto key entered locally: '%1' (Client)", enteredText), LogLevel.DEBUG);
 
 		// --- Send the key to the Server via RPC ---
 		Rpc(RpcAsk_SetCryptoKey, enteredText);
@@ -291,7 +291,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 		// Should already be on client
 		if (!GetGame().GetPlayerController()) return;
 
-		//Print("AG0_TDLRadioComponent: Crypto key input cancelled (Client).", LogLevel.NORMAL);
+		//Print("AG0_TDLRadioComponent: Crypto key input cancelled (Client).", LogLevel.DEBUG);
 		CleanupDialogRefs();
 	}
 
@@ -344,7 +344,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 				m_sDefaultCryptoKey = m_BaseRadioComp.GetEncryptionKey();
 			}
 			m_sCurrentCryptoKey = m_BaseRadioComp.GetEncryptionKey();
-			//Print(string.Format("'%1' AG0_TDLRadioComponent::EOnInit - Syncing our default key to '%2'", owner, m_BaseRadioComp.GetEncryptionKey()), LogLevel.NORMAL);
+			//Print(string.Format("'%1' AG0_TDLRadioComponent::EOnInit - Syncing our default key to '%2'", owner, m_BaseRadioComp.GetEncryptionKey()), LogLevel.DEBUG);
 		}
 		m_DeviceComp = AG0_TDLDeviceComponent.Cast(owner.FindComponent(AG0_TDLDeviceComponent));
 	}
@@ -375,7 +375,7 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	    
 	    if (m_BaseRadioComp)
 	    {
-	        //Print(string.Format("'%1' AG0_TDLRadioComponent::SetCryptoKeyDirectly - Setting key to '%2'", GetOwner(), newKey), LogLevel.NORMAL);
+	        //Print(string.Format("'%1' AG0_TDLRadioComponent::SetCryptoKeyDirectly - Setting key to '%2'", GetOwner(), newKey), LogLevel.DEBUG);
 	        
 	        // Update the replicated property
 	        m_sCurrentCryptoKey = newKey;

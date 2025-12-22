@@ -21,7 +21,7 @@
 ////	    {
 ////			//Since FindController(controller, playerId) is scuffed and doesn't work.
 ////	        system.RegisterController(this, realPlayerId);
-////	        Print(string.Format("TDL_PLAYERCONTROLLER: Registered with player ID %1", realPlayerId), LogLevel.NORMAL);
+////	        Print(string.Format("TDL_PLAYERCONTROLLER: Registered with player ID %1", realPlayerId), LogLevel.DEBUG);
 ////	    }
 ////		m_iPlayerId = realPlayerId;
 ////		Replication.BumpMe();
@@ -33,7 +33,7 @@
 ////	        return;
 ////	        
 ////	    Rpc(RPC_RegisterWithPlayerID, playerId);
-////	    Print(string.Format("TDL_PLAYERCONTROLLER: Client registering with player ID %1", playerId), LogLevel.NORMAL);
+////	    Print(string.Format("TDL_PLAYERCONTROLLER: Client registering with player ID %1", playerId), LogLevel.DEBUG);
 ////	}
 //	
 //	override protected void OnAuthorityReady()

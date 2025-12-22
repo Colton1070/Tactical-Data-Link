@@ -94,7 +94,7 @@ class AG0_TDLMapView
         );
         
         Print(string.Format("[TDLMapView] Initialized - Map size: %1x%2, Offset: %3,%4", 
-            m_fMapSizeX, m_fMapSizeY, m_fMapOffsetX, m_fMapOffsetY), LogLevel.NORMAL);
+            m_fMapSizeX, m_fMapSizeY, m_fMapOffsetX, m_fMapOffsetY), LogLevel.DEBUG);
         
         return true;
     }
@@ -161,7 +161,7 @@ class AG0_TDLMapView
             return false;
         }
         
-        Print(string.Format("[TDLMapView] Loading texture: %1", texturePath), LogLevel.NORMAL);
+        Print(string.Format("[TDLMapView] Loading texture: %1", texturePath), LogLevel.DEBUG);
         
         m_pMapTexture = CanvasWidget.LoadTexture(texturePath);
         if (!m_pMapTexture)

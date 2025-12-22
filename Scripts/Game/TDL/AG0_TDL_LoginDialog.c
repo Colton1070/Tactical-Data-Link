@@ -24,8 +24,8 @@ class AG0_TDL_LoginDialog : SCR_ConfigurableDialogUi
 	    m_NetworkNameWidget = EditBoxWidget.Cast(m_wRoot.FindAnyWidget("NetworkNameInput"));
 	    m_NetworkPasswordWidget = EditBoxWidget.Cast(m_wRoot.FindAnyWidget("NetworkPasswordInput"));
 	    
-	    Print(string.Format("Name widget: %1", m_NetworkNameWidget), LogLevel.NORMAL);
-	    Print(string.Format("Pass widget: %1", m_NetworkPasswordWidget), LogLevel.NORMAL);
+	    Print(string.Format("Name widget: %1", m_NetworkNameWidget), LogLevel.DEBUG);
+	    Print(string.Format("Pass widget: %1", m_NetworkPasswordWidget), LogLevel.DEBUG);
 	    
 	    if (m_NetworkNameWidget)
 	        GetGame().GetWorkspace().SetFocusedWidget(m_NetworkNameWidget);

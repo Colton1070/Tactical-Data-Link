@@ -53,8 +53,22 @@ modded class SCR_PlayerController
 	        return;
 	    }
 	    
-	    // Otherwise open it
+	    // Only open if player has ATAK device
+	    if (!HasATAKDevice())
+	        return;
+	    
 	    menuManager.OpenMenu(ChimeraMenuPreset.AG0_TDLMenu);
+	}
+	
+	bool HasATAKDevice()
+	{
+	    array<AG0_TDLDeviceComponent> devices = GetPlayerTDLDevices();
+	    foreach (AG0_TDLDeviceComponent device : devices)
+	    {
+	        if (device.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
+	            return true;
+	    }
+	    return false;
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -330,5 +344,24 @@ modded class SCR_PlayerController
 	        return false;
 	    
 	    return invManager.Contains(device);
+	}
+	
+	void RequestKickDevice(RplId targetDeviceId)
+	{
+	    Rpc(RpcAsk_KickDevice, targetDeviceId);
+	}
+	
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_KickDevice(RplId targetDeviceId)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return;
+	    
+	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(targetDeviceId);
+	    if (!device)
+	        return;
+	    
+	    system.LeaveNetwork(device);
 	}
 }

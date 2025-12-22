@@ -26,6 +26,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     static protected bool s_bHasSavedState = false;
     
     // Panel state
+	// Active plugins (menu owns lifecycle)
+	protected ref array<ref AG0_ATAKPluginBase> m_aActivePlugins = {};
     protected ETDLPanelContent m_eActivePanel = ETDLPanelContent.NETWORK_LIST;
 	protected ref AG0_TDLMapCanvasDragHandler m_DragHandler;
 	protected bool m_bPlayerTracking = true;
@@ -38,12 +40,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     // Map view - always active
     protected ref AG0_TDLMapView m_MapView;
     protected CanvasWidget m_wMapCanvas;
-    protected Widget m_wMapPanel;
     
-    // Side panel structure
+    // Side panel structure (sibling of MainPanel in HorizontalLayout)
     protected Widget m_wSidePanel;
     protected TextWidget m_wPanelTitle;
-    protected Widget m_wCloseButton;
     protected Widget m_wNetworkContent;
     protected Widget m_wDetailContent;
     
@@ -86,7 +86,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected ImageWidget m_wHeadingIndicator;
     protected bool m_bTrackUp = true;  // Default to track-up mode
     
-    // Self marker widget (info panel - existing)
+    // Self marker widget (info panel)
 	protected Widget m_wSelfMarkerWidget;
 	protected TextWidget m_wGPSStatus;
 	protected TextWidget m_wCallsign;
@@ -95,6 +95,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	protected TextWidget m_wHeading;
 	protected TextWidget m_wSpeed;
 	protected TextWidget m_wError;
+    
+    // Self panel colors
+    protected ref Color COLOR_CYAN = new Color(0.2, 0.8, 0.8, 1.0);    // Cyan for normal text
+    protected ref Color COLOR_RED = new Color(1.0, 0.2, 0.2, 1.0);      // Red for NO GPS
     
     // Map marker overlay system (widget-based, clickable)
     protected Widget m_wMarkerOverlay;                                      // Parent frame for all markers
@@ -129,8 +133,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wRoot = GetRootWidget();
 	    m_InputManager = GetGame().GetInputManager();
 	    
-	    // Map panel (always visible)
-	    m_wMapPanel = m_wRoot.FindAnyWidget("MapPanel");
+	    // Map canvas (inside MainPanel > MainView)
 	    m_wMapCanvas = CanvasWidget.Cast(m_wRoot.FindAnyWidget("MapCanvas"));
 	    
 	    Widget dragSurface = m_wRoot.FindAnyWidget("MapDragSurface");
@@ -144,10 +147,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 		    m_DragHandler.m_OnDragStart.Insert(OnMapDragStart);
 		}
 	    
-	    // Side panel structure
+	    // Side panel structure (now sibling of MainPanel)
 	    m_wSidePanel = m_wRoot.FindAnyWidget("SidePanel");
 	    m_wPanelTitle = TextWidget.Cast(m_wRoot.FindAnyWidget("PanelTitle"));
-	    m_wCloseButton = m_wRoot.FindAnyWidget("CloseButton");
 	    m_wNetworkContent = m_wRoot.FindAnyWidget("NetworkContent");
 	    m_wDetailContent = m_wRoot.FindAnyWidget("DetailContent");
 	    
@@ -190,7 +192,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wTrackButton = m_wRoot.FindAnyWidget("TrackButton");
 	    m_wHeadingIndicator = ImageWidget.Cast(m_wRoot.FindAnyWidget("HeadingIndicator"));
 	    
-	    // Self marker widget
+	    // Self marker widget (info panel in StatusPanels)
 	    m_wSelfMarkerWidget = m_wRoot.FindAnyWidget("SelfMarkerWidget");
 	    m_wGPSStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("GPSStatus"));
 	    m_wCallsign = TextWidget.Cast(m_wRoot.FindAnyWidget("Callsign"));
@@ -199,6 +201,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wHeading = TextWidget.Cast(m_wRoot.FindAnyWidget("Heading"));
 	    m_wSpeed = TextWidget.Cast(m_wRoot.FindAnyWidget("Speed"));
 	    m_wError = TextWidget.Cast(m_wRoot.FindAnyWidget("Error"));
+	    
+	    // Apply initial cyan colors to self panel text widgets
+	    ApplySelfPanelColors();
 	    
 	    // Initialize map view
 	    if (m_wMapCanvas)
@@ -231,6 +236,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    
 	    // Get active TDL device
 	    FindActiveDevice();
+		
+		RefreshPlugins();
 	    
 	    // Restore or set initial panel state
 	    if (s_bHasSavedState)
@@ -239,6 +246,120 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
 		
 		HookButtonHandlers();
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Apply cyan color to all self panel text widgets
+	protected void ApplySelfPanelColors()
+	{
+	    // Set cyan for all text except GPSStatus (handled separately in UpdateSelfMarker)
+	    if (m_wCallsign) m_wCallsign.SetColor(COLOR_CYAN);
+	    if (m_wGrid) m_wGrid.SetColor(COLOR_CYAN);
+	    if (m_wAltitude) m_wAltitude.SetColor(COLOR_CYAN);
+	    if (m_wHeading) m_wHeading.SetColor(COLOR_CYAN);
+	    if (m_wSpeed) m_wSpeed.SetColor(COLOR_CYAN);
+	    if (m_wError) m_wError.SetColor(COLOR_CYAN);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Format grid reference with proper zero-padding
+	protected string FormatGridReference(vector pos, int numDigits = 4)
+	{
+	    // Get the raw grid label
+	    string rawGrid = SCR_MapEntity.GetGridLabel(pos, 2, numDigits, " ");
+	    
+	    // Parse and reformat with zero-padding
+	    // Expected format: "XX #### ####" where XX is zone letters, #### are easting/northing
+	    array<string> parts = {};
+	    rawGrid.Split(" ", parts, false);
+	    
+	    if (parts.Count() < 3)
+	        return rawGrid;  // Fallback if format unexpected
+	    
+	    string zone = parts[0];
+	    string easting = parts[1];
+	    string northing = parts[2];
+	    
+	    // Zero-pad easting and northing to numDigits
+	    while (easting.Length() < numDigits)
+	        easting = "0" + easting;
+	    while (northing.Length() < numDigits)
+	        northing = "0" + northing;
+	    
+	    return string.Format("%1 %2 %3", zone, easting, northing);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Check if player has any GPS-providing device
+	protected bool HasGPSProvider()
+	{
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return false;
+	    
+	    array<AG0_TDLDeviceComponent> heldDevices = controller.GetPlayerTDLDevices();
+	    foreach (AG0_TDLDeviceComponent device : heldDevices)
+	    {
+	        if (device && device.HasCapability(AG0_ETDLDeviceCapability.GPS_PROVIDER))
+	            return true;
+	    }
+	    
+	    return false;
+	}
+	
+	void RefreshPlugins()
+	{
+	    // Disable previous plugins
+	    foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
+	        plugin.Disable();
+	    m_aActivePlugins.Clear();
+	    
+	    if (!m_ActiveDevice || !m_ActiveDevice.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
+	        return;
+	    
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller) return;
+	    
+	    array<AG0_TDLDeviceComponent> heldDevices = controller.GetPlayerTDLDevices();
+	    
+	    // Collect supported plugin IDs from all held devices
+	    set<string> supportedPluginIDs = new set<string>();
+	    foreach (AG0_TDLDeviceComponent device : heldDevices)
+	    {
+	        array<string> devicePlugins = device.GetSupportedATAKPlugins();
+	        if (!devicePlugins) continue;
+	        
+	        foreach (string pluginID : devicePlugins)
+	            supportedPluginIDs.Insert(pluginID);
+	    }
+	    
+	    // Get available plugin configs from ATAK device, enable matching ones
+	    array<ref AG0_ATAKPluginBase> availablePlugins = m_ActiveDevice.GetAvailablePlugins();
+	    foreach (AG0_ATAKPluginBase plugin : availablePlugins)
+	    {
+	        if (!supportedPluginIDs.Contains(plugin.GetPluginID())) 
+	            continue;
+	        
+	        // Find source device for this plugin
+	        IEntity sourceDevice = FindSourceDeviceForPlugin(plugin.GetPluginID(), heldDevices);
+	        plugin.Enable(m_ActiveDevice, sourceDevice);
+	        m_aActivePlugins.Insert(plugin);
+	    }
+	    
+	    // Notify plugins menu is open
+	    foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
+	        plugin.OnMenuOpened(m_wRoot);
+	}
+	
+	protected IEntity FindSourceDeviceForPlugin(string pluginID, array<AG0_TDLDeviceComponent> devices)
+	{
+	    foreach (AG0_TDLDeviceComponent device : devices)
+	    {
+	        array<string> supported = device.GetSupportedATAKPlugins();
+	        if (supported && supported.Contains(pluginID))
+	            return device.GetOwner();
+	    }
+	    return null;
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -265,16 +386,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void HookButtonHandlers()
     {
-        // Close button
-        if (m_wCloseButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wCloseButton.FindHandler(SCR_ModularButtonComponent)
-            );
-            if (comp)
-                comp.m_OnClicked.Insert(OnClosePanelClicked);
-        }
-        
         // Back button (detail -> network)
         if (m_wBackButton)
         {
@@ -392,7 +503,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     {
         m_eActivePanel = content;
         
-        // Panel visibility
+        // Panel visibility - showing/hiding affects MainPanel size due to HorizontalLayout
         bool showPanel = (content != ETDLPanelContent.NONE);
         if (m_wSidePanel)
             m_wSidePanel.SetVisible(showPanel);
@@ -503,7 +614,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    if (m_wDetailGrid)
 	    {
 	        vector memberPos = m_SelectedMember.GetPosition();
-	        string gridLabel = SCR_MapEntity.GetGridLabel(memberPos, 2, 4, " ");
+	        string gridLabel = FormatGridReference(memberPos, 4);
 	        m_wDetailGrid.SetText(gridLabel);
 	    }
 	    
@@ -543,15 +654,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if ((caps & AG0_ETDLDeviceCapability.INFORMATION) != 0) result += "[INFO] ";
         return result;
     }
-    
+	
     //------------------------------------------------------------------------------------------------
     // BUTTON HANDLERS (internal - protected)
-    //------------------------------------------------------------------------------------------------
-    protected void OnClosePanelClicked()
-    {
-        SetPanelContent(ETDLPanelContent.NONE);
-    }
-    
     //------------------------------------------------------------------------------------------------
     protected void OnBackClicked()
     {
@@ -568,7 +673,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected void OnViewFeedClickedInternal()
     {
         if (m_SelectedMember)
-            Print("[TDLMenu] View feed clicked for " + m_SelectedMember.GetPlayerName(), LogLevel.NORMAL);
+            Print("[TDLMenu] View feed clicked for " + m_SelectedMember.GetPlayerName(), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -630,7 +735,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (playerController)
         {
             playerController.RequestSetDeviceCallsign(m_ActiveDevice.GetDeviceRplId(), newCallsign);
-            Print(string.Format("[TDLMenu] Requested callsign change to: %1", newCallsign), LogLevel.NORMAL);
+            Print(string.Format("[TDLMenu] Requested callsign change to: %1", newCallsign), LogLevel.DEBUG);
         }
         
         // Return to network list
@@ -752,6 +857,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    
 	    // Handle input
 	    HandleInput();
+		
+		// Update active plugins
+		foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
+		    plugin.OnMenuUpdate(tDelta);
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -799,9 +908,21 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    vector pos = player.GetOrigin();
 	    vector angles = player.GetYawPitchRoll();
 	    
-	    // GPS Status
+	    // GPS Status - check if any held device provides GPS
 	    if (m_wGPSStatus)
-	        m_wGPSStatus.SetText("GPS: 3D FIX");  // TODO: actual GPS state from device
+	    {
+	        bool hasGPS = HasGPSProvider();
+	        if (hasGPS)
+	        {
+	            m_wGPSStatus.SetText("GPS: 3D FIX");
+	            m_wGPSStatus.SetColor(COLOR_CYAN);
+	        }
+	        else
+	        {
+	            m_wGPSStatus.SetText("NO GPS");
+	            m_wGPSStatus.SetColor(COLOR_RED);
+	        }
+	    }
 	    
 	    // Callsign
 	    if (m_wCallsign)
@@ -815,7 +936,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    // Grid coordinates
 	    if (m_wGrid)
 		{
-		    string gridLabel = SCR_MapEntity.GetGridLabel(pos, 2, 4, " ");
+		    string gridLabel = FormatGridReference(pos, 4);
 		    m_wGrid.SetText(gridLabel);
 		}
 	    
@@ -1369,6 +1490,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    s_bLastPlayerTracking = m_bPlayerTracking;
 	    s_bLastTrackUp = m_bTrackUp;
 	    s_bHasSavedState = true;
+		
+		// Notify and disable plugins
+	    foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
+	    {
+	        plugin.OnMenuClosed();
+	        plugin.Disable();
+	    }
+	    m_aActivePlugins.Clear();
 		
 		// Cleanup map markers
 		CleanupAllMapMarkers();

@@ -116,7 +116,7 @@ class AG0_TDLSystem : WorldSystem
 	        .AddPoint(WorldSystemPoint.Frame);
 	        //.AddController(AG0_TDLController);
 	        
-	    Print("AG0_TDLSystem: Device-centric system initialized", LogLevel.NORMAL);
+	    Print("AG0_TDLSystem: Device-centric system initialized", LogLevel.DEBUG);
 	}
     
     //--------------------------------------------------------------------------

@@ -213,7 +213,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	
 	protected void OnStatusMessageReplicated()
 	{
-	    Print(string.Format("AG0_ControlDisplayUnitComponent::OnStatusMessageReplicated - Received message: '%1'", m_sStatusMessage), LogLevel.NORMAL);
+	    Print(string.Format("AG0_ControlDisplayUnitComponent::OnStatusMessageReplicated - Received message: '%1'", m_sStatusMessage), LogLevel.DEBUG);
 	    
 	    // Update UI if display is on
 	    if (m_IsDisplayOn && m_wRoot)
@@ -287,17 +287,17 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    
 	    // Store the current owner before transferring
 	    m_OriginalOwner = Replication.FindOwner(m_RplComp.Id());
-	    Print(string.Format("AG0_ControlDisplayUnitComponent: Current owner is %1", m_OriginalOwner), LogLevel.NORMAL);
+	    Print(string.Format("AG0_ControlDisplayUnitComponent: Current owner is %1", m_OriginalOwner), LogLevel.DEBUG);
 	    
 	    // Check if user is already the owner
 	    if (m_OriginalOwner == m_UserIdentity)
 	    {
-	        Print("AG0_ControlDisplayUnitComponent: User is already the owner, opening dialog directly", LogLevel.NORMAL);
+	        Print("AG0_ControlDisplayUnitComponent: User is already the owner, opening dialog directly", LogLevel.DEBUG);
 	        Rpc(RpcDo_OpenCryptoKeyDialog);
 	        return;
 	    }
 	    
-	    Print(string.Format("AG0_ControlDisplayUnitComponent: Giving ownership from %1 to %2", m_OriginalOwner, m_UserIdentity), LogLevel.NORMAL);
+	    Print(string.Format("AG0_ControlDisplayUnitComponent: Giving ownership from %1 to %2", m_OriginalOwner, m_UserIdentity), LogLevel.DEBUG);
 	    
 	    // Give ownership to the user so they can interact with the dialog
 	    m_RplComp.GiveExt(m_UserIdentity, true);
@@ -355,7 +355,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    if (System.IsConsoleApp())
 	        return; // Skip on dedicated server
 	        
-	    Print("AG0_ControlDisplayUnitComponent: Opening crypto key dialog", LogLevel.NORMAL);
+	    Print("AG0_ControlDisplayUnitComponent: Opening crypto key dialog", LogLevel.DEBUG);
 	    
 	    // Ensure display is on
 	    if (!m_IsDisplayOn)
@@ -436,7 +436,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    // Return ownership to server
 	    if (m_RplComp && m_OriginalOwner)
 	    {
-	        Print(string.Format("AG0_ControlDisplayUnitComponent: Returning ownership to owner %1", m_OriginalOwner), LogLevel.NORMAL);
+	        Print(string.Format("AG0_ControlDisplayUnitComponent: Returning ownership to owner %1", m_OriginalOwner), LogLevel.DEBUG);
 	        m_RplComp.GiveExt(m_OriginalOwner, true);
 	    }
 	}
@@ -445,7 +445,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
 	protected void RpcAsk_SetCryptoKey(string newKey)
 	{
-	    Print(string.Format("AG0_ControlDisplayUnitComponent: RpcAsk_SetCryptoKey - Received key: '%1' - Finding active radio", newKey), LogLevel.NORMAL);
+	    Print(string.Format("AG0_ControlDisplayUnitComponent: RpcAsk_SetCryptoKey - Received key: '%1' - Finding active radio", newKey), LogLevel.DEBUG);
 	    
 	    // Store the key on server
 	    m_CurrentCypherKey = newKey;
@@ -470,13 +470,13 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    // Apply key if we found a radio
 	    if (radioEntity)
 	    {
-	        Print(string.Format("AG0_ControlDisplayUnitComponent: Found radio entity, applying key: %1", radioEntity), LogLevel.NORMAL);
+	        Print(string.Format("AG0_ControlDisplayUnitComponent: Found radio entity, applying key: %1", radioEntity), LogLevel.DEBUG);
 	        ApplyKeyToRadio(radioEntity);
 	        
 	        // Return ownership to original owner
 	        if (m_RplComp && m_OriginalOwner)
 	        {
-	            Print(string.Format("AG0_ControlDisplayUnitComponent: Returning ownership to owner %1", m_OriginalOwner), LogLevel.NORMAL);
+	            Print(string.Format("AG0_ControlDisplayUnitComponent: Returning ownership to owner %1", m_OriginalOwner), LogLevel.DEBUG);
 	            m_RplComp.GiveExt(m_OriginalOwner, true);
 	        }
 	        Replication.BumpMe();
@@ -561,7 +561,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    // Return first matching radio if found
 	    if (foundItems.Count() > 0)
 	    {
-	        Print(string.Format("AG0_ControlDisplayUnitComponent: Found %1 TDL radios in inventory, using first one", foundItems.Count()), LogLevel.NORMAL);
+	        Print(string.Format("AG0_ControlDisplayUnitComponent: Found %1 TDL radios in inventory, using first one", foundItems.Count()), LogLevel.DEBUG);
 	        return foundItems[0];
 	    }
 	    
@@ -590,7 +590,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    if (m_bListeningForRadio)
 	        return;
 	        
-	    Print("AG0_ControlDisplayUnitComponent: Starting to listen for radio transmissions (CLIENT)", LogLevel.NORMAL);
+	    Print("AG0_ControlDisplayUnitComponent: Starting to listen for radio transmissions (CLIENT)", LogLevel.DEBUG);
 	    
 	    // Get LOCAL player's VoN component
 	    IEntity playerEntity = GetGame().GetPlayerController().GetControlledEntity();
@@ -616,7 +616,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	        m_bListeningForRadio = true;
 	        m_fListenTimeout = GetGame().GetWorld().GetWorldTime() + LISTEN_TIMEOUT;
 	        
-	        Print("AG0_ControlDisplayUnitComponent: Successfully hooked into VoN capture events", LogLevel.NORMAL);
+	        Print("AG0_ControlDisplayUnitComponent: Successfully hooked into VoN capture events", LogLevel.DEBUG);
 	        
 	        // Set a timer to stop listening after timeout
 	        GetGame().GetCallqueue().CallLater(CheckListenTimeout, 1000, true);
@@ -634,7 +634,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    if (!m_bListeningForRadio)
 	        return;
 	        
-	    Print("AG0_ControlDisplayUnitComponent: Stopping radio transmission listening", LogLevel.NORMAL);
+	    Print("AG0_ControlDisplayUnitComponent: Stopping radio transmission listening", LogLevel.DEBUG);
 	    
 	    // Unsubscribe from VoN capture events
 	    if (m_OnVonCapture)
@@ -672,7 +672,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    if (!transmitter || !m_bListeningForRadio)
 	        return;
 	        
-	    Print("AG0_ControlDisplayUnitComponent: Captured radio transmission via VoN (CLIENT)", LogLevel.NORMAL);
+	    Print("AG0_ControlDisplayUnitComponent: Captured radio transmission via VoN (CLIENT)", LogLevel.DEBUG);
 	    
 	    // Get radio component
 	    BaseRadioComponent radioComp = transmitter.GetRadio();
@@ -724,7 +724,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    }
 	    
 	    // Apply the key
-	    Print(string.Format("AG0_ControlDisplayUnitComponent: Applying key '%1' to radio", m_CurrentCypherKey), LogLevel.NORMAL);
+	    Print(string.Format("AG0_ControlDisplayUnitComponent: Applying key '%1' to radio", m_CurrentCypherKey), LogLevel.DEBUG);
 	    tdlRadioComp.SetCryptoKeyDirectly(m_CurrentCypherKey);
 	    
 	    // Notify original user - if applicable

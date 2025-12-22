@@ -19,7 +19,8 @@ enum AG0_ETDLDeviceCapability
     DISPLAY_OUTPUT = 4,
     VIDEO_SOURCE = 8,
     POWER_PROVIDER = 16,
-	INFORMATION = 32
+	INFORMATION = 32,
+	ATAK_DEVICE = 64
 }
 
 [EntityEditorProps(category: "GameScripted/Gadgets", description: "TDL radio gadget", color: "0 0 255 255")]
@@ -70,6 +71,12 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
         defvalue: AG0_ETDLDeviceCapability.NETWORK_ACCESS.ToString()
     )]
 	protected AG0_ETDLDeviceCapability m_eCapabilities;
+	
+	[Attribute("", UIWidgets.Auto, category: "ATAK Plugin Support")]
+	protected ref array<string> m_aSupportedATAKPlugins;
+	
+	[Attribute("", UIWidgets.Auto, category: "ATAK Configuration")]
+	protected ref array<ref AG0_ATAKPluginBase> m_aAvailablePlugins;
 	
 	[Attribute("1", UIWidgets.CheckBox, category: "Network Config")]
 	protected bool m_bUseTDLRadio;
@@ -160,21 +167,19 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	{
 	    super.EOnPostFrame(owner, timeSlice);
 	    
-	    // Ask controller if we're held
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
-		    GetGame().GetPlayerController()
-		);
+	        GetGame().GetPlayerController()
+	    );
 	    if (!controller || !controller.IsHoldingDevice(owner))
 	        return;
-		
-		if (IsPowered() && 
-	        HasCapability(AG0_ETDLDeviceCapability.INFORMATION) &&
-	        HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
+	    
+	    // Only activate context for ATAK devices
+	    if (IsPowered() && HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
 	    {
 	        GetGame().GetInputManager().ActivateContext("TDLMenuContext");
 	    }
 	    
-	    // Use GetActiveVideoSource() which returns local source
+	    // Video display logic stays the same
 	    RplId activeSource = GetActiveVideoSource();
 	    if (activeSource == RplId.Invalid())
 	        return;
@@ -245,6 +250,18 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
         m_bCapabilitiesActive = false;
         // Specific capability shutdown logic here
     }
+	
+	array<string> GetSupportedATAKPlugins() 
+	{ 
+	    if (!m_aSupportedATAKPlugins) return {};
+	    return m_aSupportedATAKPlugins; 
+	}
+	
+	array<ref AG0_ATAKPluginBase> GetAvailablePlugins() 
+	{ 
+	    if (!m_aAvailablePlugins) return {};
+	    return m_aAvailablePlugins; 
+	}
 	
 	//------------------------------------------------------------------------------------------------
 	// Camera Broadcasting API (Server-side)
@@ -650,7 +667,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	//------------------------------------------------------------------------------------------------
 	protected void OnNetworkDialogConfirm(SCR_ConfigurableDialogUi dialog)
 	{
-	    Print("OnNetworkDialogConfirm FIRED", LogLevel.NORMAL);
+	    Print("OnNetworkDialogConfirm FIRED", LogLevel.DEBUG);
     
 	    AG0_TDL_LoginDialog loginDialog = AG0_TDL_LoginDialog.Cast(dialog);
 	    if (!loginDialog) {
@@ -661,7 +678,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    string networkName = loginDialog.GetNetworkName();
 	    string networkPassword = loginDialog.GetNetworkPassword();
 	    
-	    Print(string.Format("Got values: name='%1' pass='%2'", networkName, networkPassword), LogLevel.NORMAL);
+	    Print(string.Format("Got values: name='%1' pass='%2'", networkName, networkPassword), LogLevel.DEBUG);
 
 	    
 	    if (networkName.IsEmpty()) return;  // Only check you probably want
