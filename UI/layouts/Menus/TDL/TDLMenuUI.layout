@@ -216,6 +216,57 @@ FrameWidgetClass {
               }
              }
             }
+            ButtonWidgetClass "{672E2D9E23C89987}" {
+             Name "CameraButton"
+             Slot LayoutSlot "{672744BED246674C}" {
+              Padding 5 5 5 5
+             }
+             components {
+              SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{672744BF0F6BAD46}" {
+                 m_eEvents 6149
+                 m_sWidgetName "CameraImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{672E2D9E23C89986}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{672E2D9E23C89985}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{672E2D9E23C8CB0B}" {
+                   Name "CameraImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{9418973A5AD2D2F1}UI/Textures/Icons/tdl_video.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
            }
           }
           VerticalLayoutWidgetClass "{672744B481A77C63}" {

@@ -835,7 +835,17 @@ class AG0_TDLSystem : WorldSystem
 							{
 							    PlayerManager playerMgr = GetGame().GetPlayerManager();
 							    ownerPlayerId = playerMgr.GetPlayerIdFromControlledEntity(connectedPlayer);
-								int aggregatedCaps = GetAggregatedPlayerCapabilities(connectedPlayer);
+								array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(connectedPlayer);
+								int aggregatedCaps = 0;
+							    foreach (AG0_TDLDeviceComponent dev : playerDevices)
+							    {
+							        if (dev.IsCameraBroadcasting() && dev.HasCapability(AG0_ETDLDeviceCapability.VIDEO_SOURCE))
+							        {
+							            connectedData.SetVideoSourceRplId(dev.GetDeviceRplId());
+							        }
+									if (dev.IsPowered())
+                						aggregatedCaps |= dev.GetActiveCapabilities();
+							    }
 								connectedData.SetCapabilities(aggregatedCaps);
 							}
 							else {

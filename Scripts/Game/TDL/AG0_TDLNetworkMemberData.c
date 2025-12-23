@@ -4,8 +4,8 @@ class AG0_TDLNetworkMember
 {
     // Define our data sizes
     static const int MAX_PLAYER_NAME_LENGTH = 32;  // Fixed size for player name
-    static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1 + 4;  
-	// RplId(4) + PlayerName(32) + Position(12) + Signal(4) + NetworkIP(4) + Capabilities(4) + IsPowered(1) + GPSActive(1) + OwnerPlayerId(4) = 70 bytes
+    static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1 + 4 + 4;
+	// RplId(4) + PlayerName(32) + Position(12) + Signal(4) + NetworkIP(4) + Capabilities(4) + IsPowered(1) + GPSActive(1) + OwnerPlayerId(4) + VideoSourceRplId(4) = 74 bytes
     
     protected RplId m_RplId;
     protected string m_sPlayerName;
@@ -16,6 +16,7 @@ class AG0_TDLNetworkMember
     protected bool m_bIsPowered;
     protected bool m_bGPSActive;
 	protected int m_iOwnerPlayerId = -1;  // -1 = no player owner
+	protected RplId m_VideoSourceRplId;
     
     // Getters
     RplId GetRplId() { return m_RplId; }
@@ -25,6 +26,7 @@ class AG0_TDLNetworkMember
     int GetNetworkIP() { return m_iNetworkIP; }
     int GetCapabilities() { return m_iDeviceCapabilities; }
 	int GetOwnerPlayerId() { return m_iOwnerPlayerId; }
+	RplId GetVideoSourceRplId() { return m_VideoSourceRplId; }
     
     // Setters
     void SetRplId(RplId rplId) { m_RplId = rplId; }
@@ -34,6 +36,7 @@ class AG0_TDLNetworkMember
     void SetSignalStrength(float strength) { m_fSignalStrength = strength; }
     void SetCapabilities(int capabilities) { m_iDeviceCapabilities = capabilities; }
 	void SetOwnerPlayerId(int playerId) { m_iOwnerPlayerId = playerId; }
+	void SetVideoSourceRplId(RplId rplId) { m_VideoSourceRplId = rplId; }
     
     // Extract - following Mario's pattern exactly
     static bool Extract(AG0_TDLNetworkMember instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
@@ -85,6 +88,9 @@ class AG0_TDLNetworkMember
 		
 		// PlayerId - 4 bytes
 		snapshot.SerializeBytes(instance.m_iOwnerPlayerId, 4);
+		
+		// VideoSourceRplId - 4 bytes
+        snapshot.SerializeBytes(instance.m_VideoSourceRplId, 4);
 
         
         return true;
@@ -139,6 +145,9 @@ class AG0_TDLNetworkMember
         
 		// PlayerId - 4 bytes
 		snapshot.SerializeBytes(instance.m_iOwnerPlayerId, 4);
+		
+		// VideoSourceRplId - 4 bytes
+		snapshot.SerializeBytes(instance.m_VideoSourceRplId, 4);
 		
         return true;
     }

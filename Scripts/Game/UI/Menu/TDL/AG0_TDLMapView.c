@@ -101,30 +101,37 @@ class AG0_TDLMapView
     
     //------------------------------------------------------------------------------------------------
     protected bool LoadMapData()
-    {
-        SCR_MapEntity mapEntity = SCR_MapEntity.GetMapInstance();
-        if (!mapEntity)
-        {
-            Print("[TDLMapView] No MapEntity instance found", LogLevel.ERROR);
-            return false;
-        }
-        
-        vector size = mapEntity.Size();
-        vector offset = mapEntity.Offset();
-        
-        m_fMapSizeX = size[0];
-        m_fMapSizeY = size[2];
-        m_fMapOffsetX = offset[0];
-        m_fMapOffsetY = offset[2];
-        
-        if (m_fMapSizeX <= 0 || m_fMapSizeY <= 0)
-        {
-            Print("[TDLMapView] Invalid map dimensions", LogLevel.ERROR);
-            return false;
-        }
-        
-        return true;
-    }
+	{
+	    SCR_MapEntity mapEntity = SCR_MapEntity.GetMapInstance();
+	    if (mapEntity)
+	    {
+	        vector size = mapEntity.Size();
+	        vector offset = mapEntity.Offset();
+	        
+	        m_fMapSizeX = size[0];
+	        m_fMapSizeY = size[2];
+	        m_fMapOffsetX = offset[0];
+	        m_fMapOffsetY = offset[2];
+	    }
+	    
+	    // Fallback to world bounds
+	    if (m_fMapSizeX <= 0 || m_fMapSizeY <= 0)
+	    {
+	        BaseWorld world = GetGame().GetWorld();
+	        if (!world)
+	            return false;
+	        
+	        vector mins, maxs;
+	        world.GetBoundBox(mins, maxs);
+	        
+	        m_fMapSizeX = maxs[0] - mins[0];
+	        m_fMapSizeY = maxs[2] - mins[2];
+	        m_fMapOffsetX = mins[0];
+	        m_fMapOffsetY = mins[2];
+	    }
+	    
+	    return (m_fMapSizeX > 0 && m_fMapSizeY > 0);
+	}
     
     //------------------------------------------------------------------------------------------------
 	protected bool LoadMapTexture()

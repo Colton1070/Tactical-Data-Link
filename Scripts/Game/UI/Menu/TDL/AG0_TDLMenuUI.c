@@ -78,6 +78,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected Widget m_wToolbar;
     protected Widget m_wMenuButton;
     protected Widget m_wNetworkButton;
+	protected Widget m_wCameraButton;
     
     // Zoom/compass controls
     protected Widget m_wZoomInButton;
@@ -129,13 +130,18 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected const ResourceName MEMBER_MARKER_LAYOUT = "{23872C52B88FDB59}UI/layouts/Menus/TDL/TDLMenuBuddyMarker.layout";
 	
 	// Remote feed viewing
-	
 	protected bool m_bViewingRemoteFeed = false;
 	protected IEntity m_SpawnedFeedCamera;
 	protected CameraBase m_OriginalCamera;
 	protected Widget m_wFeedOverlay;
 	protected Widget m_wFeedBackButton;
 	protected TextWidget m_wFeedMemberName;
+	
+	// Pending feed attachment (for streaming delay)
+	protected RplId m_PendingFeedSourceId;
+	protected vector m_PendingFeedPosition;
+	protected float m_fFeedAttachTimer;
+	protected const float FEED_ATTACH_TIMEOUT = 5.0;
 	
 	protected const ResourceName FEED_CAMERA_PREFAB = "{F3CDC6E4F329E496}Prefabs/Characters/Core/TDLDevicePlayerCamera.et";
     
@@ -196,6 +202,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wToolbar = m_wRoot.FindAnyWidget("Toolbar");
 	    m_wMenuButton = m_wRoot.FindAnyWidget("MenuButton");
 	    m_wNetworkButton = m_wRoot.FindAnyWidget("NetworkButton");
+		m_wCameraButton = m_wRoot.FindAnyWidget("CameraButton");
 	    
 	    // Zoom/compass controls
 	    m_wZoomInButton = m_wRoot.FindAnyWidget("ZoomInButton");
@@ -495,6 +502,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             if (comp)
                 comp.m_OnClicked.Insert(OnNetworkButtonClicked);
         }
+		
+		if (m_wCameraButton)
+		{
+		    SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+		        m_wCameraButton.FindHandler(SCR_ModularButtonComponent));
+		    if (comp)
+		        comp.m_OnClicked.Insert(OnCameraButtonClicked);
+		}
         
         // View feed button
         if (m_wViewFeedButton)
@@ -758,6 +773,22 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     {
         ToggleSidePanel();
     }
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnCameraButtonClicked()
+	{
+	    AG0_TDLDeviceComponent cameraDevice = GetLocalCameraDevice();
+	    if (!cameraDevice)
+	    {
+	        Print("[TDL Menu] No camera device found", LogLevel.DEBUG);
+	        return;
+	    }
+	    
+	    bool newState = !cameraDevice.IsCameraBroadcasting();
+	    cameraDevice.SetCameraBroadcasting(newState);
+	    
+	    Print(string.Format("[TDL Menu] Camera broadcast: %1", newState), LogLevel.DEBUG);
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void OnViewLocationClickedInternal()
@@ -802,76 +833,74 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	//------------------------------------------------------------------------------------------------
 	protected void OnViewFeedClickedInternal()
 	{
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-	    if (!controller)
-	        return;
-	    
-	    array<RplId> sources = controller.GetAvailableVideoSources();
-	    if (sources.IsEmpty())
+	    if (!m_SelectedMember)
 	    {
-	        Print("[TDL Feed] No video sources available", LogLevel.DEBUG);
+	        Print("[TDL Feed] No selected member", LogLevel.DEBUG);
 	        return;
 	    }
 	    
-	    // Just grab first available for now
-	    RplId sourceId = sources[0];
+	    RplId sourceId = m_SelectedMember.GetVideoSourceRplId();
+	    if (sourceId == RplId.Invalid())
+	    {
+	        Print("[TDL Feed] Selected member has no video source", LogLevel.DEBUG);
+	        return;
+	    }
 	    
-	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(sourceId));
-	    if (!rpl)
+	    // Start feed view at member's known position
+	    EnterRemoteFeedView(sourceId, m_SelectedMember.GetPosition());
+	}
+	
+	protected void UpdateCameraButtonState()
+	{
+	    if (!m_wCameraButton)
 	        return;
 	    
-	    IEntity remoteEntity = rpl.GetEntity();
-	    if (!remoteEntity)
-	        return;
+	    AG0_TDLDeviceComponent cameraDevice = GetLocalCameraDevice();
+	    bool broadcasting = cameraDevice && cameraDevice.IsCameraBroadcasting();
 	    
-	    AG0_TDLDeviceComponent remoteDevice = AG0_TDLDeviceComponent.Cast(
-	        remoteEntity.FindComponent(AG0_TDLDeviceComponent));
-	    
-	    if (!remoteDevice || !remoteDevice.m_CameraAttachment)
-	        return;
-	    
-	    EnterRemoteFeedView(remoteEntity, remoteDevice);
+	    // Update button text or icon based on state
+	    ImageWidget cameraIcon = ImageWidget.Cast(m_wCameraButton.FindAnyWidget("CameraImage"));
+	    if (cameraIcon) {
+			if(broadcasting) {
+				cameraIcon.SetColor(Color.Red);
+			}
+			else {
+				cameraIcon.SetColor(Color.White);
+			}
+		}
 	}
 	
 	//------------------------------------------------------------------------------------------------
-	protected void EnterRemoteFeedView(IEntity remoteEntity, AG0_TDLDeviceComponent remoteDevice)
+	protected AG0_TDLDeviceComponent GetLocalCameraDevice()
+	{
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return null;
+	    
+	    foreach (AG0_TDLDeviceComponent device : controller.GetPlayerTDLDevices())
+	    {
+	        if (device.HasCapability(AG0_ETDLDeviceCapability.VIDEO_SOURCE) && device.IsPowered())
+	            return device;
+	    }
+	    return null;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void EnterRemoteFeedView(RplId sourceId, vector position)
 	{
 	    if (System.IsConsoleApp())
 	        return;
 	    
 	    m_OriginalCamera = GetGame().GetCameraManager().CurrentCamera();
 	    
+	    // Spawn camera at member's position (from network data)
 	    EntitySpawnParams params = new EntitySpawnParams();
+	    params.Transform[3] = position;
 	    m_SpawnedFeedCamera = GetGame().SpawnEntityPrefab(
 	        Resource.Load(FEED_CAMERA_PREFAB), null, params);
 	    
 	    if (!m_SpawnedFeedCamera)
 	        return;
-	    
-	    // Attach camera to remote device
-	    remoteDevice.m_CameraAttachment.Init(remoteEntity);
-	    
-	    bool attached = false;
-	    SlotManagerComponent slotMgr = SlotManagerComponent.Cast(
-	        remoteEntity.FindComponent(SlotManagerComponent));
-	    
-	    if (slotMgr)
-	    {
-	        EntitySlotInfo slot = slotMgr.GetSlotByName("Camera");
-	        if (slot)
-	        {
-	            slot.AttachEntity(m_SpawnedFeedCamera);
-	            attached = true;
-	        }
-	    }
-	    
-	    if (!attached)
-	    {
-	        m_SpawnedFeedCamera.AddChild(remoteEntity, -1, EAddChildFlags.AUTO_TRANSFORM);
-	        vector localMat[4];
-	        remoteDevice.m_CameraAttachment.GetLocalTransform(localMat);
-	        m_SpawnedFeedCamera.SetLocalTransform(localMat);
-	    }
 	    
 	    CameraBase feedCam = CameraBase.Cast(m_SpawnedFeedCamera);
 	    if (!feedCam)
@@ -881,10 +910,44 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        return;
 	    }
 	    
+	    // Switch camera immediately - this triggers streaming for that area
 	    GetGame().GetCameraManager().SetCamera(feedCam);
 	    m_bViewingRemoteFeed = true;
 	    
+	    // Store pending attachment info
+	    m_PendingFeedSourceId = sourceId;
+	    m_PendingFeedPosition = position;
+	    m_fFeedAttachTimer = 0;
+	    
 	    SetFeedViewMode(true);
+	    Print(string.Format("[TDL Feed] Entered feed view, waiting for device %1 to stream in", sourceId), LogLevel.DEBUG);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void AttachToRemoteCamera(IEntity remoteEntity, AG0_TDLDeviceComponent remoteDevice)
+	{
+	    remoteDevice.m_CameraAttachment.Init(remoteEntity);
+	    
+	    SlotManagerComponent slotMgr = SlotManagerComponent.Cast(
+	        remoteEntity.FindComponent(SlotManagerComponent));
+	    
+	    if (slotMgr)
+	    {
+	        EntitySlotInfo slot = slotMgr.GetSlotByName("Camera");
+	        if (slot)
+	        {
+	            slot.AttachEntity(m_SpawnedFeedCamera);
+	            Print("[TDL Feed] Attached to camera slot", LogLevel.DEBUG);
+	            return;
+	        }
+	    }
+	    
+	    // Fallback - direct attachment
+	    m_SpawnedFeedCamera.AddChild(remoteEntity, -1, EAddChildFlags.AUTO_TRANSFORM);
+	    vector localMat[4];
+	    remoteDevice.m_CameraAttachment.GetLocalTransform(localMat);
+	    m_SpawnedFeedCamera.SetLocalTransform(localMat);
+	    Print("[TDL Feed] Attached via direct transform", LogLevel.DEBUG);
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -904,8 +967,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    
 	    m_bViewingRemoteFeed = false;
 	    m_OriginalCamera = null;
+	    m_PendingFeedSourceId = RplId.Invalid();
 	    
 	    SetFeedViewMode(false);
+	    Print("[TDL Feed] Exited feed view", LogLevel.DEBUG);
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -1025,12 +1090,49 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     override void OnMenuUpdate(float tDelta)
 	{
 	    super.OnMenuUpdate(tDelta);
-	    
+		
 		if (m_bViewingRemoteFeed)
 	    {
 	        // MenuBack input as escape hatch
 	        if (m_InputManager && m_InputManager.GetActionTriggered("MenuBack"))
+	        {
 	            ExitRemoteFeedView();
+	            return;
+	        }
+	        
+	        // Poll for pending attachment
+	        if (m_PendingFeedSourceId != RplId.Invalid())
+	        {
+	            m_fFeedAttachTimer += tDelta;
+	            
+	            // Try to attach to actual device
+	            RplComponent rpl = RplComponent.Cast(Replication.FindItem(m_PendingFeedSourceId));
+	            if (rpl)
+	            {
+	                IEntity remoteEntity = rpl.GetEntity();
+	                if (remoteEntity)
+	                {
+	                    AG0_TDLDeviceComponent remoteDevice = AG0_TDLDeviceComponent.Cast(
+	                        remoteEntity.FindComponent(AG0_TDLDeviceComponent));
+	                    
+	                    if (remoteDevice && remoteDevice.m_CameraAttachment)
+	                    {
+	                        AttachToRemoteCamera(remoteEntity, remoteDevice);
+	                        m_PendingFeedSourceId = RplId.Invalid();
+	                        Print("[TDL Feed] Successfully attached to remote camera", LogLevel.DEBUG);
+	                    }
+	                }
+	            }
+	            
+	            // Timeout - device never streamed in
+	            if (m_fFeedAttachTimer > FEED_ATTACH_TIMEOUT)
+	            {
+	                Print("[TDL Feed] Timeout waiting for device to stream", LogLevel.WARNING);
+	                m_PendingFeedSourceId = RplId.Invalid();
+	                // Stay at position, just won't be attached
+	            }
+	        }
+	        
 	        return;
 	    }
 		
@@ -1077,6 +1179,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	            RefreshNetworkList();
 	        else if (m_eActivePanel == ETDLPanelContent.MEMBER_DETAIL)
 	            PopulateDetailView();
+			UpdateCameraButtonState();
 	    }
 	    
 	    // Handle input

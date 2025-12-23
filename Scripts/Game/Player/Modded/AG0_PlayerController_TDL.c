@@ -169,6 +169,26 @@ modded class SCR_PlayerController
 	    system.LeaveNetwork(device);
 	}
 	
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_SetCameraBroadcasting(RplId deviceRplId, bool broadcasting)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return;
+	    
+	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
+	    if (!device)
+	        return;
+	    
+	    // Optional: verify player owns this device
+	    // IEntity deviceOwner = system.GetPlayerFromDevice(device);
+	    // if (deviceOwner != GetControlledEntity())
+	    //     return;
+	    
+	    device.SetCameraBroadcasting(broadcasting);
+	    Print(string.Format("[TDL Controller] Set camera broadcast to %1 for device %2", broadcasting, deviceRplId), LogLevel.DEBUG);
+	}
+	
 	//------------------------------------------------------------------------------------------------
 	// Callsign Management
 	//------------------------------------------------------------------------------------------------
@@ -233,6 +253,14 @@ modded class SCR_PlayerController
     {
         return m_AvailableVideoSourcesSet.Contains(sourceId);
     }
+	
+	//------------------------------------------------------------------------------------------------
+	// Camera Broadcast Management
+	//------------------------------------------------------------------------------------------------
+	void RequestSetCameraBroadcasting(RplId deviceRplId, bool broadcasting)
+	{
+	    Rpc(RpcAsk_SetCameraBroadcasting, deviceRplId, broadcasting);
+	}
     
     //------------------------------------------------------------------------------------------------
     // Public getters
