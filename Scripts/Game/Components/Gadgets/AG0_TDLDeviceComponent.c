@@ -358,24 +358,46 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	//------------------------------------------------------------------------------------------------
 	protected void OnCameraBroadcastingChanged()
     {
-        Print(string.Format("TDL_VIDEO: Broadcasting changed to %1 on device %2", m_bCameraBroadcasting, GetOwner()), LogLevel.DEBUG);
+        Print(string.Format("TDL_VIDEO: OnCameraBroadcastingChanged called - state is now %1 on device %2", 
+            m_bCameraBroadcasting, GetOwner()), LogLevel.DEBUG);
         
-        // On client, register/unregister with PC
+        // Guard: On client, only process if this is a genuine state change
+        // and avoid duplicate registration/unregistration
         if (!System.IsConsoleApp())
         {
             SCR_PlayerController controller = SCR_PlayerController.Cast(
 			    GetGame().GetPlayerController()
 			);
-            if (controller)
+            if (!controller)
             {
-                RplId myId = GetDeviceRplId();
-                if (myId != RplId.Invalid())
-                {
-                    if (m_bCameraBroadcasting)
-                        controller.RegisterBroadcastingDevice(myId);
-                    else
-                        controller.UnregisterBroadcastingDevice(myId);
-                }
+                Print("TDL_VIDEO: No player controller, skipping registration update", LogLevel.DEBUG);
+                return;
+            }
+            
+            RplId myId = GetDeviceRplId();
+            if (myId == RplId.Invalid())
+            {
+                Print("TDL_VIDEO: Invalid device RplId, skipping registration update", LogLevel.DEBUG);
+                return;
+            }
+            
+            // Check current registration state to avoid duplicate operations
+            bool isCurrentlyRegistered = controller.IsVideoSourceAvailable(myId);
+            
+            if (m_bCameraBroadcasting && !isCurrentlyRegistered)
+            {
+                controller.RegisterBroadcastingDevice(myId);
+                Print(string.Format("TDL_VIDEO: Registered broadcasting device %1", myId), LogLevel.DEBUG);
+            }
+            else if (!m_bCameraBroadcasting && isCurrentlyRegistered)
+            {
+                controller.UnregisterBroadcastingDevice(myId);
+                Print(string.Format("TDL_VIDEO: Unregistered broadcasting device %1", myId), LogLevel.DEBUG);
+            }
+            else
+            {
+                Print(string.Format("TDL_VIDEO: No registration change needed (broadcasting=%1, registered=%2)", 
+                    m_bCameraBroadcasting, isCurrentlyRegistered), LogLevel.DEBUG);
             }
         }
     }

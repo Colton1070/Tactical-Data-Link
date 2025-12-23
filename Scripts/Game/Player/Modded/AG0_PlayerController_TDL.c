@@ -171,19 +171,13 @@ modded class SCR_PlayerController
 	
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
 	protected void RpcAsk_SetCameraBroadcasting(RplId deviceRplId, bool broadcasting)
-	{
-	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-	    if (!system)
-	        return;
-	    
-	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
-	    if (!device)
-	        return;
-	    
-	    // Optional: verify player owns this device
-	    // IEntity deviceOwner = system.GetPlayerFromDevice(device);
-	    // if (deviceOwner != GetControlledEntity())
-	    //     return;
+	{   
+	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(deviceRplId));
+		if (!rpl) return;
+		IEntity entity = rpl.GetEntity();
+		if (!entity) return;
+		AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+		    entity.FindComponent(AG0_TDLDeviceComponent));
 	    
 	    device.SetCameraBroadcasting(broadcasting);
 	    Print(string.Format("[TDL Controller] Set camera broadcast to %1 for device %2", broadcasting, deviceRplId), LogLevel.DEBUG);
