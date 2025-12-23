@@ -1,24 +1,9 @@
 FrameWidgetClass {
  Name "rootFrame"
  {
-  ImageWidgetClass "{672C1C733C0EC9FC}" {
-   Name "Image0"
-   Slot FrameWidgetSlot "{672C1C733C0EC9E4}" {
-    Anchor 0 0 1 1
-    PositionX 0
-    OffsetLeft 0
-    PositionY 0
-    OffsetTop 0
-    SizeX -1820
-    OffsetRight 0
-    SizeY -1050
-    OffsetBottom 0
-   }
-   Color 0 0 0 1
-  }
-  HorizontalLayoutWidgetClass "{6728802FCEA8D316}" {
-   Name "HorizontalLayout0"
-   Slot FrameWidgetSlot "{6728802FCEA8D3E7}" {
+  FrameWidgetClass "{672CCA4D7D8C41AF}" {
+   Name "MainFrame"
+   Slot FrameWidgetSlot "{672CCA4D7D8C4196}" {
     Anchor 0 0 1 1
     PositionX 0
     OffsetLeft 0
@@ -30,120 +15,202 @@ FrameWidgetClass {
     OffsetBottom 0
    }
    {
-    OverlayWidgetClass "{6728802C8D85B182}" {
-     Name "MainPanel"
-     Slot LayoutSlot "{6728802C8D85B067}" {
-      SizeMode Fill
+    ImageWidgetClass "{672C1C733C0EC9FC}" {
+     Name "Image0"
+     Slot FrameWidgetSlot "{672C1C733C0EC9E4}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX -1820
+      OffsetRight 0
+      SizeY -1050
+      OffsetBottom 0
+     }
+     Color 0 0 0 1
+    }
+    HorizontalLayoutWidgetClass "{6728802FCEA8D316}" {
+     Name "HorizontalLayout0"
+     Slot FrameWidgetSlot "{6728802FCEA8D3E7}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX -1820
+      OffsetRight 0
+      SizeY -1050
+      OffsetBottom 0
      }
      {
-      FrameWidgetClass "{6728802F8A53178F}" {
-       Name "MainView"
-       Slot OverlayWidgetSlot "{672C1C7088C120D9}" {
-        HorizontalAlign 3
-        VerticalAlign 3
+      OverlayWidgetClass "{6728802C8D85B182}" {
+       Name "MainPanel"
+       Slot LayoutSlot "{6728802C8D85B067}" {
+        SizeMode Fill
        }
        {
-        CanvasWidgetClass "{67216436162E589B}" {
-         Name "MapCanvas"
-         Slot FrameWidgetSlot "{67237B346D8AE5AC}" {
-          Anchor 0 0 1 1
-          PositionX 0
-          OffsetLeft 0
-          PositionY 0
-          OffsetTop 0
-          SizeX 0
-          OffsetRight 0
-          SizeY 0
-          OffsetBottom 0
-         }
-        }
-        ButtonWidgetClass "{672776DF191E1E28}" {
-         Name "MapDragSurface"
-         Slot FrameWidgetSlot "{672776DF61B9C9F0}" {
-          Anchor 0 0 1 1
-          PositionX 0
-          OffsetLeft 0
-          PositionY 0
-          OffsetTop 0
-          SizeX -1820
-          OffsetRight 0
-          SizeY -1050
-          OffsetBottom 0
-         }
-         style blank
-        }
-        FrameWidgetClass "{67282DAA107C0E4B}" {
-         Name "MarkerOverlay"
-         Slot FrameWidgetSlot "{67282DAA107C0E33}" {
-          Anchor 0 0 1 1
-          PositionX 0
-          OffsetLeft 0
-          PositionY 0
-          OffsetTop 0
-          SizeX 0
-          OffsetRight 0
-          SizeY 0
-          OffsetBottom 0
-         }
-        }
-        HorizontalLayoutWidgetClass "{672744B4B0157132}" {
-         Name "Toolbar"
-         Slot FrameWidgetSlot "{672744B4B015712F}" {
-          Anchor 0 0 1 0.09
-          PositionX 20
-          OffsetLeft 20
-          PositionY 0
-          OffsetTop 0
-          SizeX -20.821
-          OffsetRight 0
-          SizeY 0
-          OffsetBottom 0
+        FrameWidgetClass "{6728802F8A53178F}" {
+         Name "MainView"
+         Slot OverlayWidgetSlot "{672C1C7088C120D9}" {
+          HorizontalAlign 3
+          VerticalAlign 3
          }
          {
-          ButtonWidgetClass "{672744BED24666CB}" {
-           Name "MenuButton"
-           Slot LayoutSlot "{672744BED246674C}" {
-            Padding 5 5 5 5
+          CanvasWidgetClass "{67216436162E589B}" {
+           Name "MapCanvas"
+           Slot FrameWidgetSlot "{67237B346D8AE5AC}" {
+            Anchor 0 0 1 1
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX 0
+            OffsetRight 0
+            SizeY 0
+            OffsetBottom 0
            }
-           components {
-            SCR_ModularButtonComponent "{672744BF03265B8A}" {
-             m_aEffects {
-              SCR_ButtonEffectColor "{672744BF03265B8B}" {
-               m_eEvents 6149
-               m_sWidgetName "MenuImage"
-               m_fAnimationTime 0.08
-               m_cDefault 0.75 0.75 0.75 1
-               m_cHovered 0.2 0.8 0.8 1
-               m_cActivated 0.2 0.8 0.8 1
-               m_cActivatedHovered 0.3 1 1 1
-               m_cClicked 0.3 1 1 1
-               m_cFocusGained 0.2 0.8 0.8 1
-               m_cFocusLost 0.75 0.75 0.75 1
-              }
-             }
-             m_bFocusOnMouseEnter 1
-            }
+          }
+          ButtonWidgetClass "{672776DF191E1E28}" {
+           Name "MapDragSurface"
+           Slot FrameWidgetSlot "{672776DF61B9C9F0}" {
+            Anchor 0 0 1 1
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX -1820
+            OffsetRight 0
+            SizeY -1050
+            OffsetBottom 0
            }
            style blank
+          }
+          FrameWidgetClass "{67282DAA107C0E4B}" {
+           Name "MarkerOverlay"
+           Slot FrameWidgetSlot "{67282DAA107C0E33}" {
+            Anchor 0 0 1 1
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX 0
+            OffsetRight 0
+            SizeY 0
+            OffsetBottom 0
+           }
+          }
+          HorizontalLayoutWidgetClass "{672744B4B0157132}" {
+           Name "Toolbar"
+           Slot FrameWidgetSlot "{672744B4B015712F}" {
+            Anchor 0 0 1 0.09
+            PositionX 20
+            OffsetLeft 20
+            PositionY 0
+            OffsetTop 0
+            SizeX -20.821
+            OffsetRight 0
+            SizeY 0
+            OffsetBottom 0
+           }
            {
-            SizeLayoutWidgetClass "{67275C19CD4BCFC9}" {
-             Name "SizeLayout0"
-             Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+            ButtonWidgetClass "{672744BED24666CB}" {
+             Name "MenuButton"
+             Slot LayoutSlot "{672744BED246674C}" {
+              Padding 5 5 5 5
              }
+             components {
+              SCR_ModularButtonComponent "{672744BF03265B8A}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{672744BF03265B8B}" {
+                 m_eEvents 6149
+                 m_sWidgetName "MenuImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
              {
-              OverlayWidgetClass "{67275C19CD4BCFC8}" {
-               Name "Overlay0"
-               Slot AlignableSlot "{67275C1BB68F4311}" {
+              SizeLayoutWidgetClass "{67275C19CD4BCFC9}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
                }
                {
-                ImageWidgetClass "{67275C19CD4BCFD7}" {
-                 Name "MenuImage"
-                 Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
-                  Padding 5 5 5 5
+                OverlayWidgetClass "{67275C19CD4BCFC8}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
                  }
-                 Texture "{7EA399A15183315E}UI/Textures/Icons/tdl_menu_drawer.edds"
-                 Size 48 48
-                 "Blend Mode" Additive
+                 {
+                  ImageWidgetClass "{67275C19CD4BCFD7}" {
+                   Name "MenuImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{7EA399A15183315E}UI/Textures/Icons/tdl_menu_drawer.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+            ButtonWidgetClass "{672744BEDB7C4683}" {
+             Name "NetworkButton"
+             Slot LayoutSlot "{672744BED246674C}" {
+              Padding 5 5 5 5
+             }
+             components {
+              SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{672744BF0F6BAD46}" {
+                 m_eEvents 6149
+                 m_sWidgetName "NetworkImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{67275C19C3FC3288}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{67275C19C3FC3297}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{67275C19C3FC3296}" {
+                   Name "NetworkImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{2F23EE621A1BEF47}UI/Textures/Icons/tdl_contacts.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
                 }
                }
               }
@@ -151,48 +218,464 @@ FrameWidgetClass {
             }
            }
           }
-          ButtonWidgetClass "{672744BEDB7C4683}" {
-           Name "NetworkButton"
-           Slot LayoutSlot "{672744BED246674C}" {
-            Padding 5 5 5 5
+          VerticalLayoutWidgetClass "{672744B481A77C63}" {
+           Name "ZoomControls"
+           Slot FrameWidgetSlot "{6728802DDC416426}" {
+            PositionX 2.567
+            OffsetLeft 2.567
+            PositionY 439.374
+            OffsetTop 439.374
+            SizeX 100
+            OffsetRight -102.567
+            SizeY 300
+            OffsetBottom -739.374
+           }
+           {
+            ButtonWidgetClass "{672744BF189D2876}" {
+             Name "CompassButton"
+             Slot LayoutSlot "{672744BED246674C}" {
+              Padding 5 5 5 5
+             }
+             components {
+              SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{672744BF0F6BAD47}" {
+                 m_eEvents 6149
+                 m_sWidgetName "CompassImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{67275C19E8581FF2}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{67275C19E8581FF1}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{67275C19E8581FF7}" {
+                   Name "CompassImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{6943A873BDA3844C}UI/Textures/Icons/tdl_compass_circle.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                  ImageWidgetClass "{672776CABC09ADEF}" {
+                   Name "HeadingIndicator"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{F804D09B9119D791}UI/Textures/Icons/tdl_north_arrow.edds"
+                   Size 32 32
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+            ButtonWidgetClass "{672776CA6A21725E}" {
+             Name "TrackButton"
+             Slot LayoutSlot "{672776CC9A09F557}" {
+              Padding 5 5 5 5
+             }
+             components {
+              SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{672744BF0F6BAD47}" {
+                 m_eEvents 6149
+                 m_sWidgetName "TrackImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{672776CA6A217253}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{672776CA6A217257}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{672776CA6A217255}" {
+                   Name "TrackImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{B00DF20357CD4ACF}UI/Textures/Icons/tdl_target.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+            ButtonWidgetClass "{672744BF5B10E574}" {
+             Name "ZoomInButton"
+             Slot LayoutSlot "{672744BED246674C}" {
+              Padding 5 5 5 5
+             }
+             components {
+              SCR_ModularButtonComponent "{672744BF0F6BAD48}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{672744BF0F6BAD49}" {
+                 m_eEvents 6149
+                 m_sWidgetName "ZoomInImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{67275C19F72FFAB6}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{67275C19F72FFAB5}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{67275C19F72FFAB4}" {
+                   Name "ZoomInImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{FA13349C64F76DC5}UI/Textures/Icons/tdl_plus.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+            ButtonWidgetClass "{672744BFB8206571}" {
+             Name "ZoomOutButton"
+             Slot LayoutSlot "{672744BED246674C}" {
+              Padding 5 5 5 5
+             }
+             components {
+              SCR_ModularButtonComponent "{672744BF0F6BAD50}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{672744BF0F6BAD51}" {
+                 m_eEvents 6149
+                 m_sWidgetName "ZoomOutImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{67275C19F2E31E77}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{67275C19F2E31E76}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{67275C19F2E3628A}" {
+                   Name "ZoomOutImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{FD66C624115C3FD7}UI/Textures/Icons/tdl_minus.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+          VerticalLayoutWidgetClass "{672880530762BD78}" {
+           Name "StatusPanels"
+           Slot FrameWidgetSlot "{672880530762BD67}" {
+            Anchor 1 1 1 1
+            OffsetLeft 0
+            OffsetTop 0
+            SizeX 1420
+            OffsetRight -1420
+            SizeY 1080
+            OffsetBottom -1080
+            Alignment 1 1
+            SizeToContent 1
+           }
+           {
+            OverlayWidgetClass "{67288053E62CE58D}" {
+             Name "SelfPanel"
+             Slot LayoutSlot "{67288053E62CE46F}" {
+              Padding 10 10 10 10
+             }
+             "Z Order" 99
+             {
+              ImageWidgetClass "{672744B2BE578E9D}" {
+               Name "BackgroundPanel"
+               Slot OverlayWidgetSlot "{672C1C7088C128E9}" {
+                HorizontalAlign 3
+                VerticalAlign 3
+               }
+               Color 0.0118 0.0118 0.0118 0.8
+               Texture "{012010010314EB94}UI/Textures/Icons/tdl_self_panel.edds"
+               Size 350 190
+              }
+              FrameWidgetClass "{672744B492164D1A}" {
+               Name "SelfMarkerWidget"
+               Slot OverlayWidgetSlot "{672C1C7088C128C8}" {
+                Padding 10 10 10 10
+               }
+               {
+                SizeLayoutWidgetClass "{67288053E3346C23}" {
+                 Name "SizeLayout0"
+                 Slot FrameWidgetSlot "{67288053FD3956B8}" {
+                  PositionX 0
+                  OffsetLeft 0
+                  PositionY 0
+                  OffsetTop 0
+                  SizeX 317.622
+                  OffsetRight -317.622
+                  SizeY 46.516
+                  OffsetBottom -46.516
+                 }
+                 AllowWidthOverride 1
+                 WidthOverride 300
+                 AllowHeightOverride 1
+                 HeightOverride 200
+                }
+                VerticalLayoutWidgetClass "{672744B5227EC6FD}" {
+                 Name "VerticalLayout0"
+                 Slot FrameWidgetSlot "{672744B5227EC68A}" {
+                  Anchor 0 0 1 1
+                  PositionX 0
+                  OffsetLeft 0
+                  PositionY 0
+                  OffsetTop 0
+                  SizeX 0
+                  OffsetRight 0
+                  SizeY 0
+                  OffsetBottom 0
+                  Alignment 0 0
+                  SizeToContent 1
+                 }
+                 {
+                  TextWidgetClass "{672744B53240338F}" {
+                   Name "GPSStatus"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "GPSStatus"
+                  }
+                  TextWidgetClass "{672744B538F648F4}" {
+                   Name "Callsign"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "Callsign"
+                  }
+                  TextWidgetClass "{672744B5019D2CAE}" {
+                   Name "Grid"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "Grid"
+                  }
+                  HorizontalLayoutWidgetClass "{672744B58BA46179}" {
+                   Name "HorizontalLayout0"
+                   Slot LayoutSlot "{672744B58BA4611C}" {
+                   }
+                   {
+                    TextWidgetClass "{672744B597F61B95}" {
+                     Name "Altitude"
+                     Slot LayoutSlot "{672744B597F61BBA}" {
+                      SizeMode Fill
+                     }
+                     Text "---MSL"
+                    }
+                    TextWidgetClass "{672744B5942D0DA4}" {
+                     Name "Heading"
+                     Slot LayoutSlot "{672744B5942D0E66}" {
+                      SizeMode Fill
+                     }
+                     Text "---*M"
+                     "Horizontal Alignment" Right
+                    }
+                   }
+                  }
+                  HorizontalLayoutWidgetClass "{672744B5DDF2A6A1}" {
+                   Name "HorizontalLayout1"
+                   Slot LayoutSlot "{672744B58BA4611C}" {
+                   }
+                   {
+                    TextWidgetClass "{672744B5DDF2A6A6}" {
+                     Name "Speed"
+                     Slot LayoutSlot "{672744B597F61BBA}" {
+                      SizeMode Fill
+                     }
+                     Text "--MPH"
+                    }
+                    TextWidgetClass "{672744B5DDF2A6A4}" {
+                     Name "Error"
+                     Slot LayoutSlot "{672744B5942D0E66}" {
+                      SizeMode Fill
+                     }
+                     Text "+/- --m"
+                     "Horizontal Alignment" Right
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+      OverlayWidgetClass "{671E54EF901D0A38}" {
+       Name "SidePanel"
+       Slot LayoutSlot "{672C1C7088C12E65}" {
+       }
+       {
+        ImageWidgetClass "{672744B0E801F614}" {
+         Name "BackgroundPanel"
+         Slot OverlayWidgetSlot "{672744BCB8202FA2}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+         }
+         Color 0.0118 0.0118 0.0118 0.8938
+        }
+        SizeLayoutWidgetClass "{672880527C485E60}" {
+         Name "SizeH_Reg"
+         Slot OverlayWidgetSlot "{672880527C485E33}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+         }
+         AllowWidthOverride 1
+         WidthOverride 500
+         AllowMinDesiredWidth 1
+         MinDesiredWidth 500
+         AllowMaxDesiredWidth 1
+         MaxDesiredWidth 700
+        }
+        HorizontalLayoutWidgetClass "{67237B34FC73A2E9}" {
+         Name "PanelHeader"
+         Slot OverlayWidgetSlot "{67237B34FC73A2B4}" {
+          HorizontalAlign 2
+          VerticalAlign 0
+          Padding 20 20 20 20
+         }
+         {
+          TextWidgetClass "{67237B34CCF9B2CE}" {
+           Name "PanelTitle"
+           Slot LayoutSlot "{67237B34CCF9B297}" {
+            HorizontalAlign 1
+            VerticalAlign 1
+           }
+           Text "PanelTitle"
+           "Font Size" 32
+          }
+          ButtonWidgetClass "{67237B37113AD91D}" {
+           Name "SettingsButton"
+           Slot LayoutSlot "{67237B37113AD9E5}" {
+            HorizontalAlign 1
+            VerticalAlign 1
            }
            components {
-            SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
+            SCR_ModularButtonComponent "{67237B371D7C889C}" {
              m_aEffects {
-              SCR_ButtonEffectColor "{672744BF0F6BAD46}" {
+              SCR_ButtonEffectColor "{67237B37193CC41B}" {
                m_eEvents 6149
-               m_sWidgetName "NetworkImage"
+               m_sWidgetName "SettingsImage"
                m_fAnimationTime 0.08
                m_cDefault 0.75 0.75 0.75 1
-               m_cHovered 0.2 0.8 0.8 1
-               m_cActivated 0.2 0.8 0.8 1
-               m_cActivatedHovered 0.3 1 1 1
-               m_cClicked 0.3 1 1 1
+               m_cHovered 0.9 0.2 0.2 1
+               m_cActivated 0.9 0.2 0.2 1
+               m_cActivatedHovered 1 0.4 0.4 1
+               m_cClicked 1 0.4 0.4 1
                m_cFocusGained 0.2 0.8 0.8 1
                m_cFocusLost 0.75 0.75 0.75 1
               }
              }
+             m_eEventReturnValue 2147483645
              m_bFocusOnMouseEnter 1
             }
            }
            style blank
            {
-            SizeLayoutWidgetClass "{67275C19C3FC3288}" {
+            SizeLayoutWidgetClass "{67275C1BAA1557D5}" {
              Name "SizeLayout0"
              Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
              }
              {
-              OverlayWidgetClass "{67275C19C3FC3297}" {
+              OverlayWidgetClass "{67275C1BB68F432E}" {
                Name "Overlay0"
                Slot AlignableSlot "{67275C1BB68F4311}" {
                }
                {
-                ImageWidgetClass "{67275C19C3FC3296}" {
-                 Name "NetworkImage"
+                ImageWidgetClass "{67275C1BB4F61D14}" {
+                 Name "SettingsImage"
                  Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
                   Padding 5 5 5 5
                  }
-                 Texture "{2F23EE621A1BEF47}UI/Textures/Icons/tdl_contacts.edds"
+                 Texture "{D727847DBF6D9798}UI/Textures/Icons/tdl_settings.edds"
                  Size 48 48
                  "Blend Mode" Additive
                 }
@@ -204,368 +687,358 @@ FrameWidgetClass {
           }
          }
         }
-        VerticalLayoutWidgetClass "{672744B481A77C63}" {
-         Name "ZoomControls"
-         Slot FrameWidgetSlot "{6728802DDC416426}" {
-          PositionX 2.567
-          OffsetLeft 2.567
-          PositionY 439.374
-          OffsetTop 439.374
-          SizeX 100
-          OffsetRight -102.567
-          SizeY 300
-          OffsetBottom -739.374
+        FrameWidgetClass "{672744B67D8BA8D9}" {
+         Name "NetworkContent"
+         Slot OverlayWidgetSlot "{672744B67D8BA8C1}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+          Padding 5 100 5 5
          }
+         "Is Visible" 0
          {
-          ButtonWidgetClass "{672744BF189D2876}" {
-           Name "CompassButton"
-           Slot LayoutSlot "{672744BED246674C}" {
-            Padding 5 5 5 5
+          TextWidgetClass "{672744B6AF200BED}" {
+           Name "DeviceName"
+           Slot FrameWidgetSlot "{672744B6AF200BD0}" {
+            Anchor 0 0 0 0
+            PositionX 23.06
+            OffsetLeft 23.06
+            PositionY 59.81
+            OffsetTop 59.81
+            SizeX 99.999
+            OffsetRight -123.059
+            SizeY 30
+            OffsetBottom -89.81
+            SizeToContent 1
+           }
+           Text "DeviceName"
+          }
+          ScrollLayoutWidgetClass "{672744B6FAAB2B3F}" {
+           Name "ScrollLayout"
+           Slot FrameWidgetSlot "{672744B6FAAB2B1B}" {
+            Anchor 0 0 1 0
+            PositionX 22.348
+            OffsetLeft 22.348
+            PositionY 102.954
+            OffsetTop 102.954
+            SizeX -36.44
+            OffsetRight 14.092
+            SizeY 849.019
+            OffsetBottom -951.973
            }
            components {
-            SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
-             m_aEffects {
-              SCR_ButtonEffectColor "{672744BF0F6BAD47}" {
-               m_eEvents 6149
-               m_sWidgetName "CompassImage"
-               m_fAnimationTime 0.08
-               m_cDefault 0.75 0.75 0.75 1
-               m_cHovered 0.2 0.8 0.8 1
-               m_cActivated 0.2 0.8 0.8 1
-               m_cActivatedHovered 0.3 1 1 1
-               m_cClicked 0.3 1 1 1
-               m_cFocusGained 0.2 0.8 0.8 1
-               m_cFocusLost 0.75 0.75 0.75 1
-              }
-             }
-             m_bFocusOnMouseEnter 1
+            SCR_GamepadScrollComponent "{672744B72963802E}" {
             }
            }
-           style blank
+           "Up rule" Explicit
+           "Up target" "CloseButton"
            {
-            SizeLayoutWidgetClass "{67275C19E8581FF2}" {
-             Name "SizeLayout0"
-             Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
-             }
-             {
-              OverlayWidgetClass "{67275C19E8581FF1}" {
-               Name "Overlay0"
-               Slot AlignableSlot "{67275C1BB68F4311}" {
-               }
-               {
-                ImageWidgetClass "{67275C19E8581FF7}" {
-                 Name "CompassImage"
-                 Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
-                  Padding 5 5 5 5
-                 }
-                 Texture "{6943A873BDA3844C}UI/Textures/Icons/tdl_compass_circle.edds"
-                 Size 48 48
-                 "Blend Mode" Additive
-                }
-                ImageWidgetClass "{672776CABC09ADEF}" {
-                 Name "HeadingIndicator"
-                 Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
-                  Padding 5 5 5 5
-                 }
-                 Texture "{F804D09B9119D791}UI/Textures/Icons/tdl_north_arrow.edds"
-                 Size 32 32
-                }
-               }
-              }
-             }
-            }
-           }
-          }
-          ButtonWidgetClass "{672776CA6A21725E}" {
-           Name "TrackButton"
-           Slot LayoutSlot "{672776CC9A09F557}" {
-            Padding 5 5 5 5
-           }
-           components {
-            SCR_ModularButtonComponent "{672744BF0F6BAD45}" {
-             m_aEffects {
-              SCR_ButtonEffectColor "{672744BF0F6BAD47}" {
-               m_eEvents 6149
-               m_sWidgetName "TrackImage"
-               m_fAnimationTime 0.08
-               m_cDefault 0.75 0.75 0.75 1
-               m_cHovered 0.2 0.8 0.8 1
-               m_cActivated 0.2 0.8 0.8 1
-               m_cActivatedHovered 0.3 1 1 1
-               m_cClicked 0.3 1 1 1
-               m_cFocusGained 0.2 0.8 0.8 1
-               m_cFocusLost 0.75 0.75 0.75 1
-              }
-             }
-             m_bFocusOnMouseEnter 1
-            }
-           }
-           style blank
-           {
-            SizeLayoutWidgetClass "{672776CA6A217253}" {
-             Name "SizeLayout0"
-             Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
-             }
-             {
-              OverlayWidgetClass "{672776CA6A217257}" {
-               Name "Overlay0"
-               Slot AlignableSlot "{67275C1BB68F4311}" {
-               }
-               {
-                ImageWidgetClass "{672776CA6A217255}" {
-                 Name "TrackImage"
-                 Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
-                  Padding 5 5 5 5
-                 }
-                 Texture "{B00DF20357CD4ACF}UI/Textures/Icons/tdl_target.edds"
-                 Size 48 48
-                 "Blend Mode" Additive
-                }
-               }
-              }
-             }
-            }
-           }
-          }
-          ButtonWidgetClass "{672744BF5B10E574}" {
-           Name "ZoomInButton"
-           Slot LayoutSlot "{672744BED246674C}" {
-            Padding 5 5 5 5
-           }
-           components {
-            SCR_ModularButtonComponent "{672744BF0F6BAD48}" {
-             m_aEffects {
-              SCR_ButtonEffectColor "{672744BF0F6BAD49}" {
-               m_eEvents 6149
-               m_sWidgetName "ZoomInImage"
-               m_fAnimationTime 0.08
-               m_cDefault 0.75 0.75 0.75 1
-               m_cHovered 0.2 0.8 0.8 1
-               m_cActivated 0.2 0.8 0.8 1
-               m_cActivatedHovered 0.3 1 1 1
-               m_cClicked 0.3 1 1 1
-               m_cFocusGained 0.2 0.8 0.8 1
-               m_cFocusLost 0.75 0.75 0.75 1
-              }
-             }
-             m_bFocusOnMouseEnter 1
-            }
-           }
-           style blank
-           {
-            SizeLayoutWidgetClass "{67275C19F72FFAB6}" {
-             Name "SizeLayout0"
-             Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
-             }
-             {
-              OverlayWidgetClass "{67275C19F72FFAB5}" {
-               Name "Overlay0"
-               Slot AlignableSlot "{67275C1BB68F4311}" {
-               }
-               {
-                ImageWidgetClass "{67275C19F72FFAB4}" {
-                 Name "ZoomInImage"
-                 Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
-                  Padding 5 5 5 5
-                 }
-                 Texture "{FA13349C64F76DC5}UI/Textures/Icons/tdl_plus.edds"
-                 Size 48 48
-                 "Blend Mode" Additive
-                }
-               }
-              }
-             }
-            }
-           }
-          }
-          ButtonWidgetClass "{672744BFB8206571}" {
-           Name "ZoomOutButton"
-           Slot LayoutSlot "{672744BED246674C}" {
-            Padding 5 5 5 5
-           }
-           components {
-            SCR_ModularButtonComponent "{672744BF0F6BAD50}" {
-             m_aEffects {
-              SCR_ButtonEffectColor "{672744BF0F6BAD51}" {
-               m_eEvents 6149
-               m_sWidgetName "ZoomOutImage"
-               m_fAnimationTime 0.08
-               m_cDefault 0.75 0.75 0.75 1
-               m_cHovered 0.2 0.8 0.8 1
-               m_cActivated 0.2 0.8 0.8 1
-               m_cActivatedHovered 0.3 1 1 1
-               m_cClicked 0.3 1 1 1
-               m_cFocusGained 0.2 0.8 0.8 1
-               m_cFocusLost 0.75 0.75 0.75 1
-              }
-             }
-             m_bFocusOnMouseEnter 1
-            }
-           }
-           style blank
-           {
-            SizeLayoutWidgetClass "{67275C19F2E31E77}" {
-             Name "SizeLayout0"
-             Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
-             }
-             {
-              OverlayWidgetClass "{67275C19F2E31E76}" {
-               Name "Overlay0"
-               Slot AlignableSlot "{67275C1BB68F4311}" {
-               }
-               {
-                ImageWidgetClass "{67275C19F2E3628A}" {
-                 Name "ZoomOutImage"
-                 Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
-                  Padding 5 5 5 5
-                 }
-                 Texture "{FD66C624115C3FD7}UI/Textures/Icons/tdl_minus.edds"
-                 Size 48 48
-                 "Blend Mode" Additive
-                }
-               }
-              }
-             }
-            }
-           }
-          }
-         }
-        }
-        VerticalLayoutWidgetClass "{672880530762BD78}" {
-         Name "StatusPanels"
-         Slot FrameWidgetSlot "{672880530762BD67}" {
-          Anchor 1 1 1 1
-          OffsetLeft 0
-          OffsetTop 0
-          SizeX 1420
-          OffsetRight -1420
-          SizeY 1080
-          OffsetBottom -1080
-          Alignment 1 1
-          SizeToContent 1
-         }
-         {
-          OverlayWidgetClass "{67288053E62CE58D}" {
-           Name "SelfPanel"
-           Slot LayoutSlot "{67288053E62CE46F}" {
-            Padding 10 10 10 10
-           }
-           "Z Order" 99
-           {
-            ImageWidgetClass "{672744B2BE578E9D}" {
-             Name "BackgroundPanel"
-             Slot OverlayWidgetSlot "{672C1C7088C128E9}" {
+            VerticalLayoutWidgetClass "{672744B72240C24F}" {
+             Name "MemberList"
+             Slot AlignableSlot "{672744B72240C235}" {
               HorizontalAlign 3
               VerticalAlign 3
              }
-             Color 0.0118 0.0118 0.0118 0.8
-             Texture "{012010010314EB94}UI/Textures/Icons/tdl_self_panel.edds"
-             Size 350 190
             }
-            FrameWidgetClass "{672744B492164D1A}" {
-             Name "SelfMarkerWidget"
-             Slot OverlayWidgetSlot "{672C1C7088C128C8}" {
-              Padding 10 10 10 10
-             }
-             {
-              SizeLayoutWidgetClass "{67288053E3346C23}" {
-               Name "SizeLayout0"
-               Slot FrameWidgetSlot "{67288053FD3956B8}" {
-                PositionX 0
-                OffsetLeft 0
-                PositionY 0
-                OffsetTop 0
-                SizeX 317.622
-                OffsetRight -317.622
-                SizeY 46.516
-                OffsetBottom -46.516
-               }
-               AllowWidthOverride 1
-               WidthOverride 300
-               AllowHeightOverride 1
-               HeightOverride 200
+           }
+          }
+         }
+        }
+        VerticalLayoutWidgetClass "{672744B744EC4BE6}" {
+         Name "DetailContent"
+         Slot OverlayWidgetSlot "{672744B744EC4BC7}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+          Padding 0 100 0 0
+         }
+         "Is Visible" 0
+         {
+          TextWidgetClass "{672744B7815A6848}" {
+           Name "DetailPlayerName"
+           Slot LayoutSlot "{672744B7815A6828}" {
+           }
+           Text "DetailPlayerName"
+          }
+          TextWidgetClass "{672744B78AB778D2}" {
+           Name "DetailSignalStrength"
+           Slot LayoutSlot "{672744B7815A6828}" {
+           }
+           Text "DetailSignalStrength"
+          }
+          TextWidgetClass "{672744B794149F84}" {
+           Name "DetailNetworkIP"
+           Slot LayoutSlot "{672744B7815A6828}" {
+           }
+           Text "DetailNetworkIP"
+          }
+          TextWidgetClass "{672881134AA803DC}" {
+           Name "DetailGrid"
+           Slot LayoutSlot "{672744B7815A6828}" {
+           }
+           Text "DetailGrid"
+          }
+          TextWidgetClass "{672744B7918B7844}" {
+           Name "DetailDistance"
+           Slot LayoutSlot "{672744B7815A6828}" {
+           }
+           Text "DetailDistance"
+          }
+          TextWidgetClass "{672744B79AA71B7B}" {
+           Name "DetailCapabilities"
+           Slot LayoutSlot "{672744B7815A6828}" {
+           }
+           Text "DetailCapabilities"
+          }
+          ButtonWidgetClass "{67282DBA2A8414AD}" {
+           Name "ViewLocationButton"
+           Slot LayoutSlot "{672744B7F13077A9}" {
+           }
+           components {
+            SCR_ModularButtonComponent "{672744B4318F20C9}" {
+             m_aEffects {
+              SCR_ButtonEffectColor "{672744B46F15C2EF}" {
+               m_eEvents 6149
+               m_sWidgetName "ViewLocationText"
+               m_fAnimationTime 0.08
+               m_cDefault 0.75 0.75 0.75 1
+               m_cHovered 0.2 0.8 0.8 1
+               m_cActivated 0.2 0.8 0.8 1
+               m_cActivatedHovered 0.3 1 1 1
+               m_cClicked 0.3 1 1 1
+               m_cFocusGained 0.2 0.8 0.8 1
+               m_cFocusLost 0.75 0.75 0.75 1
               }
-              VerticalLayoutWidgetClass "{672744B5227EC6FD}" {
-               Name "VerticalLayout0"
-               Slot FrameWidgetSlot "{672744B5227EC68A}" {
-                Anchor 0 0 1 1
-                PositionX 0
-                OffsetLeft 0
-                PositionY 0
-                OffsetTop 0
-                SizeX 0
-                OffsetRight 0
-                SizeY 0
-                OffsetBottom 0
-                Alignment 0 0
-                SizeToContent 1
+             }
+             m_bFocusOnMouseEnter 1
+            }
+           }
+           style blank
+           {
+            TextWidgetClass "{67282DBA2A8414AC}" {
+             Name "ViewLocationText"
+             Slot ButtonWidgetSlot "{672744B3DCF248EE}" {
+             }
+             Text "View Location"
+            }
+           }
+          }
+          ButtonWidgetClass "{672744B7F13077D6}" {
+           Name "ViewFeedButton"
+           Slot LayoutSlot "{672744B7F13077A9}" {
+           }
+           components {
+            SCR_ModularButtonComponent "{672744B4318F20C9}" {
+             m_aEffects {
+              SCR_ButtonEffectColor "{672744B46F15C2EF}" {
+               m_eEvents 6149
+               m_sWidgetName "ViewFeedText"
+               m_fAnimationTime 0.08
+               m_cDefault 0.75 0.75 0.75 1
+               m_cHovered 0.2 0.8 0.8 1
+               m_cActivated 0.2 0.8 0.8 1
+               m_cActivatedHovered 0.3 1 1 1
+               m_cClicked 0.3 1 1 1
+               m_cFocusGained 0.2 0.8 0.8 1
+               m_cFocusLost 0.75 0.75 0.75 1
+              }
+             }
+             m_bFocusOnMouseEnter 1
+            }
+           }
+           style blank
+           {
+            TextWidgetClass "{672744B7E6F251DB}" {
+             Name "ViewFeedText"
+             Slot ButtonWidgetSlot "{672744B3DCF248EE}" {
+             }
+             Text "View Feed"
+            }
+           }
+          }
+          ButtonWidgetClass "{672744B7C302E86A}" {
+           Name "BackButton"
+           Slot LayoutSlot "{672744B7F13077A9}" {
+           }
+           components {
+            SCR_ModularButtonComponent "{672744B43F32BE8C}" {
+             m_aEffects {
+              SCR_ButtonEffectColor "{672744B4046ACA52}" {
+               m_eEvents 6149
+               m_sWidgetName "BackText"
+               m_fAnimationTime 0.08
+               m_cDefault 0.75 0.75 0.75 1
+               m_cHovered 0.2 0.8 0.8 1
+               m_cActivated 0.2 0.8 0.8 1
+               m_cActivatedHovered 0.3 1 1 1
+               m_cClicked 0.3 1 1 1
+               m_cFocusGained 0.2 0.8 0.8 1
+               m_cFocusLost 0.75 0.75 0.75 1
+              }
+             }
+             m_bFocusOnMouseEnter 1
+            }
+           }
+           style blank
+           {
+            TextWidgetClass "{672744B7C302B343}" {
+             Name "BackText"
+             Slot ButtonWidgetSlot "{672744B7C302E982}" {
+             }
+             Text "Back"
+            }
+           }
+          }
+         }
+        }
+        VerticalLayoutWidgetClass "{67282DB654861726}" {
+         Name "SettingsContent"
+         Slot OverlayWidgetSlot "{672744B744EC4BC7}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+          Padding 0 100 0 0
+         }
+         "Is Visible" 0
+         {
+          RichTextWidgetClass "{67282DB32926A25D}" {
+           Name "CallsignText"
+           Slot LayoutSlot "{67282D8E78942445}" {
+            Padding 10 10 10 10
+           }
+           Text "Set Callsign"
+          }
+          FrameWidgetClass "{67282DB5ABF5B61B}" {
+           Name "CallsignEditBoxFrame"
+           Slot LayoutSlot "{67282DB5ABF5B628}" {
+            Padding 10 10 10 10
+           }
+           {
+            ButtonWidgetClass "{67282DB59DDA83DA}" {
+             Name "CallsignEditBox"
+             Slot FrameWidgetSlot "{67282DB59DDA8392}" {
+              Anchor 0 0 1 0
+              PositionX 0
+              OffsetLeft 0
+              PositionY 0
+              OffsetTop 0
+              SizeX -499.559
+              OffsetRight 0
+              SizeY 48
+              OffsetBottom -48
+             }
+             components {
+              AG0_EditBoxComponent "{67282DB5F8F41964}" {
+               m_cOutlineDefault 0.157 0.27 0.263 0.3
+               m_cOutlineFocused 0 0.799 0.793 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{67282DB2A459FF00}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67282DB2A459FF29}" {
+                HorizontalAlign 3
+                VerticalAlign 3
                }
                {
-                TextWidgetClass "{672744B53240338F}" {
-                 Name "GPSStatus"
-                 Slot LayoutSlot "{672744B5324033A6}" {
-                 }
-                 Text "GPSStatus"
-                }
-                TextWidgetClass "{672744B538F648F4}" {
-                 Name "Callsign"
-                 Slot LayoutSlot "{672744B5324033A6}" {
-                 }
-                 Text "Callsign"
-                }
-                TextWidgetClass "{672744B5019D2CAE}" {
-                 Name "Grid"
-                 Slot LayoutSlot "{672744B5324033A6}" {
-                 }
-                 Text "Grid"
-                }
-                HorizontalLayoutWidgetClass "{672744B58BA46179}" {
-                 Name "HorizontalLayout0"
-                 Slot LayoutSlot "{672744B58BA4611C}" {
+                OverlayWidgetClass "{67282DB2A1888B30}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67282DB2A1888CD7}" {
+                  HorizontalAlign 3
+                  VerticalAlign 3
                  }
                  {
-                  TextWidgetClass "{672744B597F61B95}" {
-                   Name "Altitude"
-                   Slot LayoutSlot "{672744B597F61BBA}" {
-                    SizeMode Fill
+                  ImageWidgetClass "{67282DB22C9E4C98}" {
+                   Name "Outline"
+                   Slot OverlayWidgetSlot "{67282D8E789427EC}" {
+                    HorizontalAlign 3
+                    VerticalAlign 3
                    }
-                   Text "---MSL"
                   }
-                  TextWidgetClass "{672744B5942D0DA4}" {
-                   Name "Heading"
-                   Slot LayoutSlot "{672744B5942D0E66}" {
-                    SizeMode Fill
+                  EditBoxWidgetClass "{67282DB284A32DA4}" {
+                   Name "EditBox"
+                   Slot OverlayWidgetSlot "{67282DB284A32D46}" {
+                    HorizontalAlign 3
+                    VerticalAlign 3
                    }
-                   Text "---*M"
-                   "Horizontal Alignment" Right
-                  }
-                 }
-                }
-                HorizontalLayoutWidgetClass "{672744B5DDF2A6A1}" {
-                 Name "HorizontalLayout1"
-                 Slot LayoutSlot "{672744B58BA4611C}" {
-                 }
-                 {
-                  TextWidgetClass "{672744B5DDF2A6A6}" {
-                   Name "Speed"
-                   Slot LayoutSlot "{672744B597F61BBA}" {
-                    SizeMode Fill
+                   components {
+                    SCR_EventHandlerComponent "{67282DB2E48680F8}" {
+                    }
                    }
-                   Text "--MPH"
-                  }
-                  TextWidgetClass "{672744B5DDF2A6A4}" {
-                   Name "Error"
-                   Slot LayoutSlot "{672744B5942D0E66}" {
-                    SizeMode Fill
-                   }
-                   Text "+/- --m"
-                   "Horizontal Alignment" Right
+                   "Font Size" 36
+                   "Placeholder text" "Callsign"
                   }
                  }
                 }
                }
               }
              }
+            }
+           }
+          }
+          ButtonWidgetClass "{67282DB3D6342202}" {
+           Name "CallsignSaveButton"
+           Slot LayoutSlot "{672744B7F13077A9}" {
+            Padding 0 5 0 5
+           }
+           components {
+            SCR_ModularButtonComponent "{672744B43F32BE8C}" {
+             m_aEffects {
+              SCR_ButtonEffectColor "{672744B4046ACA52}" {
+               m_eEvents 6149
+               m_sWidgetName "CallsignSaveText"
+               m_fAnimationTime 0.08
+               m_cDefault 0.75 0.75 0.75 1
+               m_cHovered 0.2 0.8 0.8 1
+               m_cActivated 0.2 0.8 0.8 1
+               m_cActivatedHovered 0.3 1 1 1
+               m_cClicked 0.3 1 1 1
+               m_cFocusGained 0.2 0.8 0.8 1
+               m_cFocusLost 0.75 0.75 0.75 1
+              }
+             }
+             m_bFocusOnMouseEnter 1
+            }
+           }
+           style blank
+           {
+            TextWidgetClass "{67282DB3D6342203}" {
+             Name "CallsignSaveText"
+             Slot ButtonWidgetSlot "{672744B7C302E982}" {
+             }
+             Text "Save"
+            }
+           }
+          }
+          ButtonWidgetClass "{67282DB07B4BACEE}" {
+           Name "SettingsBackButton"
+           Slot LayoutSlot "{672744B7F13077A9}" {
+            Padding 0 5 0 5
+           }
+           components {
+            SCR_ModularButtonComponent "{672744B43F32BE8C}" {
+             m_aEffects {
+              SCR_ButtonEffectColor "{672744B4046ACA52}" {
+               m_eEvents 6149
+               m_sWidgetName "CallsignSaveText"
+               m_fAnimationTime 0.08
+               m_cDefault 0.75 0.75 0.75 1
+               m_cHovered 0.2 0.8 0.8 1
+               m_cActivated 0.2 0.8 0.8 1
+               m_cActivatedHovered 0.3 1 1 1
+               m_cClicked 0.3 1 1 1
+               m_cFocusGained 0.2 0.8 0.8 1
+               m_cFocusLost 0.75 0.75 0.75 1
+              }
+             }
+             m_bFocusOnMouseEnter 1
+            }
+           }
+           style blank
+           {
+            TextWidgetClass "{67282DB07B4BACE8}" {
+             Name "SettingsBackButton"
+             Slot ButtonWidgetSlot "{672744B7C302E982}" {
+             }
+             Text "Back"
             }
            }
           }
@@ -575,456 +1048,90 @@ FrameWidgetClass {
       }
      }
     }
-    OverlayWidgetClass "{671E54EF901D0A38}" {
-     Name "SidePanel"
-     Slot LayoutSlot "{672C1C7088C12E65}" {
+   }
+  }
+  FrameWidgetClass "{672CCA4D577ADD51}" {
+   Name "FeedOverlay"
+   Slot FrameWidgetSlot "{672CCA4D577ADD32}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX -1820
+    OffsetRight 0
+    SizeY -1050
+    OffsetBottom 0
+   }
+   "Is Visible" 0
+   {
+    TextWidgetClass "{672CCA4DA227982E}" {
+     Name "FeedMemberName"
+     Slot FrameWidgetSlot "{672CCA4DA2279814}" {
+      PositionX 24.363
+      OffsetLeft 24.363
+      PositionY 22.738
+      OffsetTop 22.738
+      SizeX 346.898
+      OffsetRight -371.261
+      SizeY 69
+      OffsetBottom -91.738
      }
+     "Font Size" 32
+     "Min Font Size" 32
+    }
+    ButtonWidgetClass "{672CCA4DBF3D6A58}" {
+     Name "FeedBackButton"
+     Slot FrameWidgetSlot "{672CCA4DBF3D6AE6}" {
+      Anchor 1 0 1 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      OffsetRight -100
+      SizeY 100
+      OffsetBottom -100
+      Alignment 1 0
+     }
+     components {
+      SCR_ModularButtonComponent "{672744BF03265B8A}" {
+       m_aEffects {
+        SCR_ButtonEffectColor "{672744BF03265B8B}" {
+         m_eEvents 6149
+         m_sWidgetName "CloseFeedImage"
+         m_fAnimationTime 0.08
+         m_cDefault 0.75 0.75 0.75 1
+         m_cHovered 0.2 0.8 0.8 1
+         m_cActivated 0.2 0.8 0.8 1
+         m_cActivatedHovered 0.3 1 1 1
+         m_cClicked 0.3 1 1 1
+         m_cFocusGained 0.2 0.8 0.8 1
+         m_cFocusLost 0.75 0.75 0.75 1
+        }
+       }
+       m_bFocusOnMouseEnter 1
+      }
+     }
+     style blank
      {
-      ImageWidgetClass "{672744B0E801F614}" {
-       Name "BackgroundPanel"
-       Slot OverlayWidgetSlot "{672744BCB8202FA2}" {
-        HorizontalAlign 3
-        VerticalAlign 3
-       }
-       Color 0.0118 0.0118 0.0118 0.8938
-      }
-      SizeLayoutWidgetClass "{672880527C485E60}" {
-       Name "SizeH_Reg"
-       Slot OverlayWidgetSlot "{672880527C485E33}" {
-        HorizontalAlign 3
-        VerticalAlign 3
-       }
-       AllowWidthOverride 1
-       WidthOverride 500
-       AllowMinDesiredWidth 1
-       MinDesiredWidth 500
-       AllowMaxDesiredWidth 1
-       MaxDesiredWidth 700
-      }
-      HorizontalLayoutWidgetClass "{67237B34FC73A2E9}" {
-       Name "PanelHeader"
-       Slot OverlayWidgetSlot "{67237B34FC73A2B4}" {
-        HorizontalAlign 2
-        VerticalAlign 0
+      SizeLayoutWidgetClass "{672CCA4DBF3D6A5F}" {
+       Name "SizeLayout0"
+       Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
         Padding 20 20 20 20
        }
        {
-        TextWidgetClass "{67237B34CCF9B2CE}" {
-         Name "PanelTitle"
-         Slot LayoutSlot "{67237B34CCF9B297}" {
-          HorizontalAlign 1
-          VerticalAlign 1
-         }
-         Text "PanelTitle"
-         "Font Size" 32
-        }
-        ButtonWidgetClass "{67237B37113AD91D}" {
-         Name "SettingsButton"
-         Slot LayoutSlot "{67237B37113AD9E5}" {
-          HorizontalAlign 1
-          VerticalAlign 1
-         }
-         components {
-          SCR_ModularButtonComponent "{67237B371D7C889C}" {
-           m_aEffects {
-            SCR_ButtonEffectColor "{67237B37193CC41B}" {
-             m_eEvents 6149
-             m_sWidgetName "SettingsImage"
-             m_fAnimationTime 0.08
-             m_cDefault 0.75 0.75 0.75 1
-             m_cHovered 0.9 0.2 0.2 1
-             m_cActivated 0.9 0.2 0.2 1
-             m_cActivatedHovered 1 0.4 0.4 1
-             m_cClicked 1 0.4 0.4 1
-             m_cFocusGained 0.2 0.8 0.8 1
-             m_cFocusLost 0.75 0.75 0.75 1
-            }
-           }
-           m_eEventReturnValue 2147483645
-           m_bFocusOnMouseEnter 1
-          }
-         }
-         style blank
-         {
-          SizeLayoutWidgetClass "{67275C1BAA1557D5}" {
-           Name "SizeLayout0"
-           Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
-           }
-           {
-            OverlayWidgetClass "{67275C1BB68F432E}" {
-             Name "Overlay0"
-             Slot AlignableSlot "{67275C1BB68F4311}" {
-             }
-             {
-              ImageWidgetClass "{67275C1BB4F61D14}" {
-               Name "SettingsImage"
-               Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
-                Padding 5 5 5 5
-               }
-               Texture "{D727847DBF6D9798}UI/Textures/Icons/tdl_settings.edds"
-               Size 48 48
-               "Blend Mode" Additive
-              }
-             }
-            }
-           }
-          }
-         }
-        }
-       }
-      }
-      FrameWidgetClass "{672744B67D8BA8D9}" {
-       Name "NetworkContent"
-       Slot OverlayWidgetSlot "{672744B67D8BA8C1}" {
-        HorizontalAlign 3
-        VerticalAlign 3
-        Padding 5 100 5 5
-       }
-       "Is Visible" 0
-       {
-        TextWidgetClass "{672744B6AF200BED}" {
-         Name "DeviceName"
-         Slot FrameWidgetSlot "{672744B6AF200BD0}" {
-          Anchor 0 0 0 0
-          PositionX 23.06
-          OffsetLeft 23.06
-          PositionY 59.81
-          OffsetTop 59.81
-          SizeX 99.999
-          OffsetRight -123.059
-          SizeY 30
-          OffsetBottom -89.81
-          SizeToContent 1
-         }
-         Text "DeviceName"
-        }
-        ScrollLayoutWidgetClass "{672744B6FAAB2B3F}" {
-         Name "ScrollLayout"
-         Slot FrameWidgetSlot "{672744B6FAAB2B1B}" {
-          Anchor 0 0 1 0
-          PositionX 22.348
-          OffsetLeft 22.348
-          PositionY 102.954
-          OffsetTop 102.954
-          SizeX -36.44
-          OffsetRight 14.092
-          SizeY 849.019
-          OffsetBottom -951.973
-         }
-         components {
-          SCR_GamepadScrollComponent "{672744B72963802E}" {
-          }
-         }
-         "Up rule" Explicit
-         "Up target" "CloseButton"
-         {
-          VerticalLayoutWidgetClass "{672744B72240C24F}" {
-           Name "MemberList"
-           Slot AlignableSlot "{672744B72240C235}" {
-            HorizontalAlign 3
-            VerticalAlign 3
-           }
-          }
-         }
-        }
-       }
-      }
-      VerticalLayoutWidgetClass "{672744B744EC4BE6}" {
-       Name "DetailContent"
-       Slot OverlayWidgetSlot "{672744B744EC4BC7}" {
-        HorizontalAlign 3
-        VerticalAlign 3
-        Padding 0 100 0 0
-       }
-       "Is Visible" 0
-       {
-        TextWidgetClass "{672744B7815A6848}" {
-         Name "DetailPlayerName"
-         Slot LayoutSlot "{672744B7815A6828}" {
-         }
-         Text "DetailPlayerName"
-        }
-        TextWidgetClass "{672744B78AB778D2}" {
-         Name "DetailSignalStrength"
-         Slot LayoutSlot "{672744B7815A6828}" {
-         }
-         Text "DetailSignalStrength"
-        }
-        TextWidgetClass "{672744B794149F84}" {
-         Name "DetailNetworkIP"
-         Slot LayoutSlot "{672744B7815A6828}" {
-         }
-         Text "DetailNetworkIP"
-        }
-        TextWidgetClass "{672881134AA803DC}" {
-         Name "DetailGrid"
-         Slot LayoutSlot "{672744B7815A6828}" {
-         }
-         Text "DetailGrid"
-        }
-        TextWidgetClass "{672744B7918B7844}" {
-         Name "DetailDistance"
-         Slot LayoutSlot "{672744B7815A6828}" {
-         }
-         Text "DetailDistance"
-        }
-        TextWidgetClass "{672744B79AA71B7B}" {
-         Name "DetailCapabilities"
-         Slot LayoutSlot "{672744B7815A6828}" {
-         }
-         Text "DetailCapabilities"
-        }
-        ButtonWidgetClass "{67282DBA2A8414AD}" {
-         Name "ViewLocationButton"
-         Slot LayoutSlot "{672744B7F13077A9}" {
-         }
-         components {
-          SCR_ModularButtonComponent "{672744B4318F20C9}" {
-           m_aEffects {
-            SCR_ButtonEffectColor "{672744B46F15C2EF}" {
-             m_eEvents 6149
-             m_sWidgetName "ViewLocationText"
-             m_fAnimationTime 0.08
-             m_cDefault 0.75 0.75 0.75 1
-             m_cHovered 0.2 0.8 0.8 1
-             m_cActivated 0.2 0.8 0.8 1
-             m_cActivatedHovered 0.3 1 1 1
-             m_cClicked 0.3 1 1 1
-             m_cFocusGained 0.2 0.8 0.8 1
-             m_cFocusLost 0.75 0.75 0.75 1
-            }
-           }
-           m_bFocusOnMouseEnter 1
-          }
-         }
-         style blank
-         {
-          TextWidgetClass "{67282DBA2A8414AC}" {
-           Name "ViewLocationText"
-           Slot ButtonWidgetSlot "{672744B3DCF248EE}" {
-           }
-           Text "View Location"
-          }
-         }
-        }
-        ButtonWidgetClass "{672744B7F13077D6}" {
-         Name "ViewFeedButton"
-         Slot LayoutSlot "{672744B7F13077A9}" {
-         }
-         components {
-          SCR_ModularButtonComponent "{672744B4318F20C9}" {
-           m_aEffects {
-            SCR_ButtonEffectColor "{672744B46F15C2EF}" {
-             m_eEvents 6149
-             m_sWidgetName "ViewFeedText"
-             m_fAnimationTime 0.08
-             m_cDefault 0.75 0.75 0.75 1
-             m_cHovered 0.2 0.8 0.8 1
-             m_cActivated 0.2 0.8 0.8 1
-             m_cActivatedHovered 0.3 1 1 1
-             m_cClicked 0.3 1 1 1
-             m_cFocusGained 0.2 0.8 0.8 1
-             m_cFocusLost 0.75 0.75 0.75 1
-            }
-           }
-           m_bFocusOnMouseEnter 1
-          }
-         }
-         style blank
-         {
-          TextWidgetClass "{672744B7E6F251DB}" {
-           Name "ViewFeedText"
-           Slot ButtonWidgetSlot "{672744B3DCF248EE}" {
-           }
-           Text "View Feed"
-          }
-         }
-        }
-        ButtonWidgetClass "{672744B7C302E86A}" {
-         Name "BackButton"
-         Slot LayoutSlot "{672744B7F13077A9}" {
-         }
-         components {
-          SCR_ModularButtonComponent "{672744B43F32BE8C}" {
-           m_aEffects {
-            SCR_ButtonEffectColor "{672744B4046ACA52}" {
-             m_eEvents 6149
-             m_sWidgetName "BackText"
-             m_fAnimationTime 0.08
-             m_cDefault 0.75 0.75 0.75 1
-             m_cHovered 0.2 0.8 0.8 1
-             m_cActivated 0.2 0.8 0.8 1
-             m_cActivatedHovered 0.3 1 1 1
-             m_cClicked 0.3 1 1 1
-             m_cFocusGained 0.2 0.8 0.8 1
-             m_cFocusLost 0.75 0.75 0.75 1
-            }
-           }
-           m_bFocusOnMouseEnter 1
-          }
-         }
-         style blank
-         {
-          TextWidgetClass "{672744B7C302B343}" {
-           Name "BackText"
-           Slot ButtonWidgetSlot "{672744B7C302E982}" {
-           }
-           Text "Back"
-          }
-         }
-        }
-       }
-      }
-      VerticalLayoutWidgetClass "{67282DB654861726}" {
-       Name "SettingsContent"
-       Slot OverlayWidgetSlot "{672744B744EC4BC7}" {
-        HorizontalAlign 3
-        VerticalAlign 3
-        Padding 0 100 0 0
-       }
-       "Is Visible" 0
-       {
-        RichTextWidgetClass "{67282DB32926A25D}" {
-         Name "CallsignText"
-         Slot LayoutSlot "{67282D8E78942445}" {
-          Padding 10 10 10 10
-         }
-         Text "Set Callsign"
-        }
-        FrameWidgetClass "{67282DB5ABF5B61B}" {
-         Name "CallsignEditBoxFrame"
-         Slot LayoutSlot "{67282DB5ABF5B628}" {
-          Padding 10 10 10 10
+        OverlayWidgetClass "{672CCA4DBF3D6A5E}" {
+         Name "Overlay0"
+         Slot AlignableSlot "{67275C1BB68F4311}" {
          }
          {
-          ButtonWidgetClass "{67282DB59DDA83DA}" {
-           Name "CallsignEditBox"
-           Slot FrameWidgetSlot "{67282DB59DDA8392}" {
-            Anchor 0 0 1 0
-            PositionX 0
-            OffsetLeft 0
-            PositionY 0
-            OffsetTop 0
-            SizeX -499.559
-            OffsetRight 0
-            SizeY 48
-            OffsetBottom -48
+          ImageWidgetClass "{672CCA4DBF3D6A5D}" {
+           Name "CloseFeedImage"
+           Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+            Padding 5 5 5 5
            }
-           components {
-            AG0_EditBoxComponent "{67282DB5F8F41964}" {
-             m_cOutlineDefault 0.157 0.27 0.263 0.3
-             m_cOutlineFocused 0 0.799 0.793 1
-            }
-           }
-           style blank
-           {
-            SizeLayoutWidgetClass "{67282DB2A459FF00}" {
-             Name "SizeLayout0"
-             Slot ButtonWidgetSlot "{67282DB2A459FF29}" {
-              HorizontalAlign 3
-              VerticalAlign 3
-             }
-             {
-              OverlayWidgetClass "{67282DB2A1888B30}" {
-               Name "Overlay0"
-               Slot AlignableSlot "{67282DB2A1888CD7}" {
-                HorizontalAlign 3
-                VerticalAlign 3
-               }
-               {
-                ImageWidgetClass "{67282DB22C9E4C98}" {
-                 Name "Outline"
-                 Slot OverlayWidgetSlot "{67282D8E789427EC}" {
-                  HorizontalAlign 3
-                  VerticalAlign 3
-                 }
-                }
-                EditBoxWidgetClass "{67282DB284A32DA4}" {
-                 Name "EditBox"
-                 Slot OverlayWidgetSlot "{67282DB284A32D46}" {
-                  HorizontalAlign 3
-                  VerticalAlign 3
-                 }
-                 components {
-                  SCR_EventHandlerComponent "{67282DB2E48680F8}" {
-                  }
-                 }
-                 "Font Size" 36
-                 "Placeholder text" "Callsign"
-                }
-               }
-              }
-             }
-            }
-           }
-          }
-         }
-        }
-        ButtonWidgetClass "{67282DB3D6342202}" {
-         Name "CallsignSaveButton"
-         Slot LayoutSlot "{672744B7F13077A9}" {
-          Padding 0 5 0 5
-         }
-         components {
-          SCR_ModularButtonComponent "{672744B43F32BE8C}" {
-           m_aEffects {
-            SCR_ButtonEffectColor "{672744B4046ACA52}" {
-             m_eEvents 6149
-             m_sWidgetName "CallsignSaveText"
-             m_fAnimationTime 0.08
-             m_cDefault 0.75 0.75 0.75 1
-             m_cHovered 0.2 0.8 0.8 1
-             m_cActivated 0.2 0.8 0.8 1
-             m_cActivatedHovered 0.3 1 1 1
-             m_cClicked 0.3 1 1 1
-             m_cFocusGained 0.2 0.8 0.8 1
-             m_cFocusLost 0.75 0.75 0.75 1
-            }
-           }
-           m_bFocusOnMouseEnter 1
-          }
-         }
-         style blank
-         {
-          TextWidgetClass "{67282DB3D6342203}" {
-           Name "CallsignSaveText"
-           Slot ButtonWidgetSlot "{672744B7C302E982}" {
-           }
-           Text "Save"
-          }
-         }
-        }
-        ButtonWidgetClass "{67282DB07B4BACEE}" {
-         Name "SettingsBackButton"
-         Slot LayoutSlot "{672744B7F13077A9}" {
-          Padding 0 5 0 5
-         }
-         components {
-          SCR_ModularButtonComponent "{672744B43F32BE8C}" {
-           m_aEffects {
-            SCR_ButtonEffectColor "{672744B4046ACA52}" {
-             m_eEvents 6149
-             m_sWidgetName "CallsignSaveText"
-             m_fAnimationTime 0.08
-             m_cDefault 0.75 0.75 0.75 1
-             m_cHovered 0.2 0.8 0.8 1
-             m_cActivated 0.2 0.8 0.8 1
-             m_cActivatedHovered 0.3 1 1 1
-             m_cClicked 0.3 1 1 1
-             m_cFocusGained 0.2 0.8 0.8 1
-             m_cFocusLost 0.75 0.75 0.75 1
-            }
-           }
-           m_bFocusOnMouseEnter 1
-          }
-         }
-         style blank
-         {
-          TextWidgetClass "{67282DB07B4BACE8}" {
-           Name "SettingsBackButton"
-           Slot ButtonWidgetSlot "{672744B7C302E982}" {
-           }
-           Text "Back"
+           Texture "{7EA399A15183315E}UI/Textures/Icons/tdl_menu_drawer.edds"
+           Size 48 48
+           "Blend Mode" Additive
           }
          }
         }

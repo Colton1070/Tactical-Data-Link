@@ -105,6 +105,15 @@ modded class SCR_PlayerController
     {
         Rpc(RPC_SetNetworkBroadcastingSources, broadcastingSources);
     }
+	
+	//------------------------------------------------------------------------------------------------
+    // Public interface for Controller (owner-side calls)
+    //------------------------------------------------------------------------------------------------
+	
+	void RequestKickDevice(RplId targetDeviceId)
+	{
+	    Rpc(RpcAsk_KickDevice, targetDeviceId);
+	}
     
     //------------------------------------------------------------------------------------------------
     // RPCs (protected)
@@ -145,6 +154,20 @@ modded class SCR_PlayerController
         m_bVideoSourcesDirty = true;
         Print(string.Format("TDL_PLAYERCONTROLLER: Updated broadcasting sources: %1", broadcastingSources.Count()), LogLevel.DEBUG);
     }
+	
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_KickDevice(RplId targetDeviceId)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return;
+	    
+	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(targetDeviceId);
+	    if (!device)
+	        return;
+	    
+	    system.LeaveNetwork(device);
+	}
 	
 	//------------------------------------------------------------------------------------------------
 	// Callsign Management
@@ -411,22 +434,21 @@ modded class SCR_PlayerController
 	    return invManager.Contains(device);
 	}
 	
-	void RequestKickDevice(RplId targetDeviceId)
+	//------------------------------------------------------------------------------------------------
+	// Get callsign for a player in a specific network
+	// Returns empty string if not found
+	string GetCallsignForPlayerInNetwork(int playerId, int networkId)
 	{
-	    Rpc(RpcAsk_KickDevice, targetDeviceId);
-	}
-	
-	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
-	protected void RpcAsk_KickDevice(RplId targetDeviceId)
-	{
-	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-	    if (!system)
-	        return;
+	    AG0_TDLNetworkMembers members = m_mTDLNetworkMembersMap.Get(networkId);
+	    if (!members)
+	        return "";
 	    
-	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(targetDeviceId);
-	    if (!device)
-	        return;
+	    foreach (AG0_TDLNetworkMember member : members.m_aMembers)
+	    {
+	        if (member.GetOwnerPlayerId() == playerId)
+	            return member.GetPlayerName();
+	    }
 	    
-	    system.LeaveNetwork(device);
+	    return "";
 	}
 }

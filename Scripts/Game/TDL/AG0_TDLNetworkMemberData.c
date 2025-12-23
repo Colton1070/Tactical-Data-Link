@@ -4,8 +4,8 @@ class AG0_TDLNetworkMember
 {
     // Define our data sizes
     static const int MAX_PLAYER_NAME_LENGTH = 32;  // Fixed size for player name
-    static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1;  
-    // RplId(4) + PlayerName(32) + Position(12) + Signal(4) + NetworkIP(4) + Capabilities(4) + IsPowered(1) + GPSActive(1) = 66 bytes
+    static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1 + 4;  
+	// RplId(4) + PlayerName(32) + Position(12) + Signal(4) + NetworkIP(4) + Capabilities(4) + IsPowered(1) + GPSActive(1) + OwnerPlayerId(4) = 70 bytes
     
     protected RplId m_RplId;
     protected string m_sPlayerName;
@@ -15,6 +15,7 @@ class AG0_TDLNetworkMember
     protected int m_iDeviceCapabilities;
     protected bool m_bIsPowered;
     protected bool m_bGPSActive;
+	protected int m_iOwnerPlayerId = -1;  // -1 = no player owner
     
     // Getters
     RplId GetRplId() { return m_RplId; }
@@ -23,6 +24,7 @@ class AG0_TDLNetworkMember
     float GetSignalStrength() { return m_fSignalStrength; }
     int GetNetworkIP() { return m_iNetworkIP; }
     int GetCapabilities() { return m_iDeviceCapabilities; }
+	int GetOwnerPlayerId() { return m_iOwnerPlayerId; }
     
     // Setters
     void SetRplId(RplId rplId) { m_RplId = rplId; }
@@ -31,6 +33,7 @@ class AG0_TDLNetworkMember
     void SetNetworkIP(int networkIP) { m_iNetworkIP = networkIP; }
     void SetSignalStrength(float strength) { m_fSignalStrength = strength; }
     void SetCapabilities(int capabilities) { m_iDeviceCapabilities = capabilities; }
+	void SetOwnerPlayerId(int playerId) { m_iOwnerPlayerId = playerId; }
     
     // Extract - following Mario's pattern exactly
     static bool Extract(AG0_TDLNetworkMember instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
@@ -79,6 +82,10 @@ class AG0_TDLNetworkMember
         // Booleans - 1 byte each
         snapshot.SerializeBytes(instance.m_bIsPowered, 1);
         snapshot.SerializeBytes(instance.m_bGPSActive, 1);
+		
+		// PlayerId - 4 bytes
+		snapshot.SerializeBytes(instance.m_iOwnerPlayerId, 4);
+
         
         return true;
     }
@@ -130,6 +137,9 @@ class AG0_TDLNetworkMember
         snapshot.SerializeBytes(instance.m_bIsPowered, 1);
         snapshot.SerializeBytes(instance.m_bGPSActive, 1);
         
+		// PlayerId - 4 bytes
+		snapshot.SerializeBytes(instance.m_iOwnerPlayerId, 4);
+		
         return true;
     }
     

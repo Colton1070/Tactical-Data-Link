@@ -127,6 +127,17 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected const ResourceName MEMBER_CARD_LAYOUT = "{7C025C99261C96C5}UI/layouts/Menus/TDL/TDLMemberCardUI.layout";
     protected const ResourceName SELF_MARKER_LAYOUT = "{A242BD2B06D27E00}UI/layouts/Menus/TDL/TDLMenuSelfMarker.layout";
     protected const ResourceName MEMBER_MARKER_LAYOUT = "{23872C52B88FDB59}UI/layouts/Menus/TDL/TDLMenuBuddyMarker.layout";
+	
+	// Remote feed viewing
+	
+	protected bool m_bViewingRemoteFeed = false;
+	protected IEntity m_SpawnedFeedCamera;
+	protected CameraBase m_OriginalCamera;
+	protected Widget m_wFeedOverlay;
+	protected Widget m_wFeedBackButton;
+	protected TextWidget m_wFeedMemberName;
+	
+	protected const ResourceName FEED_CAMERA_PREFAB = "{F3CDC6E4F329E496}Prefabs/Characters/Core/TDLDevicePlayerCamera.et";
     
     //------------------------------------------------------------------------------------------------
     override void OnMenuOpen()
@@ -202,6 +213,18 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_wHeading = TextWidget.Cast(m_wRoot.FindAnyWidget("Heading"));
 	    m_wSpeed = TextWidget.Cast(m_wRoot.FindAnyWidget("Speed"));
 	    m_wError = TextWidget.Cast(m_wRoot.FindAnyWidget("Error"));
+		
+		m_wFeedOverlay = m_wRoot.FindAnyWidget("FeedOverlay");
+		m_wFeedMemberName = TextWidget.Cast(m_wRoot.FindAnyWidget("FeedMemberName"));
+		m_wFeedBackButton = m_wRoot.FindAnyWidget("FeedBackButton");
+		
+		if (m_wFeedBackButton)
+		{
+		    SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+		        m_wFeedBackButton.FindHandler(SCR_ModularButtonComponent));
+		    if (comp)
+		        comp.m_OnClicked.Insert(OnFeedBackClicked);
+		}
 	    
 	    // Apply initial cyan colors to self panel text widgets
 	    ApplySelfPanelColors();
@@ -267,30 +290,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	
 	//------------------------------------------------------------------------------------------------
 	//! Format grid reference with proper zero-padding
-	protected string FormatGridReference(vector pos, int numDigits = 4)
+	protected string FormatGridReference(vector pos, int numDigits = 5)
 	{
-	    // Get the raw grid label
-	    string rawGrid = SCR_MapEntity.GetGridLabel(pos, 2, numDigits, " ");
-	    
-	    // Parse and reformat with zero-padding
-	    // Expected format: "XX #### ####" where XX is zone letters, #### are easting/northing
-	    array<string> parts = {};
-	    rawGrid.Split(" ", parts, false);
-	    
-	    if (parts.Count() < 3)
-	        return rawGrid;  // Fallback if format unexpected
-	    
-	    string zone = parts[0];
-	    string easting = parts[1];
-	    string northing = parts[2];
-	    
-	    // Zero-pad easting and northing to numDigits
-	    while (easting.Length() < numDigits)
-	        easting = "0" + easting;
-	    while (northing.Length() < numDigits)
-	        northing = "0" + northing;
-	    
-	    return string.Format("%1 %2 %3", zone, easting, northing);
+	    return AG0_MGRSGridUtils.GetFullMGRS(pos, numDigits);
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -702,7 +704,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    if (m_wDetailGrid)
 	    {
 	        vector memberPos = m_SelectedMember.GetPosition();
-	        string gridLabel = FormatGridReference(memberPos, 4);
+	        string gridLabel = FormatGridReference(memberPos, 5);
 	        m_wDetailGrid.SetText(gridLabel);
 	    }
 	    
@@ -758,13 +760,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void OnViewFeedClickedInternal()
-    {
-        if (m_SelectedMember)
-            Print("[TDLMenu] View feed clicked for " + m_SelectedMember.GetPlayerName(), LogLevel.DEBUG);
-    }
-    
-    //------------------------------------------------------------------------------------------------
     protected void OnViewLocationClickedInternal()
     {
         if (!m_SelectedMember || !m_MapView)
@@ -803,6 +798,139 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (m_bPlayerTracking && m_MapView)
             m_MapView.CenterOnPlayer();
     }
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnViewFeedClickedInternal()
+	{
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return;
+	    
+	    array<RplId> sources = controller.GetAvailableVideoSources();
+	    if (sources.IsEmpty())
+	    {
+	        Print("[TDL Feed] No video sources available", LogLevel.DEBUG);
+	        return;
+	    }
+	    
+	    // Just grab first available for now
+	    RplId sourceId = sources[0];
+	    
+	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(sourceId));
+	    if (!rpl)
+	        return;
+	    
+	    IEntity remoteEntity = rpl.GetEntity();
+	    if (!remoteEntity)
+	        return;
+	    
+	    AG0_TDLDeviceComponent remoteDevice = AG0_TDLDeviceComponent.Cast(
+	        remoteEntity.FindComponent(AG0_TDLDeviceComponent));
+	    
+	    if (!remoteDevice || !remoteDevice.m_CameraAttachment)
+	        return;
+	    
+	    EnterRemoteFeedView(remoteEntity, remoteDevice);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void EnterRemoteFeedView(IEntity remoteEntity, AG0_TDLDeviceComponent remoteDevice)
+	{
+	    if (System.IsConsoleApp())
+	        return;
+	    
+	    m_OriginalCamera = GetGame().GetCameraManager().CurrentCamera();
+	    
+	    EntitySpawnParams params = new EntitySpawnParams();
+	    m_SpawnedFeedCamera = GetGame().SpawnEntityPrefab(
+	        Resource.Load(FEED_CAMERA_PREFAB), null, params);
+	    
+	    if (!m_SpawnedFeedCamera)
+	        return;
+	    
+	    // Attach camera to remote device
+	    remoteDevice.m_CameraAttachment.Init(remoteEntity);
+	    
+	    bool attached = false;
+	    SlotManagerComponent slotMgr = SlotManagerComponent.Cast(
+	        remoteEntity.FindComponent(SlotManagerComponent));
+	    
+	    if (slotMgr)
+	    {
+	        EntitySlotInfo slot = slotMgr.GetSlotByName("Camera");
+	        if (slot)
+	        {
+	            slot.AttachEntity(m_SpawnedFeedCamera);
+	            attached = true;
+	        }
+	    }
+	    
+	    if (!attached)
+	    {
+	        m_SpawnedFeedCamera.AddChild(remoteEntity, -1, EAddChildFlags.AUTO_TRANSFORM);
+	        vector localMat[4];
+	        remoteDevice.m_CameraAttachment.GetLocalTransform(localMat);
+	        m_SpawnedFeedCamera.SetLocalTransform(localMat);
+	    }
+	    
+	    CameraBase feedCam = CameraBase.Cast(m_SpawnedFeedCamera);
+	    if (!feedCam)
+	    {
+	        SCR_EntityHelper.DeleteEntityAndChildren(m_SpawnedFeedCamera);
+	        m_SpawnedFeedCamera = null;
+	        return;
+	    }
+	    
+	    GetGame().GetCameraManager().SetCamera(feedCam);
+	    m_bViewingRemoteFeed = true;
+	    
+	    SetFeedViewMode(true);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void ExitRemoteFeedView()
+	{
+	    if (!m_bViewingRemoteFeed)
+	        return;
+	    
+	    if (m_OriginalCamera)
+	        GetGame().GetCameraManager().SetCamera(m_OriginalCamera);
+	    
+	    if (m_SpawnedFeedCamera)
+	    {
+	        SCR_EntityHelper.DeleteEntityAndChildren(m_SpawnedFeedCamera);
+	        m_SpawnedFeedCamera = null;
+	    }
+	    
+	    m_bViewingRemoteFeed = false;
+	    m_OriginalCamera = null;
+	    
+	    SetFeedViewMode(false);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void SetFeedViewMode(bool viewing)
+	{
+	    Widget mainFrame = m_wRoot.FindAnyWidget("MainFrame");
+	    
+	    if (mainFrame)
+	        mainFrame.SetVisible(!viewing);
+	    
+	    if (m_wFeedOverlay)
+	        m_wFeedOverlay.SetVisible(viewing);
+	    
+	    if (m_wFeedMemberName && m_SelectedMember)
+	        m_wFeedMemberName.SetText(m_SelectedMember.GetPlayerName());
+	    
+	    if (viewing && m_wFeedBackButton)
+	        GetGame().GetWorkspace().SetFocusedWidget(m_wFeedBackButton);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnFeedBackClicked()
+	{
+	    ExitRemoteFeedView();
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void OnSettingsButtonClicked()
@@ -898,6 +1026,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	{
 	    super.OnMenuUpdate(tDelta);
 	    
+		if (m_bViewingRemoteFeed)
+	    {
+	        // MenuBack input as escape hatch
+	        if (m_InputManager && m_InputManager.GetActionTriggered("MenuBack"))
+	            ExitRemoteFeedView();
+	        return;
+	    }
+		
 	    // Process mouse drag input
 	    if (m_DragHandler && m_MapView)
 	    {
@@ -1024,7 +1160,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    // Grid coordinates
 	    if (m_wGrid)
 		{
-		    string gridLabel = FormatGridReference(pos, 4);
+		    string gridLabel = FormatGridReference(pos, 5);
 		    m_wGrid.SetText(gridLabel);
 		}
 	    
@@ -1617,6 +1753,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     override void OnMenuClose()
     {
+		if (m_bViewingRemoteFeed)
+        	ExitRemoteFeedView();
+		
 		if (m_DragHandler)
 	    {
 	        m_DragHandler.m_OnDragStart.Remove(OnMapDragStart);

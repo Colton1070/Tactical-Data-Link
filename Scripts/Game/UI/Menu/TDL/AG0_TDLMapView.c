@@ -127,52 +127,62 @@ class AG0_TDLMapView
     }
     
     //------------------------------------------------------------------------------------------------
-    protected bool LoadMapTexture()
-    {
-        SCR_MapEntity mapEntity = SCR_MapEntity.GetMapInstance();
-        if (!mapEntity)
-            return false;
-        
-        // Get texture path from MapEntity prefab data
-        EntityPrefabData prefabData = mapEntity.GetPrefabData();
-        if (!prefabData)
-        {
-            Print("[TDLMapView] No prefab data on MapEntity", LogLevel.WARNING);
-            return false;
-        }
-        
-        BaseContainer container = prefabData.GetPrefab();
-        if (!container)
-        {
-            Print("[TDLMapView] Failed to get BaseContainer from prefab", LogLevel.WARNING);
-            return false;
-        }
-        
-        ResourceName texturePath;
-        if (!container.Get("Satellite background image", texturePath))
-        {
-            Print("[TDLMapView] No 'Satellite background image' property in MapEntity prefab", LogLevel.WARNING);
-            return false;
-        }
-        
-        if (texturePath.IsEmpty())
-        {
-            Print("[TDLMapView] Satellite texture path is empty", LogLevel.WARNING);
-            return false;
-        }
-        
-        Print(string.Format("[TDLMapView] Loading texture: %1", texturePath), LogLevel.DEBUG);
-        
-        m_pMapTexture = CanvasWidget.LoadTexture(texturePath);
-        if (!m_pMapTexture)
-        {
-            Print("[TDLMapView] Failed to load texture", LogLevel.WARNING);
-            return false;
-        }
-        
-        m_bTextureLoaded = true;
-        return true;
-    }
+	protected bool LoadMapTexture()
+	{
+	    SCR_MapEntity mapEntity = SCR_MapEntity.GetMapInstance();
+	    if (!mapEntity)
+	        return false;
+	    
+	    ResourceName texturePath;
+	    
+	    // Try prefab lookup first (works for properly configured maps like Arland, Everon)
+	    EntityPrefabData prefabData = mapEntity.GetPrefabData();
+	    if (prefabData)
+	    {
+	        BaseContainer container = prefabData.GetPrefab();
+	        if (container)
+	            container.Get("Satellite background image", texturePath);
+	    }
+	    
+	    // Fallback to lookup table for maps with instance-only configuration
+	    if (texturePath.IsEmpty())
+	    {
+	        texturePath = GetFallbackSatelliteTexture();
+	        if (!texturePath.IsEmpty())
+	            Print(string.Format("[TDLMapView] Using fallback texture: %1", texturePath), LogLevel.WARNING);
+	    }
+	    
+	    if (texturePath.IsEmpty())
+	    {
+	        Print("[TDLMapView] Could not determine satellite texture path", LogLevel.WARNING);
+	        return false;
+	    }
+	    
+	    Print(string.Format("[TDLMapView] Loading texture: %1", texturePath), LogLevel.NORMAL);
+	    
+	    m_pMapTexture = CanvasWidget.LoadTexture(texturePath);
+	    if (!m_pMapTexture)
+	    {
+	        Print(string.Format("[TDLMapView] Failed to load texture: %1", texturePath), LogLevel.WARNING);
+	        return false;
+	    }
+	    
+	    m_bTextureLoaded = true;
+	    return true;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	// Fallback texture lookup for maps without proper prefab configuration
+	protected ResourceName GetFallbackSatelliteTexture()
+	{
+	    string worldFile = GetGame().GetWorldFile();
+	    
+	    // Kolgulev / Cain
+	    if (worldFile.Contains("Cain"))
+	        return "{98696504473AE49E}UI/Textures/Map/worlds/Cain/CainRasterized.edds";
+	    
+	    return ResourceName.Empty;
+	}
     
     //------------------------------------------------------------------------------------------------
     // VIEW CONTROL

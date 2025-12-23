@@ -24,7 +24,7 @@ class AG0_TDLNetwork
     array<AG0_TDLDeviceComponent> GetNetworkDevices() { return m_aNetworkDevices; }
     map<RplId, ref AG0_TDLNetworkMember> GetDeviceData() { return m_mDeviceData; }
     
-    void AddDevice(AG0_TDLDeviceComponent device, RplId deviceRplId, string playerName, vector position)
+    void AddDevice(AG0_TDLDeviceComponent device, RplId deviceRplId, string playerName, vector position, int ownerPlayerId = -1)
     {
         if (!m_aNetworkDevices.Contains(device))
         {
@@ -36,6 +36,7 @@ class AG0_TDLNetwork
             memberData.SetPosition(position);
             memberData.SetCapabilities(device.GetActiveCapabilities());
             memberData.SetNetworkIP(m_iNextNetworkIP++);
+			memberData.SetOwnerPlayerId(ownerPlayerId);
             
             m_mDeviceData.Set(deviceRplId, memberData);
         }
@@ -828,7 +829,19 @@ class AG0_TDLSystem : WorldSystem
 	                        // Use LIVE position, not stored position!
 	                        connectedData.SetPosition(connectedPos);
 	                        connectedData.SetNetworkIP(memberData.GetNetworkIP());
-	                        connectedData.SetCapabilities(memberData.GetCapabilities());
+							IEntity connectedPlayer = GetPlayerFromDevice(connectedDevice);
+							int ownerPlayerId = -1;
+							if (connectedPlayer)
+							{
+							    PlayerManager playerMgr = GetGame().GetPlayerManager();
+							    ownerPlayerId = playerMgr.GetPlayerIdFromControlledEntity(connectedPlayer);
+								int aggregatedCaps = GetAggregatedPlayerCapabilities(connectedPlayer);
+								connectedData.SetCapabilities(aggregatedCaps);
+							}
+							else {
+								connectedData.SetCapabilities(memberData.GetCapabilities());
+							}
+							connectedData.SetOwnerPlayerId(ownerPlayerId);
 	                        
 	                        float effectiveRange = Math.Min(device.GetEffectiveNetworkRange(), 
 							                                connectedDevice.GetEffectiveNetworkRange());

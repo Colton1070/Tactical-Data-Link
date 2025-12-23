@@ -48,24 +48,48 @@ modded class SCR_VonDisplay : SCR_InfoDisplayExtended
         return pc.IsConnectedTDLPlayer(senderId);
     }
     
-    //------------------------------------------------------------------------------------------------
-    override protected bool UpdateTransmission(TransmissionData data, BaseTransceiver radioTransceiver, int frequency, bool IsReceiving)
-    {
-        bool result = super.UpdateTransmission(data, radioTransceiver, frequency, IsReceiving);
-        
-        // Only process if transmission wasn't filtered and is incoming
-        if (!result || !IsReceiving)
-            return result;
-        
-        // Network member indicator
-        bool isNetworkMember = IsNetworkMemberTransmission(data.m_iPlayerID, radioTransceiver);
-        if (isNetworkMember)
-        {
-            data.m_Widgets.m_wChannelBackground.SetColor(Color.FromInt(GUIColors.BLUE.PackToInt()));
-            data.m_Widgets.m_wChannelText.SetText("NETWORK");
-            data.m_Widgets.m_wChannelFrame.SetVisible(true);
-        }
-        
-        return result;
-    }
+	//Override the UI to show network status, and network callsign if set.
+	override protected bool UpdateTransmission(TransmissionData data, BaseTransceiver radioTransceiver, int frequency, bool IsReceiving)
+	{
+	    bool result = super.UpdateTransmission(data, radioTransceiver, frequency, IsReceiving);
+	    
+	    // Only process if transmission wasn't filtered and is incoming
+	    if (!result || !IsReceiving)
+	        return result;
+	    
+	    // Network member indicator
+	    bool isNetworkMember = IsNetworkMemberTransmission(data.m_iPlayerID, radioTransceiver);
+	    if (isNetworkMember)
+	    {
+	        // Get the network ID from our receiving radio's device component
+	        int networkId = 0;
+	        if (radioTransceiver)
+	        {
+	            BaseRadioComponent radio = radioTransceiver.GetRadio();
+	            if (radio)
+	            {
+	                AG0_TDLDeviceComponent tdlDevice = AG0_TDLDeviceComponent.Cast(
+	                    radio.GetOwner().FindComponent(AG0_TDLDeviceComponent));
+	                if (tdlDevice)
+	                    networkId = tdlDevice.GetCurrentNetworkID();
+	            }
+	        }
+	        
+	        // Override name with callsign if available
+	        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	        if (pc && networkId > 0)
+	        {
+	            string callsign = pc.GetCallsignForPlayerInNetwork(data.m_iPlayerID, networkId);
+	            if (!callsign.IsEmpty())
+	                data.m_Widgets.m_wName.SetText(callsign);
+	        }
+	        
+	        // Show network indicator
+	        data.m_Widgets.m_wChannelBackground.SetColor(Color.FromInt(GUIColors.BLUE.PackToInt()));
+	        data.m_Widgets.m_wChannelText.SetText("NETWORK");
+	        data.m_Widgets.m_wChannelFrame.SetVisible(true);
+	    }
+	    
+	    return result;
+	}
 }
