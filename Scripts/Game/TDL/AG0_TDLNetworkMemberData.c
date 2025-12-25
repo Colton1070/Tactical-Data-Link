@@ -16,7 +16,7 @@ class AG0_TDLNetworkMember
     protected bool m_bIsPowered;
     protected bool m_bGPSActive;
 	protected int m_iOwnerPlayerId = -1;  // -1 = no player owner
-	protected RplId m_VideoSourceRplId;
+	protected RplId m_VideoSourceRplId = RplId.Invalid();
     
     // Getters
     RplId GetRplId() { return m_RplId; }

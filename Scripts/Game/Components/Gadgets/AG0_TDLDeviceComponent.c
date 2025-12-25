@@ -217,19 +217,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
 	    if (system) system.RegisterDevice(this);
 	}
-	
-	protected void OnOpenTDLMenu()
-	{
-	    // Only open if device has required capabilities
-	    if (!IsPowered() || !HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
-	        return;
-	    
-	    if (!HasCapability(AG0_ETDLDeviceCapability.DISPLAY_OUTPUT))
-	        return;
-	    
-	    // Open the TDL menu
-	    GetGame().GetMenuManager().OpenMenu(ChimeraMenuPreset.AG0_TDLMenu);
-	}
     
     protected void OnDeviceDropped()
     {

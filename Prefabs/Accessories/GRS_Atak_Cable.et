@@ -1,0 +1,9 @@
+GenericEntity {
+ ID "65CC0BEE3E837E94"
+ components {
+  AG0_TDLDeviceComponent "{672EB352126535D5}" {
+   m_eCapabilities 80
+   m_bUseTDLRadio 0
+  }
+ }
+}
