@@ -63,12 +63,14 @@ modded class SCR_PlayerController
 	bool HasATAKDevice()
 	{
 	    array<AG0_TDLDeviceComponent> devices = GetPlayerTDLDevices();
+	    int aggregatedCaps = 0;
 	    foreach (AG0_TDLDeviceComponent device : devices)
 	    {
-	        if (device.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
-	            return true;
+	        aggregatedCaps |= device.GetActiveCapabilities();
 	    }
-	    return false;
+	    
+	    int required = AG0_ETDLDeviceCapability.ATAK_DEVICE | AG0_ETDLDeviceCapability.DISPLAY_OUTPUT;
+	    return (aggregatedCaps & required) == required;
 	}
     
     //------------------------------------------------------------------------------------------------
