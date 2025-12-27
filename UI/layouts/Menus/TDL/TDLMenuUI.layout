@@ -1,5 +1,16 @@
 FrameWidgetClass {
  Name "rootFrame"
+ Slot FrameWidgetSlot "{6736CE0B070536FC}" {
+  Anchor 0 0 1 1
+  PositionX 0
+  OffsetLeft 0
+  PositionY 0
+  OffsetTop 0
+  SizeX -1820
+  OffsetRight 0
+  SizeY -1050
+  OffsetBottom 0
+ }
  {
   FrameWidgetClass "{672CCA4D7D8C41AF}" {
    Name "MainFrame"
