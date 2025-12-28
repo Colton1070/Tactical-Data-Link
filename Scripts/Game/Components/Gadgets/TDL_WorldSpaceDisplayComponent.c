@@ -1,6 +1,6 @@
-class TDL_WorldSpaceDisplayComponentClass : ScriptComponentClass {}
+class TDL_WorldSpaceDisplayComponentClass : ScriptGameComponentClass {}
 
-class TDL_WorldSpaceDisplayComponent : ScriptComponent
+class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
 {
     // ============================================
     // SCREEN & RENDERING
@@ -84,7 +84,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptComponent
     // ============================================
     // LIFECYCLE
     // ============================================
-    
+    override bool OnTicksOnRemoteProxy() { return true; }
+	
     //------------------------------------------------------------------------------------------------
     override void OnPostInit(IEntity owner)
     {
