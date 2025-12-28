@@ -110,6 +110,17 @@ class TDL_WorldSpaceDisplayComponent : ScriptComponent
     //------------------------------------------------------------------------------------------------
     override void EOnFrame(IEntity owner, float timeSlice)
     {
+        // MULTIPLAYER OPTIMIZATION: Only process if this device is held by local player
+        // Other players' devices simulate locally but we skip expensive raycast/UI work
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc || !pc.IsHeldDevice(owner))
+        {
+            // Not our device - ensure clean state and bail
+            if (m_bLookingAtScreen)
+                SetLookingAtScreen(false);
+            return;
+        }
+        
         // Update the display controller each frame
         if (m_DisplayController)
             m_DisplayController.Update(timeSlice);

@@ -663,7 +663,7 @@ class AG0_TDLDisplayController
         if (!controller)
             return false;
         
-        array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
             if (device && device.HasCapability(AG0_ETDLDeviceCapability.GPS_PROVIDER))
@@ -679,7 +679,7 @@ class AG0_TDLDisplayController
         if (!controller)
             return "UNKNOWN";
         
-        array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
             if (device && device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS))
@@ -705,7 +705,7 @@ class AG0_TDLDisplayController
         if (!controller)
             return deviceIds;
         
-        array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
             RplId deviceId = device.GetDeviceRplId();

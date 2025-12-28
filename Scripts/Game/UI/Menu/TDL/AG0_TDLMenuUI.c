@@ -917,7 +917,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (!controller)
             return;
         
-        array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
             if (device.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
@@ -937,7 +937,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (!controller)
             return;
         
-        array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
             if (device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS) && device.IsInNetwork())
@@ -970,7 +970,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
         if (!controller) return;
         
-        array<AG0_TDLDeviceComponent> heldDevices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> heldDevices = controller.GetHeldDevicesCached();
         
         set<string> supportedPluginIDs = new set<string>();
         foreach (AG0_TDLDeviceComponent device : heldDevices)
@@ -1036,7 +1036,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (!controller)
             return null;
         
-        array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
             if (device.HasCapability(AG0_ETDLDeviceCapability.VIDEO_SOURCE))

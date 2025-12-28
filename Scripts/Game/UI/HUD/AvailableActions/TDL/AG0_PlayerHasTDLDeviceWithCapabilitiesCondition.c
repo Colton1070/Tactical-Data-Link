@@ -20,7 +20,7 @@ class AG0_PlayerHasTDLDeviceWithCapabilitiesCondition : SCR_AvailableActionCondi
 	    if (!controller)
 	        return GetReturnResult(false);
 	    
-	    array<AG0_TDLDeviceComponent> devices = controller.GetPlayerTDLDevices();
+	    array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
 	    
 	    // Aggregate capabilities across ALL devices
 	    int aggregatedCaps = 0;
