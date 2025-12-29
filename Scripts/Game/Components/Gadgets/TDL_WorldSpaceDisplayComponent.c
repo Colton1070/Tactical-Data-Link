@@ -709,9 +709,15 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         u = Math.Clamp(u, 0, 1);
         v = Math.Clamp(v, 0, 1);
         
-        // Scale to pixels
-        uiX = u * rtW;
-        uiY = v * rtH;
+        // Scale to screen pixels
+        float screenX = u * rtW;
+        float screenY = v * rtH;
+        
+        // Convert to layout coordinates for widget positioning
+        // (GetScreenSize returns DPI-scaled pixels, but FrameSlot.SetPos expects layout coords)
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        uiX = workspace.DPIUnscale(screenX);
+        uiY = workspace.DPIUnscale(screenY);
     }
     
     // ============================================
