@@ -54,17 +54,23 @@ modded class SCR_PlayerController
         if (!System.IsConsoleApp())
         {
             m_TDLInputManager = GetGame().GetInputManager();
-            if (m_TDLInputManager)
+            if (m_TDLInputManager) {
                 m_TDLInputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
-        }
+				m_TDLInputManager.AddActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
+	    		m_TDLInputManager.AddActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
+			}
+		}
     }
     
     //------------------------------------------------------------------------------------------------
     void ~SCR_PlayerController()
     {
-        if (m_TDLInputManager)
+        if (m_TDLInputManager) {
             m_TDLInputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
-    }
+			m_TDLInputManager.RemoveActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
+		    m_TDLInputManager.RemoveActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
+		}
+	}
     
     //------------------------------------------------------------------------------------------------
     override void OnUpdate(float timeSlice)
@@ -112,6 +118,7 @@ modded class SCR_PlayerController
             m_aHeldDevicesCache.Insert(device);
             m_sHeldDeviceEntities.Insert(device.GetOwner());
         }
+		UpdateEUDCache();
     }
     
     //------------------------------------------------------------------------------------------------
@@ -572,26 +579,6 @@ modded class SCR_PlayerController
         // Server-side call - SetCustomCallsign handles the logic + bump + system notify
         device.SetCustomCallsign(callsign);
     }
-	
-	//------------------------------------------------------------------------------------------------
-	protected void InitEUDInputListeners()
-	{
-	    if (!m_TDLInputManager)
-	        return;
-	    
-	    m_TDLInputManager.AddActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
-	    m_TDLInputManager.AddActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void CleanupEUDInputListeners()
-	{
-	    if (!m_TDLInputManager)
-	        return;
-	    
-	    m_TDLInputManager.RemoveActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
-	    m_TDLInputManager.RemoveActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
-	}
 	
 	//------------------------------------------------------------------------------------------------
 	protected void UpdateEUDCache()
