@@ -12,9 +12,9 @@ FrameWidgetClass {
   OffsetBottom 0
  }
  {
-  FrameWidgetClass "{672CCA4D7D8C41AF}" {
-   Name "MainFrame"
-   Slot FrameWidgetSlot "{672CCA4D7D8C4196}" {
+  ImageWidgetClass "{672C1C733C0EC9FC}" {
+   Name "Image0"
+   Slot FrameWidgetSlot "{672C1C733C0EC9E4}" {
     Anchor 0 0 1 1
     PositionX 0
     OffsetLeft 0
@@ -25,22 +25,21 @@ FrameWidgetClass {
     SizeY -1050
     OffsetBottom 0
    }
+   Color 0 0 0 1
+  }
+  FrameWidgetClass "{672CCA4D7D8C41AF}" {
+   Name "MainFrame"
+   Slot FrameWidgetSlot "{672CCA4D7D8C4196}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    PositionY 0
+    OffsetTop 0
+    SizeX -1820
+    OffsetRight 0
+    SizeY -1050
+    OffsetBottom 0
+   }
    {
-    ImageWidgetClass "{672C1C733C0EC9FC}" {
-     Name "Image0"
-     Slot FrameWidgetSlot "{672C1C733C0EC9E4}" {
-      Anchor 0 0 1 1
-      PositionX 0
-      OffsetLeft 0
-      PositionY 0
-      OffsetTop 0
-      SizeX -1820
-      OffsetRight 0
-      SizeY -1050
-      OffsetBottom 0
-     }
-     Color 0 0 0 1
-    }
     HorizontalLayoutWidgetClass "{6728802FCEA8D316}" {
      Name "HorizontalLayout0"
      Slot FrameWidgetSlot "{6728802FCEA8D3E7}" {
@@ -114,14 +113,14 @@ FrameWidgetClass {
           HorizontalLayoutWidgetClass "{672744B4B0157132}" {
            Name "Toolbar"
            Slot FrameWidgetSlot "{672744B4B015712F}" {
-            Anchor 0 0 1 0.09
-            PositionX 20
-            OffsetLeft 20
-            PositionY 0
-            OffsetTop 0
-            SizeX -20.821
+            Anchor 0 0 1 0.15
+            PositionX 40
+            OffsetLeft 60
+            PositionY 40
+            OffsetTop 60
+            SizeX -40
             OffsetRight 0
-            SizeY 0
+            SizeY -104.8
             OffsetBottom 0
            }
            {
@@ -283,14 +282,15 @@ FrameWidgetClass {
           VerticalLayoutWidgetClass "{672744B481A77C63}" {
            Name "ZoomControls"
            Slot FrameWidgetSlot "{6728802DDC416426}" {
-            PositionX 2.567
-            OffsetLeft 2.567
-            PositionY 439.374
-            OffsetTop 439.374
+            Anchor 0 0.5 0 0.5
+            PositionX 50
+            OffsetLeft 50
+            PositionY -100.626
+            OffsetTop -100.6
             SizeX 100
-            OffsetRight -102.567
+            OffsetRight -150
             SizeY 300
-            OffsetBottom -739.374
+            OffsetBottom -199.4
            }
            {
             ButtonWidgetClass "{672744BF189D2876}" {
@@ -511,12 +511,14 @@ FrameWidgetClass {
            Name "StatusPanels"
            Slot FrameWidgetSlot "{672880530762BD67}" {
             Anchor 1 1 1 1
-            OffsetLeft 0
-            OffsetTop 0
+            PositionX -40
+            OffsetLeft -40
+            PositionY -60
+            OffsetTop -60
             SizeX 1420
-            OffsetRight -1420
+            OffsetRight -1380
             SizeY 1080
-            OffsetBottom -1080
+            OffsetBottom -1020
             Alignment 1 1
             SizeToContent 1
            }
@@ -682,7 +684,7 @@ FrameWidgetClass {
          Slot OverlayWidgetSlot "{67237B34FC73A2B4}" {
           HorizontalAlign 2
           VerticalAlign 0
-          Padding 20 20 20 20
+          Padding 20 40 60 20
          }
          {
           TextWidgetClass "{67237B34CCF9B2CE}" {
@@ -754,7 +756,7 @@ FrameWidgetClass {
          Slot OverlayWidgetSlot "{672744B67D8BA8C1}" {
           HorizontalAlign 3
           VerticalAlign 3
-          Padding 5 100 5 5
+          Padding 5 100 40 40
          }
          "Is Visible" 0
          {

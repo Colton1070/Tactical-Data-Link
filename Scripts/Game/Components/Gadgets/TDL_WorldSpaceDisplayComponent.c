@@ -476,7 +476,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             // Update cursor position
             if (m_wCursor)
             {
-                FrameSlot.SetPos(m_wCursor, m_fCursorX, m_fCursorY);
+                // m_fCursorX/Y are in screen pixels for hit detection
+                // FrameSlot.SetPos expects layout coordinates, so DPIUnscale here
+                WorkspaceWidget workspace = GetGame().GetWorkspace();
+                float layoutX = workspace.DPIUnscale(m_fCursorX);
+                float layoutY = workspace.DPIUnscale(m_fCursorY);
+                FrameSlot.SetPos(m_wCursor, layoutX, layoutY);
                 m_wCursor.SetVisible(true);
             }
             
@@ -697,9 +702,9 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         localHit = SCR_Math3D.QuatMultiply(screenQuatInv, localHit);
         localHit = localHit - m_vScreenWorldOffset;
         
-        // Get RT widget size for pixel scaling
-        float rtW, rtH;
-        m_RTWidget.GetScreenSize(rtW, rtH);
+        // Get ContentFrame size for pixel scaling (cursor lives in ContentFrame's coordinate space)
+        float frameW, frameH;
+        m_wContentFrame.GetScreenSize(frameW, frameH);
         
         // Normalize to 0-1 UV (Z = horizontal, Y = vertical)
         float u = (localHit[2] / m_vScreenWorldSize[2]) + 0.5;
@@ -710,14 +715,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         v = Math.Clamp(v, 0, 1);
         
         // Scale to screen pixels
-        float screenX = u * rtW;
-        float screenY = v * rtH;
-        
-        // Convert to layout coordinates for widget positioning
-        // (GetScreenSize returns DPI-scaled pixels, but FrameSlot.SetPos expects layout coords)
-        WorkspaceWidget workspace = GetGame().GetWorkspace();
-        uiX = workspace.DPIUnscale(screenX);
-        uiY = workspace.DPIUnscale(screenY);
+        uiX = u * frameW;
+        uiY = v * frameH;
     }
     
     // ============================================

@@ -79,13 +79,40 @@ modded class SCR_PlayerController
         
         if (m_bIsLocalPlayerController)
         {
-			if (m_TDLInputManager && HasATAKDevice())
+			if (m_TDLInputManager && HasATAKDevice() && ShouldActivateTDLContext())
             	m_TDLInputManager.ActivateContext("TDLMenuContext", 100);
 			
             UpdateTDLNetworkState(timeSlice);
             UpdateHeldDeviceCache(timeSlice);
         }
     }
+	
+	// ============================================
+	// MENU STATE CHECK
+	// ============================================
+	
+	//------------------------------------------------------------------------------------------------
+	//! Returns true if TDL contexts should be active
+	//! Blocks activation when non-TDL menus are open (pause, inventory, etc.)
+	bool ShouldActivateTDLContext()
+	{
+	    MenuManager menuMgr = GetGame().GetMenuManager();
+	    if (!menuMgr)
+	        return true;
+	    
+	    if (!menuMgr.IsAnyMenuOpen())
+	        return true;
+	    
+	    // A menu is open - check if it's OUR menu
+	    MenuBase topMenu = menuMgr.GetTopMenu();
+	    if (!topMenu)
+	        return true;
+	    
+	    // Allow if the TDL menu is the active one
+	    AG0_TDLMenuUI tdlMenu = AG0_TDLMenuUI.Cast(topMenu);
+	    return tdlMenu != null;
+	}
+	
     
     // ============================================
     // HELD DEVICE CACHE - Core Implementation
