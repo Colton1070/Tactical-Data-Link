@@ -33,6 +33,13 @@ modded class SCR_PlayerController
     
     // TDL Menu input handling
     protected InputManager m_TDLInputManager;
+	
+	// ============================================
+	// EUD SCREEN ADJUSTMENT
+	// ============================================
+	
+	protected TDL_EUDEntity m_CachedEUDEntity;
+	protected const float EUD_ADJUST_STEP = 0.1;
     
     // ============================================
     // LIFECYCLE
@@ -66,6 +73,9 @@ modded class SCR_PlayerController
         
         if (m_bIsLocalPlayerController)
         {
+			if (m_TDLInputManager && HasATAKDevice())
+            	m_TDLInputManager.ActivateContext("TDLMenuContext", 100);
+			
             UpdateTDLNetworkState(timeSlice);
             UpdateHeldDeviceCache(timeSlice);
         }
@@ -128,7 +138,7 @@ modded class SCR_PlayerController
     
     //------------------------------------------------------------------------------------------------
     protected void OnTDLMenuToggle()
-    {
+    {	
         MenuManager menuManager = GetGame().GetMenuManager();
         MenuBase topMenu = menuManager.GetTopMenu();
         
@@ -562,6 +572,86 @@ modded class SCR_PlayerController
         // Server-side call - SetCustomCallsign handles the logic + bump + system notify
         device.SetCustomCallsign(callsign);
     }
+	
+	//------------------------------------------------------------------------------------------------
+	protected void InitEUDInputListeners()
+	{
+	    if (!m_TDLInputManager)
+	        return;
+	    
+	    m_TDLInputManager.AddActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
+	    m_TDLInputManager.AddActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void CleanupEUDInputListeners()
+	{
+	    if (!m_TDLInputManager)
+	        return;
+	    
+	    m_TDLInputManager.RemoveActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
+	    m_TDLInputManager.RemoveActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void UpdateEUDCache()
+	{
+	    m_CachedEUDEntity = null;
+	    
+	    foreach (AG0_TDLDeviceComponent device : m_aHeldDevicesCache)
+	    {
+	        TDL_EUDEntity eud = TDL_EUDEntity.Cast(device.GetOwner());
+	        if (eud)
+	        {
+	            m_CachedEUDEntity = eud;
+	            break;
+	        }
+	    }
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnEUDAdjustUp()
+	{
+	    if (!m_CachedEUDEntity)
+	        return;
+	    
+	    AskServerAdjustEUD(EUD_ADJUST_STEP);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnEUDAdjustDown()
+	{
+	    if (!m_CachedEUDEntity)
+	        return;
+	    
+	    AskServerAdjustEUD(-EUD_ADJUST_STEP);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void AskServerAdjustEUD(float delta)
+	{
+	    RplComponent rpl = RplComponent.Cast(m_CachedEUDEntity.FindComponent(RplComponent));
+	    if (!rpl)
+	        return;
+	    
+	    m_CachedEUDEntity.RequestAdjustment(delta);
+	    Rpc(RpcAsk_AdjustEUD, rpl.Id(), delta);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_AdjustEUD(RplId eudRplId, float delta)
+	{
+	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(eudRplId));
+	    if (!rpl)
+	        return;
+	    
+	    TDL_EUDEntity eud = TDL_EUDEntity.Cast(rpl.GetEntity());
+	    if (!eud)
+	        return;
+	    
+	    eud.RequestAdjustment(delta);
+	}
     
     //------------------------------------------------------------------------------------------------
     // Get callsign for a player in a specific network

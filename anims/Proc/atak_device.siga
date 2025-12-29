@@ -1,0 +1,93 @@
+ProcAnimSignalResClass {
+ Inputs {
+  IOPItemInputClass {
+   id 1
+   name "DeviceRotation"
+   tl -310.684 -4.023
+   children {
+    11
+   }
+   value 0.5
+  }
+  IOPInputValueClass {
+   id 3
+   name "Value 3"
+   tl -33.257 -149.42
+   children {
+    6
+   }
+   value 360
+  }
+  IOPInputValueClass {
+   id 10
+   name "Value 10"
+   tl 143.134 114.057
+   children {
+    9
+   }
+   value 180
+  }
+ }
+ Ops {
+  IOPItemOpMulClass {
+   id 6
+   name "Mul 6"
+   tl 174.176 -2.025
+   children {
+    9
+   }
+   inputs {
+    ConnectionClass "11:0" {
+     id 11
+     port 0
+    }
+    ConnectionClass "3:0" {
+     id 3
+     port 0
+    }
+   }
+  }
+  IOPItemOpSubClass {
+   id 9
+   name "Sub 9"
+   tl 345.024 120.862
+   children {
+    2
+   }
+   inputs {
+    ConnectionClass "6:1" {
+     id 6
+     port 1
+    }
+    ConnectionClass "10:0" {
+     id 10
+     port 0
+    }
+   }
+  }
+  IOPItemOpSmootherClass {
+   id 11
+   name "Smoother 11"
+   tl -83.358 -2.647
+   children {
+    6
+   }
+   inputs {
+    ConnectionClass "1:0" {
+     id 1
+     port 0
+    }
+   }
+   "Fade In Time" 300
+   "Fade Out Time" 300
+  }
+ }
+ Outputs {
+  IOPItemOutputClass {
+   id 2
+   name "Rotation"
+   tl 534.653 -1.035
+   input 9
+  }
+ }
+}

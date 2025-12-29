@@ -173,15 +173,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    if (!controller || !controller.IsHoldingDevice(owner))
 	        return;
 	    
-	    // Only activate context for ATAK devices
-	    if (IsPowered() && HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
-		{
-		    if (controller.HasATAKDevice())
-		    {
-		        GetGame().GetInputManager().ActivateContext("TDLMenuContext");
-		    }
-		}
-	    
 	    // Video display logic stays the same
 	    RplId activeSource = GetActiveVideoSource();
 	    if (activeSource == RplId.Invalid())

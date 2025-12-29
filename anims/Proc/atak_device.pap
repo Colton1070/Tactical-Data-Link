@@ -1,0 +1,98 @@
+ProcAnimProjectClass {
+ signals {
+  SignalClass {
+   id 1028
+   name "Signal 1"
+   tl 156.205 748.445
+   res "{188D8B490440F561}anims/Proc/atak_device.siga"
+   inputsport {
+    1
+   }
+   outputsport {
+    2
+   }
+   inputvalues {
+    0
+   }
+   inputvaluesmin {
+    0
+   }
+   inputvaluesmax {
+    1
+   }
+  }
+ }
+ funcs {
+  BoneClass {
+   id 5126
+   name "v_pivot"
+   version 0
+   tl 309.104 590.807
+   outs {
+    7174
+   }
+   bone "v_pivot"
+  }
+  RotationMakeClass {
+   id 6150
+   name "RotationMake 6150"
+   tl 458.547 766.7
+   iops {
+    IOPConnectionClass iopConnection {
+     port 1
+     conn {
+      ConnectionsClass connections {
+       id 0
+       links {
+        ConnectionClass "1028:2" {
+         id 1028
+         port 2
+        }
+       }
+      }
+     }
+    }
+   }
+   outs {
+    7174
+   }
+  }
+  RotationSetClass {
+   id 7174
+   name "RotationSet 7174"
+   tl 693.952 623.87
+   funcs {
+    IOPConnectionClass iopConnection {
+     port 0
+     conn {
+      ConnectionsClass connections {
+       id 2
+       links {
+        ConnectionClass "5126:0" {
+         id 5126
+         port 0
+        }
+       }
+      }
+     }
+    }
+    IOPConnectionClass iopConnection {
+     port 1
+     conn {
+      ConnectionsClass connections {
+       id 2
+       links {
+        ConnectionClass "6150:0" {
+         id 6150
+         port 0
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+ model "{50BD59AAE050343D}Assets/Items/Equipment/S23_EUD.xob"
+ version 1
+}
