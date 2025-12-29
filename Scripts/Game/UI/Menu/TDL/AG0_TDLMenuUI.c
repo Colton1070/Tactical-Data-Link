@@ -198,6 +198,13 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         // Attach click handlers to cards
         AttachCardHandlers();
+		
+		if (m_wNetworkButton)
+	    {
+	        ButtonWidget btn = ButtonWidget.Cast(m_wNetworkButton);
+	        if (btn)
+	            GetGame().GetWorkspace().SetFocusedWidget(btn);
+	    }
     }
     
     //------------------------------------------------------------------------------------------------

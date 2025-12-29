@@ -452,6 +452,16 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     //------------------------------------------------------------------------------------------------
     protected void UpdateInteraction()
     {
+		MenuManager menuManager = GetGame().GetMenuManager();
+        if (menuManager && menuManager.GetTopMenu())
+        {
+            if (m_bLookingAtScreen)
+                SetLookingAtScreen(false);
+            m_bDragging = false;
+            m_bClickHandled = false;
+            return;
+        }
+		
         // Get camera ray
         vector camOrigin, camDir;
         if (!GetCameraRay(camOrigin, camDir))
