@@ -1,7 +1,7 @@
-// TDL EUD Entity - owns its own bone manipulation with MP replication
-class TDL_EUDEntityClass : GenericEntityClass {}
+// TDL_EUDBoneComponent.c
+class TDL_EUDBoneComponentClass : ScriptComponentClass {}
 
-class TDL_EUDEntity : GenericEntity
+class TDL_EUDBoneComponent : ScriptComponent
 {
     [Attribute("v_pivot", UIWidgets.EditBox, "Bone name to rotate")]
     protected string m_sBoneName;
@@ -15,70 +15,68 @@ class TDL_EUDEntity : GenericEntity
     [Attribute("0", UIWidgets.ComboBox, "Rotation axis", "", ParamEnumArray.FromEnum(ETDL_EUDAxis))]
     protected ETDL_EUDAxis m_eRotationAxis;
     
-    [Attribute("0.5", UIWidgets.Slider, "Initial position (0-1)", "0 1 0.01"), RplProp(onRplName: "OnPositionChanged")]
+    [Attribute("0.5", UIWidgets.Slider, "Initial position (0-1)", "0 1 0.01")]
     protected float m_fTargetPosition;
     
     [Attribute("5.0", UIWidgets.Slider, "Lerp speed (higher = faster)", "0.5 20 0.5")]
     protected float m_fLerpSpeed;
     
-    // Current visual position (lerped toward target)
     protected float m_fCurrentPosition;
-    
-    // Threshold for considering position "arrived"
     protected const float POSITION_EPSILON = 0.001;
-    
     protected int m_iBoneIdx = -1;
     protected bool m_bInitialized;
     
     //------------------------------------------------------------------------------------------------
-    void TDL_EUDEntity(IEntitySource src, IEntity parent)
+    override void OnPostInit(IEntity owner)
     {
-        SetFlags(EntityFlags.ACTIVE, true);
-        SetEventMask(EntityEvent.FRAME);
+        super.OnPostInit(owner);
+        
+        // Skip for preview entities
+        if (owner.GetWorld() != GetGame().GetWorld())
+            return;
+        
+        SetEventMask(owner, EntityEvent.FRAME);
     }
     
     //------------------------------------------------------------------------------------------------
     override void EOnFrame(IEntity owner, float timeSlice)
     {
+        // Double-check world (in case of race)
+        if (owner.GetWorld() != GetGame().GetWorld())
+            return;
+        
         if (!m_bInitialized)
         {
-            InitBone();
+            InitBone(owner);
             if (!m_bInitialized)
                 return;
         }
         
-        // Lerp current position toward target
         UpdateLerp(timeSlice);
-        
-        // Apply bone rotation using lerped position
-        UpdateBone();
+        UpdateBone(owner);
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void InitBone()
+    protected void InitBone(IEntity owner)
     {
         if (m_bInitialized)
             return;
         
-        Animation anim = GetAnimation();
+        Animation anim = owner.GetAnimation();
         if (!anim)
             return;
         
         m_iBoneIdx = anim.GetBoneIndex(m_sBoneName);
-        
         if (m_iBoneIdx == -1)
             return;
         
-        // Initialize current position to match target (no lerp on first frame)
         m_fCurrentPosition = m_fTargetPosition;
-        
         m_bInitialized = true;
     }
     
     //------------------------------------------------------------------------------------------------
     protected void UpdateLerp(float timeSlice)
     {
-        // Skip if already at target
         float delta = m_fTargetPosition - m_fCurrentPosition;
         if (Math.AbsFloat(delta) < POSITION_EPSILON)
         {
@@ -86,27 +84,23 @@ class TDL_EUDEntity : GenericEntity
             return;
         }
         
-        // Frame-rate independent lerp using clamped interpolant
-        // t approaches 1 over time, giving smooth deceleration
         float t = Math.Clamp(m_fLerpSpeed * timeSlice, 0.0, 1.0);
         m_fCurrentPosition = Math.Lerp(m_fCurrentPosition, m_fTargetPosition, t);
         
-        // Snap if very close to avoid perpetual micro-adjustments
         if (Math.AbsFloat(m_fTargetPosition - m_fCurrentPosition) < POSITION_EPSILON)
             m_fCurrentPosition = m_fTargetPosition;
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void UpdateBone()
+    protected void UpdateBone(IEntity owner)
     {
         if (m_iBoneIdx == -1)
             return;
         
-        Animation anim = GetAnimation();
+        Animation anim = owner.GetAnimation();
         if (!anim)
             return;
         
-        // Use CURRENT position (lerped) not target
         float angle = Math.Lerp(m_fMinAngle, m_fMaxAngle, m_fCurrentPosition);
         
         vector angles = vector.Zero;
@@ -121,19 +115,10 @@ class TDL_EUDEntity : GenericEntity
         Math3D.AnglesToMatrix(angles, mat);
         mat[3] = vector.Zero;
         
-        anim.SetBoneMatrix(this, m_iBoneIdx, mat);
+        anim.SetBoneMatrix(owner, m_iBoneIdx, mat);
     }
     
     //------------------------------------------------------------------------------------------------
-    //! Called when replicated position changes on clients
-    protected void OnPositionChanged()
-    {
-        // EOnFrame will lerp toward the new target value
-        // No need to do anything here - the lerp handles smooth transition
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    //! Request adjustment - called by action, runs on server
     void RequestAdjustment(float delta)
     {
         m_fTargetPosition = Math.Clamp(m_fTargetPosition + delta, 0.0, 1.0);
@@ -148,7 +133,6 @@ class TDL_EUDEntity : GenericEntity
     }
     
     //------------------------------------------------------------------------------------------------
-    //! Immediately snap to position without lerping
     void SetPositionImmediate(float pos)
     {
         m_fTargetPosition = Math.Clamp(pos, 0.0, 1.0);
@@ -157,24 +141,9 @@ class TDL_EUDEntity : GenericEntity
     }
     
     //------------------------------------------------------------------------------------------------
-    float GetPosition()
-    {
-        return m_fTargetPosition;
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    float GetCurrentPosition()
-    {
-        return m_fCurrentPosition;
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    bool IsAnimating()
-    {
-        return Math.AbsFloat(m_fTargetPosition - m_fCurrentPosition) >= POSITION_EPSILON;
-    }
-    
-    //------------------------------------------------------------------------------------------------
+    float GetPosition() { return m_fTargetPosition; }
+    float GetCurrentPosition() { return m_fCurrentPosition; }
+    bool IsAnimating() { return Math.AbsFloat(m_fTargetPosition - m_fCurrentPosition) >= POSITION_EPSILON; }
     float GetMinAngle() { return m_fMinAngle; }
     float GetMaxAngle() { return m_fMaxAngle; }
 }

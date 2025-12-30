@@ -13,7 +13,10 @@ class AG0_PlayerHasEUDCondition : SCR_AvailableActionCondition
         
         foreach (AG0_TDLDeviceComponent device : devices)
         {
-            if (TDL_EUDEntity.Cast(device.GetOwner()))
+            TDL_EUDBoneComponent boneComp = TDL_EUDBoneComponent.Cast(
+                device.GetOwner().FindComponent(TDL_EUDBoneComponent)
+            );
+            if (boneComp)
                 return GetReturnResult(true);
         }
         

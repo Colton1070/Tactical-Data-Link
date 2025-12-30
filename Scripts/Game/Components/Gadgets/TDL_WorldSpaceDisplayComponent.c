@@ -104,6 +104,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     {
         super.EOnInit(owner);
         
+		if (owner.GetWorld() != GetGame().GetWorld()) //Bacon fix until I polish this
+        	return;
         // Defer setup to ensure slots are populated
         GetGame().GetCallqueue().CallLater(SetupRenderTarget, 100, false, owner);
     }
@@ -111,6 +113,9 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     //------------------------------------------------------------------------------------------------
     override void EOnFrame(IEntity owner, float timeSlice)
     {
+		if (owner.GetWorld() != GetGame().GetWorld()) //Bacon fix?
+        	return;
+		
         // MULTIPLAYER OPTIMIZATION: Only process if this device is held by local player
         // Other players' devices simulate locally but we skip expensive raycast/UI work
         SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
@@ -229,6 +234,10 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             Print("[TDL_WorldSpaceDisplay] FAIL: Could not create ATAK layout", LogLevel.ERROR);
             return;
         }
+        
+        // CRITICAL: Disable focus on all widgets to prevent interference with other menus
+        // We handle interaction via raycasting, not the normal focus system
+        DisableFocusRecursive(m_wRTContainer);
         
         // Bind to the screen mesh
         m_RTWidget.SetRenderTarget(m_ScreenEntity);
@@ -1110,6 +1119,30 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         if (!enabled)
         {
             SetLookingAtScreen(false);
+        }
+    }
+    
+    // ============================================
+    // FOCUS CONTROL
+    // ============================================
+    
+    //------------------------------------------------------------------------------------------------
+    //! Recursively disable focus on all widgets in hierarchy
+    //! Prevents these widgets from being candidates in focus navigation (fixes Bacon Loadout Editor conflict)
+    protected void DisableFocusRecursive(Widget w)
+    {
+        if (!w)
+            return;
+        
+        // Set NOFOCUS flag to exclude from focus navigation
+        w.SetFlags(WidgetFlags.NOFOCUS);
+        
+        // Process all children
+        Widget child = w.GetChildren();
+        while (child)
+        {
+            DisableFocusRecursive(child);
+            child = child.GetSibling();
         }
     }
     

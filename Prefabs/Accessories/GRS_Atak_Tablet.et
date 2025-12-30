@@ -2,7 +2,7 @@ GenericEntity {
  ID "65CC0BEE176CFD52"
  components {
   AG0_TDLDeviceComponent "{672EB3530B40C1B0}" {
-   m_eCapabilities 80
+   m_eCapabilities 20
   }
  }
 }

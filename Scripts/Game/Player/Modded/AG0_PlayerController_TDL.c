@@ -38,7 +38,7 @@ modded class SCR_PlayerController
 	// EUD SCREEN ADJUSTMENT
 	// ============================================
 	
-	protected TDL_EUDEntity m_CachedEUDEntity;
+	protected TDL_EUDBoneComponent m_CachedEUDBoneComp;
 	protected const float EUD_ADJUST_STEP = 0.1;
     
     // ============================================
@@ -79,8 +79,8 @@ modded class SCR_PlayerController
         
         if (m_bIsLocalPlayerController)
         {
-			if (m_TDLInputManager && HasATAKDevice() && ShouldActivateTDLContext())
-            	m_TDLInputManager.ActivateContext("TDLMenuContext", 100);
+			if (HasATAKDevice() && ShouldActivateTDLContext())
+		        m_TDLInputManager.ActivateContext("TDLMenuContext");
 			
             UpdateTDLNetworkState(timeSlice);
             UpdateHeldDeviceCache(timeSlice);
@@ -610,14 +610,16 @@ modded class SCR_PlayerController
 	//------------------------------------------------------------------------------------------------
 	protected void UpdateEUDCache()
 	{
-	    m_CachedEUDEntity = null;
+	    m_CachedEUDBoneComp = null;
 	    
 	    foreach (AG0_TDLDeviceComponent device : m_aHeldDevicesCache)
 	    {
-	        TDL_EUDEntity eud = TDL_EUDEntity.Cast(device.GetOwner());
-	        if (eud)
+	        TDL_EUDBoneComponent boneComp = TDL_EUDBoneComponent.Cast(
+	            device.GetOwner().FindComponent(TDL_EUDBoneComponent)
+	        );
+	        if (boneComp)
 	        {
-	            m_CachedEUDEntity = eud;
+	            m_CachedEUDBoneComp = boneComp;
 	            break;
 	        }
 	    }
@@ -626,7 +628,7 @@ modded class SCR_PlayerController
 	//------------------------------------------------------------------------------------------------
 	protected void OnEUDAdjustUp()
 	{
-	    if (!m_CachedEUDEntity)
+	    if (!m_CachedEUDBoneComp)
 	        return;
 	    
 	    AskServerAdjustEUD(EUD_ADJUST_STEP);
@@ -635,7 +637,7 @@ modded class SCR_PlayerController
 	//------------------------------------------------------------------------------------------------
 	protected void OnEUDAdjustDown()
 	{
-	    if (!m_CachedEUDEntity)
+	    if (!m_CachedEUDBoneComp)
 	        return;
 	    
 	    AskServerAdjustEUD(-EUD_ADJUST_STEP);
@@ -644,11 +646,12 @@ modded class SCR_PlayerController
 	//------------------------------------------------------------------------------------------------
 	protected void AskServerAdjustEUD(float delta)
 	{
-	    RplComponent rpl = RplComponent.Cast(m_CachedEUDEntity.FindComponent(RplComponent));
+	    IEntity owner = m_CachedEUDBoneComp.GetOwner();
+	    RplComponent rpl = RplComponent.Cast(owner.FindComponent(RplComponent));
 	    if (!rpl)
 	        return;
 	    
-	    m_CachedEUDEntity.RequestAdjustment(delta);
+	    m_CachedEUDBoneComp.RequestAdjustment(delta);
 	    Rpc(RpcAsk_AdjustEUD, rpl.Id(), delta);
 	}
 	
@@ -660,11 +663,17 @@ modded class SCR_PlayerController
 	    if (!rpl)
 	        return;
 	    
-	    TDL_EUDEntity eud = TDL_EUDEntity.Cast(rpl.GetEntity());
-	    if (!eud)
+	    IEntity entity = rpl.GetEntity();
+	    if (!entity)
 	        return;
 	    
-	    eud.RequestAdjustment(delta);
+	    TDL_EUDBoneComponent boneComp = TDL_EUDBoneComponent.Cast(
+	        entity.FindComponent(TDL_EUDBoneComponent)
+	    );
+	    if (!boneComp)
+	        return;
+	    
+	    boneComp.RequestAdjustment(delta);
 	}
     
     //------------------------------------------------------------------------------------------------

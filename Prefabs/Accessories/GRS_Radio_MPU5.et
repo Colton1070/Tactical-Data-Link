@@ -1,0 +1,39 @@
+GenericEntity {
+ ID "65CC0BEF6202882A"
+ components {
+  AG0_TDLDeviceComponent "{673C6E6B8BEF8EF7}" {
+   m_eCapabilities 83
+  }
+  AG0_TDLRadioComponent "{65CC0BEE0F3A49D6}" {
+  }
+  ActionsManagerComponent "{65CC0BEE0F3B822B}" {
+   additionalActions {
+    AG0_DeviceTDLNetworkAction "{673C6E6BD6CCC0F7}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo SCR_ActionContextUIInfo "{673C6E6BDA96EEB5}" {
+     }
+     "Sort Priority" -3
+     m_bCreateNetwork 1
+    }
+    AG0_DeviceTDLNetworkAction "{673C6E6823105B18}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo SCR_ActionContextUIInfo "{673C6E6823136B43}" {
+     }
+     "Sort Priority" -2
+    }
+    AG0_RadioFillKeyUserAction "{673C6E6836EACB2D}" {
+     ParentContextList {
+      "knob_channel"
+     }
+     UIInfo SCR_ActionContextUIInfo "{673C6E6832CE86A6}" {
+     }
+     "Sort Priority" -1
+    }
+   }
+  }
+ }
+}

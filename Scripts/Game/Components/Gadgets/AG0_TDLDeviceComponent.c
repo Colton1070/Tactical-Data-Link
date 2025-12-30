@@ -43,6 +43,9 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	[RplProp(onRplName: "OnNetworkIDReplicated")]
 	protected int m_iCurrentNetworkID = -1;
 	
+	//Not a rplprop, because replication is being done manually via rpc, which is more efficient, time will tell.
+	protected ref AG0_TDLNetworkMembers m_LocalNetworkMembers;
+	
 	[RplProp()]
 	protected ref array<RplId> m_mConnectedMembers = new array<RplId>();
 	
@@ -826,6 +829,24 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    m_mConnectedMembers = members;
 	}
 	
+	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
+	protected void RpcDo_SetLocalNetworkMembers(array<ref AG0_TDLNetworkMember> members)
+	{
+	    // Initialize storage if needed
+	    if (!m_LocalNetworkMembers)
+	        m_LocalNetworkMembers = new AG0_TDLNetworkMembers();
+	    
+	    // Clear and repopulate
+	    m_LocalNetworkMembers.Clear();
+	    foreach (AG0_TDLNetworkMember member : members)
+	    {
+	        m_LocalNetworkMembers.Add(member);
+	    }
+	    
+	    Print(string.Format("TDL_DEVICE_INFO: Received %1 network members on device %2", 
+	        members.Count(), GetOwner()), LogLevel.DEBUG);
+	}
+	
 	//------------------------------------------------------------------------------------------------
 	// System callback methods (called by AG0_TDLSystem)
 	//------------------------------------------------------------------------------------------------
@@ -861,11 +882,32 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    Print(string.Format("TDL_NETWORK_LEAVE: %1 (%2) left network %3", 
 	        ownerName, GetOwnerPlayerName(), m_iCurrentNetworkID), LogLevel.DEBUG);
 	    
+	    // Clear local network members storage
+	    if (m_LocalNetworkMembers)
+	        m_LocalNetworkMembers.Clear();
+	    
 	    // RPC to client if needed
 	    if (!m_bLeavingNetwork)
         	Rpc(RpcDo_NotifyNetworkLeft, m_iCurrentNetworkID);
 	    m_iCurrentNetworkID = -1;
 		m_bLeavingNetwork = false;
+	}
+	
+	
+	
+	//------------------------------------------------------------------------------------------------
+	// Server-side: Receive network members from system and broadcast to all clients
+	// This is called by AG0_TDLSystem for devices with INFORMATION capability
+	//------------------------------------------------------------------------------------------------
+	void SetLocalNetworkMembers(array<ref AG0_TDLNetworkMember> members)
+	{
+	    if (!Replication.IsServer()) return;
+	    
+	    Print(string.Format("TDL_DEVICE_INFO: Server sending %1 members to device %2", 
+	        members.Count(), GetOwner()), LogLevel.DEBUG);
+	    
+	    // RPC to all clients (Broadcast) so any player viewing this device sees the data
+	    Rpc(RpcDo_SetLocalNetworkMembers, members);
 	}
 	
 	void OnNetworkConnectivityUpdated(array<RplId> members)
@@ -1071,7 +1113,14 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	{
 	    if (!HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
 	        return null;
-	        
+	    
+	    // HYBRID APPROACH: Check local storage first (for shared/vehicle devices)
+	    // If this device has its own copy of network data, use it
+	    // This enables vehicle displays and fixed installations to work
+	    if (m_LocalNetworkMembers && m_LocalNetworkMembers.Count() > 0)
+	        return m_LocalNetworkMembers;
+	    
+	    // FALLBACK: Player controller path (for personal devices held by player)
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
 		    GetGame().GetPlayerController()
 		);
@@ -1087,6 +1136,15 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	//------------------------------------------------------------------------------------------------
 	// CLIENT-SIDE NETWORK MEMBER DATA ACCESS HELPERS
 	//------------------------------------------------------------------------------------------------
+	
+	
+	//------------------------------------------------------------------------------------------------
+	// Check if this device has locally stored network data (vehicle/shared device mode)
+	//------------------------------------------------------------------------------------------------
+	bool HasLocalNetworkData()
+	{
+	    return m_LocalNetworkMembers && m_LocalNetworkMembers.Count() > 0;
+	}
 	
 	// Get all network members as a convenient map
 	map<RplId, ref AG0_TDLNetworkMember> GetNetworkMembersMap()

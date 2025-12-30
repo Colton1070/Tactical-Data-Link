@@ -1003,7 +1003,7 @@ class AG0_TDLSystem : WorldSystem
 	        controller.NotifyClearNetwork(networkId);
 	    }
     }
-    
+
     protected void NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
 	{
 	    // Build array of connected device IDs for the connectivity update
@@ -1013,10 +1013,32 @@ class AG0_TDLSystem : WorldSystem
 	        deviceIDs.Insert(rplId); 
 	    }
 	    
-	    // Always notify the network device about connectivity
+	    // Always notify the network device about connectivity (existing behavior)
 	    device.OnNetworkConnectivityUpdated(deviceIDs);
 	    
-	    // Now handle data distribution to INFORMATION devices on the same player
+	    // Convert map to array once (used for both paths)
+	    array<ref AG0_TDLNetworkMember> membersArray = {};
+	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
+	    {
+	        membersArray.Insert(member);
+	    }
+	    
+	    // ========================================================================
+	    // Direct device notification for INFORMATION capability devices
+	    // This enables shared displays (vehicles, fixed installations) to work
+	    // by giving them their own copy of network data that any player can access
+	    // ========================================================================
+	    if (device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
+	    {
+	        device.SetLocalNetworkMembers(membersArray);
+	        Print(string.Format("TDL_SYSTEM: Sent %1 members directly to INFORMATION device %2", 
+	            membersArray.Count(), device.GetOwner()), LogLevel.DEBUG);
+	    }
+	    
+	    // ========================================================================
+	    // Player controller path for player-held devices
+	    // This maintains the efficient aggregation for personal devices
+	    // ========================================================================
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player) return;
 	    
@@ -1036,13 +1058,6 @@ class AG0_TDLSystem : WorldSystem
 	    // Get the network ID from the device
 	    int networkId = device.GetCurrentNetworkID();
 	    if (networkId <= 0) return;
-	    
-	    // Convert map to array for RPC
-	    array<ref AG0_TDLNetworkMember> membersArray = {};
-	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
-	    {
-	        membersArray.Insert(member);
-	    }
 	    
 	    controller.NotifyNetworkMembers(networkId, membersArray);
 	}

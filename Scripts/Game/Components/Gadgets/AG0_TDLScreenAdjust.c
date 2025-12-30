@@ -1,5 +1,5 @@
 //------------------------------------------------------------------------------------------------
-// Action - adjusts screen angle on TDL_EUDEntity with MP support
+// Action - adjusts screen angle on entity with TDL_EUDBoneComponent, with MP support
 //------------------------------------------------------------------------------------------------
 class TDL_ScreenAdjustAction : ScriptedUserAction
 {
@@ -12,29 +12,29 @@ class TDL_ScreenAdjustAction : ScriptedUserAction
     [Attribute("", UIWidgets.EditBox, "Input action for decrease")]
     protected string m_sActionDecrease;
     
-    protected TDL_EUDEntity m_Device;
+    protected TDL_EUDBoneComponent m_BoneComp;
     protected bool m_bIsLocalPlayer;
     protected float m_fTargetValue;
     
     //------------------------------------------------------------------------------------------------
     override void Init(IEntity pOwnerEntity, GenericComponent pManagerComponent)
     {
-        m_Device = TDL_EUDEntity.Cast(pOwnerEntity);
+        m_BoneComp = TDL_EUDBoneComponent.Cast(pOwnerEntity.FindComponent(TDL_EUDBoneComponent));
         
-        if (m_Device)
-            m_fTargetValue = m_Device.GetPosition();
+        if (m_BoneComp)
+            m_fTargetValue = m_BoneComp.GetPosition();
     }
     
     //------------------------------------------------------------------------------------------------
     override bool CanBeShownScript(IEntity user)
     {
-        return m_Device != null;
+        return m_BoneComp != null;
     }
     
     //------------------------------------------------------------------------------------------------
     override bool CanBePerformedScript(IEntity user)
     {
-        return m_Device != null;
+        return m_BoneComp != null;
     }
     
     //------------------------------------------------------------------------------------------------
@@ -46,8 +46,8 @@ class TDL_ScreenAdjustAction : ScriptedUserAction
             return;
         
         // Sync target with current device state
-        if (m_Device)
-            m_fTargetValue = m_Device.GetPosition();
+        if (m_BoneComp)
+            m_fTargetValue = m_BoneComp.GetPosition();
         
         InputManager im = GetGame().GetInputManager();
         if (im)
@@ -80,7 +80,7 @@ class TDL_ScreenAdjustAction : ScriptedUserAction
     //------------------------------------------------------------------------------------------------
     protected void OnAdjust(float value)
     {
-        if (value == 0 || !m_Device)
+        if (value == 0 || !m_BoneComp)
             return;
         
         float delta = (value / Math.AbsFloat(value)) * m_fAdjustmentStep;
@@ -93,7 +93,7 @@ class TDL_ScreenAdjustAction : ScriptedUserAction
     //------------------------------------------------------------------------------------------------
     protected void OnAdjustDecrease(float value)
     {
-        if (value == 0 || !m_Device)
+        if (value == 0 || !m_BoneComp)
             return;
         
         m_fTargetValue = Math.Clamp(m_fTargetValue - m_fAdjustmentStep, 0.0, 1.0);
@@ -106,5 +106,4 @@ class TDL_ScreenAdjustAction : ScriptedUserAction
     {
         return false;
     }
-    
 }
