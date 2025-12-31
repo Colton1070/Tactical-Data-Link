@@ -132,9 +132,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	//Replication hack - trying to prevent VME...
 	protected bool m_bLeavingNetwork = false;
 
-
-
-	
 	override protected bool OnTicksOnRemoteProxy() { return true; } //This is DUMB
 	
 	override void OnPostInit(IEntity owner)
@@ -341,50 +338,43 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	// DISPLAY SIDE - Receiving broadcast feeds
 	//------------------------------------------------------------------------------------------------
 	protected void OnCameraBroadcastingChanged()
-    {
-        Print(string.Format("TDL_VIDEO: OnCameraBroadcastingChanged called - state is now %1 on device %2", 
-            m_bCameraBroadcasting, GetOwner()), LogLevel.DEBUG);
-        
-        // Guard: On client, only process if this is a genuine state change
-        // and avoid duplicate registration/unregistration
-        if (!System.IsConsoleApp())
-        {
-            SCR_PlayerController controller = SCR_PlayerController.Cast(
-			    GetGame().GetPlayerController()
-			);
-            if (!controller)
-            {
-                Print("TDL_VIDEO: No player controller, skipping registration update", LogLevel.DEBUG);
-                return;
-            }
-            
-            RplId myId = GetDeviceRplId();
-            if (myId == RplId.Invalid())
-            {
-                Print("TDL_VIDEO: Invalid device RplId, skipping registration update", LogLevel.DEBUG);
-                return;
-            }
-            
-            // Check current registration state to avoid duplicate operations
-            bool isCurrentlyRegistered = controller.IsVideoSourceAvailable(myId);
-            
-            if (m_bCameraBroadcasting && !isCurrentlyRegistered)
-            {
-                controller.RegisterBroadcastingDevice(myId);
-                Print(string.Format("TDL_VIDEO: Registered broadcasting device %1", myId), LogLevel.DEBUG);
-            }
-            else if (!m_bCameraBroadcasting && isCurrentlyRegistered)
-            {
-                controller.UnregisterBroadcastingDevice(myId);
-                Print(string.Format("TDL_VIDEO: Unregistered broadcasting device %1", myId), LogLevel.DEBUG);
-            }
-            else
-            {
-                Print(string.Format("TDL_VIDEO: No registration change needed (broadcasting=%1, registered=%2)", 
-                    m_bCameraBroadcasting, isCurrentlyRegistered), LogLevel.DEBUG);
-            }
-        }
-    }
+	{
+	    Print(string.Format("TDL_VIDEO: OnCameraBroadcastingChanged called - state is now %1 on device %2", 
+	        m_bCameraBroadcasting, GetOwner()), LogLevel.DEBUG);
+	    
+	    // Guard: On client, only process if this is a genuine state change
+	    if (!System.IsConsoleApp())
+	    {
+	        SCR_PlayerController controller = SCR_PlayerController.Cast(
+	            GetGame().GetPlayerController()
+	        );
+	        if (!controller)
+	        {
+	            Print("TDL_VIDEO: No player controller, skipping registration update", LogLevel.DEBUG);
+	            return;
+	        }
+	        
+	        RplId myId = GetDeviceRplId();
+	        if (myId == RplId.Invalid())
+	        {
+	            Print("TDL_VIDEO: Invalid device RplId, skipping registration update", LogLevel.DEBUG);
+	            return;
+	        }
+	        
+	        // Always register/unregister based on actual broadcast state
+	        // The controller's methods are idempotent - they check before modifying
+	        if (m_bCameraBroadcasting)
+	        {
+	            controller.RegisterBroadcastingDevice(myId);
+	            Print(string.Format("TDL_VIDEO: Registered broadcasting device %1", myId), LogLevel.DEBUG);
+	        }
+	        else
+	        {
+	            controller.UnregisterBroadcastingDevice(myId);
+	            Print(string.Format("TDL_VIDEO: Unregistered broadcasting device %1", myId), LogLevel.DEBUG);
+	        }
+	    }
+	}
 	
 	protected void OnVideoSourcesChanged()
 	{
@@ -653,21 +643,27 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    m_networkDialog.m_OnConfirm.Insert(OnNetworkDialogConfirm);
 	    m_networkDialog.m_OnCancel.Insert(OnNetworkDialogCancel);
 	    
-	    // Get the input fields
-	    m_networkNameEdit = EditBoxWidget.Cast(m_networkDialog.GetRootWidget().FindAnyWidget("NetworkNameInput"));
-	    m_networkPasswordEdit = EditBoxWidget.Cast(m_networkDialog.GetRootWidget().FindAnyWidget("NetworkPasswordInput"));
-	    
-	    if (!m_networkNameEdit || !m_networkPasswordEdit)
-	    {
-	        //Print("AG0_TDLRadioComponent: Could not find input fields", LogLevel.ERROR);
-	        m_networkDialog.Close();
-	        m_networkDialog = null;
-	        return;
-	    }
-	    
-	    // Focus the name input
-	    GetGame().GetWorkspace().SetFocusedWidget(m_networkNameEdit);
-	    m_networkNameEdit.ActivateWriteMode();
+	    // Get the input fields - now we need the wrapper buttons
+		Widget nameWrapper = m_networkDialog.GetRootWidget().FindAnyWidget("NetworkNameInput");
+		Widget passWrapper = m_networkDialog.GetRootWidget().FindAnyWidget("NetworkPasswordInput");
+		
+		m_networkNameEdit = null;
+		m_networkPasswordEdit = null;
+		
+		if (nameWrapper)
+		    m_networkNameEdit = EditBoxWidget.Cast(nameWrapper.FindAnyWidget("EditBox"));
+		if (passWrapper)
+		    m_networkPasswordEdit = EditBoxWidget.Cast(passWrapper.FindAnyWidget("EditBox"));
+		
+		if (!m_networkNameEdit || !m_networkPasswordEdit)
+		{
+		    m_networkDialog.Close();
+		    m_networkDialog = null;
+		    return;
+		}
+		
+		// Focus the wrapper button (not the EditBox directly)
+		GetGame().GetWorkspace().SetFocusedWidget(nameWrapper);
 	}
 	
 	//------------------------------------------------------------------------------------------------

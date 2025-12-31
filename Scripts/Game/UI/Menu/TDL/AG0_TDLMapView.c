@@ -5,6 +5,8 @@
 
 class AG0_TDLMapView
 {
+	protected static const ResourceName MAP_SATELLITE_CONFIG = "{YOUR_GUID}Configs/MapSatelliteConfig.conf";
+	
     // Canvas and rendering
     protected CanvasWidget m_wCanvas;
     protected ref SharedItemRef m_pMapTexture;
@@ -182,13 +184,21 @@ class AG0_TDLMapView
 	// Fallback texture lookup for maps without proper prefab configuration
 	protected ResourceName GetFallbackSatelliteTexture()
 	{
+	    // Use the config helper for clean access
+	    AG0_MapSatelliteConfig config = AG0_MapSatelliteConfigHelper.GetConfig(MAP_SATELLITE_CONFIG);
+	    if (!config)
+	    {
+	        Print("[TDLMapView] Map satellite config not found, no fallback available", LogLevel.WARNING);
+	        return ResourceName.Empty;
+	    }
+	    
 	    string worldFile = GetGame().GetWorldFile();
+	    ResourceName texture = config.GetSatelliteTexture(worldFile);
 	    
-	    // Kolgulev / Cain
-	    if (worldFile.Contains("Cain"))
-	        return "{98696504473AE49E}UI/Textures/Map/worlds/Cain/CainRasterized.edds";
+	    if (texture.IsEmpty())
+	        Print(string.Format("[TDLMapView] No satellite texture configured for world: %1", worldFile), LogLevel.WARNING);
 	    
-	    return ResourceName.Empty;
+	    return texture;
 	}
     
     //------------------------------------------------------------------------------------------------

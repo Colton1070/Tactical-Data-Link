@@ -459,7 +459,7 @@ modded class SCR_PlayerController
     {
         if (m_StreamedBroadcastingDevices.Contains(deviceId))
         {
-            m_StreamedBroadcastingDevices.Remove(deviceId);
+            m_StreamedBroadcastingDevices.RemoveItem(deviceId);
             m_bVideoSourcesDirty = true;
         }
     }
@@ -480,9 +480,14 @@ modded class SCR_PlayerController
     
     //------------------------------------------------------------------------------------------------
     bool IsVideoSourceAvailable(RplId sourceId)
-    {
-        return m_AvailableVideoSourcesSet.Contains(sourceId);
-    }
+	{
+	    // Check local streaming devices first (client-registered)
+	    if (m_StreamedBroadcastingDevices.Contains(sourceId))
+	        return true;
+	    
+	    // Also check network-broadcast sources (server-replicated)
+	    return m_AvailableVideoSourcesSet.Contains(sourceId);
+	}
     
     // ============================================
     // PUBLIC GETTERS

@@ -48,6 +48,8 @@ FrameWidgetClass : "{604721ED8E6ED458}UI/layouts/Menus/Dialogs/ConfigurableDialo
                 FrameWidgetClass "{66C612CFF46BC37E}" {
                  Name "Frame0"
                  Slot OverlayWidgetSlot "{66C612C81465F0D8}" {
+                  HorizontalAlign 3
+                  VerticalAlign 3
                  }
                  {
                   VerticalLayoutWidgetClass "{66C612CFCEFC6ADB}" {
@@ -59,28 +61,110 @@ FrameWidgetClass : "{604721ED8E6ED458}UI/layouts/Menus/Dialogs/ConfigurableDialo
                     OffsetTop 0
                     SizeX 772.951
                     OffsetRight -773
-                    SizeY 98.652
-                    OffsetBottom -98.7
+                    SizeY 137.652
+                    OffsetBottom -137.7
                    }
                    {
-                    EditBoxWidgetClass "{66C612CFF46BC37C}" {
+                    ButtonWidgetClass "{673C96E29EAAC971}" : "{0022F0B45ADBC5AC}UI/layouts/WidgetLibrary/EditBox/WLib_EditBox.layout" {
                      Name "NetworkNameInput"
-                     Slot LayoutSlot "{66C612CDF19024CA}" {
-                      Padding 0 0 0 10
+                     Slot LayoutSlot "{673C96E29EAAC92C}" {
+                      HorizontalAlign 3
+                      Padding 4 4 4 4
                      }
-                     "Use placeholder text" 1
-                     "Placeholder text" "Username"
-                     "Virtual Keyboard Title" "Username"
+                     components {
+                      SCR_EditBoxComponent "{673C96E29EAAC972}" {
+                       m_bUseLabel 0
+                       m_bShowWriteIcon 0
+                      }
+                     }
+                     {
+                      VerticalLayoutWidgetClass "{5AA4D27F39EB2514}" {
+                       Prefab "{5AA4D27F39EB2514}"
+                       {
+                        SizeLayoutWidgetClass "{5538C205B27B0F5D}" {
+                         Prefab "{5538C205B27B0F5D}"
+                         {
+                          OverlayWidgetClass "{55367D8E531FD623}" {
+                           Prefab "{55367D8E531FD623}"
+                           {
+                            HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
+                             Prefab "{55367D8E4592BC6E}"
+                             {
+                              OverlayWidgetClass "{5538C2059A570E94}" {
+                               Prefab "{5538C2059A570E94}"
+                               {
+                                HorizontalLayoutWidgetClass "{58D095EE846E2B93}" {
+                                 Prefab "{58D095EE846E2B93}"
+                                 {
+                                  EditBoxWidgetClass "{5538C2058B18F877}" {
+                                   Prefab "{5538C2058B18F877}"
+                                   "Placeholder text" "Network Name"
+                                   "Virtual Keyboard Title" "Network Name"
+                                  }
+                                 }
+                                }
+                               }
+                              }
+                             }
+                            }
+                           }
+                          }
+                         }
+                        }
+                       }
+                      }
+                     }
                     }
-                    EditBoxWidgetClass "{66C612CFFC933606}" {
+                    ButtonWidgetClass "{673C96E2E1D16E33}" : "{0022F0B45ADBC5AC}UI/layouts/WidgetLibrary/EditBox/WLib_EditBox.layout" {
                      Name "NetworkPasswordInput"
-                     Slot LayoutSlot "{66C612CDF19024AB}" {
-                      Padding 0 10 0 10
+                     Slot LayoutSlot "{673C96E2E1D16E11}" {
+                      HorizontalAlign 3
+                      Padding 4 4 4 4
                      }
-                     "Use placeholder text" 1
-                     "Placeholder text" "Password"
-                     "Obfuscation character" "*"
-                     "Virtual Keyboard Title" "Password"
+                     components {
+                      SCR_EditBoxComponent "{673C96E2E1D16E34}" {
+                       m_bUseLabel 0
+                       m_bShowWriteIcon 0
+                      }
+                     }
+                     {
+                      VerticalLayoutWidgetClass "{5AA4D27F39EB2514}" {
+                       Prefab "{5AA4D27F39EB2514}"
+                       {
+                        SizeLayoutWidgetClass "{5538C205B27B0F5D}" {
+                         Prefab "{5538C205B27B0F5D}"
+                         {
+                          OverlayWidgetClass "{55367D8E531FD623}" {
+                           Prefab "{55367D8E531FD623}"
+                           {
+                            HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
+                             Prefab "{55367D8E4592BC6E}"
+                             {
+                              OverlayWidgetClass "{5538C2059A570E94}" {
+                               Prefab "{5538C2059A570E94}"
+                               {
+                                HorizontalLayoutWidgetClass "{58D095EE846E2B93}" {
+                                 Prefab "{58D095EE846E2B93}"
+                                 {
+                                  EditBoxWidgetClass "{5538C2058B18F877}" {
+                                   Prefab "{5538C2058B18F877}"
+                                   "Placeholder text" "Password"
+                                   "Obfuscation character" "*"
+                                   "Virtual Keyboard Title" "Password"
+                                  }
+                                 }
+                                }
+                               }
+                              }
+                             }
+                            }
+                           }
+                          }
+                         }
+                        }
+                       }
+                      }
+                     }
                     }
                    }
                   }

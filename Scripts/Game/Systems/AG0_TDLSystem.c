@@ -1139,7 +1139,6 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    Print(string.Format("TDL_VIDEO_SYSTEM: OnVideoBroadcastChanged for device %1", device.GetOwner()), LogLevel.DEBUG);
 	    
-	    // Find the player who owns this device
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player)
 	    {
@@ -1147,33 +1146,42 @@ class AG0_TDLSystem : WorldSystem
 	        return;
 	    }
 	    
-	    // Find which network this player is in (through their network devices)
-	    bool foundInNetwork = false;
+	    // Get the broadcasting device's RplId (or Invalid if stopping)
+	    RplId videoSourceRplId = RplId.Invalid();
+	    if (device.IsCameraBroadcasting())
+	        videoSourceRplId = device.GetDeviceRplId();
 	    
+	    // Find which network this player is in and update their member entry
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
-	        // Check if any of the player's devices are in this network
 	        array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(player);
 	        
 	        foreach (AG0_TDLDeviceComponent playerDevice : playerDevices)
 	        {
 	            if (network.GetNetworkDevices().Contains(playerDevice))
 	            {
-	                foundInNetwork = true;
-	                Print(string.Format("TDL_VIDEO_SYSTEM: Player found in network %1", network.GetNetworkName()), LogLevel.DEBUG);
+	                // Found the network - update the member data for this player's network device
+	                RplId memberRplId = playerDevice.GetDeviceRplId();
+	                AG0_TDLNetworkMember memberData = network.GetDeviceData().Get(memberRplId);
+	                
+	                if (memberData)
+	                {
+	                    memberData.SetVideoSourceRplId(videoSourceRplId);
+	                    Print(string.Format("TDL_VIDEO_SYSTEM: Set VideoSourceRplId=%1 on member %2", 
+	                        videoSourceRplId, memberData.GetPlayerName()), LogLevel.DEBUG);
+	                }
+	                
+	                // Notify network of change (existing logic)
 	                NotifyNetworkBroadcastingChange(network);
-	                break;
+	                
+	                // Also trigger member data replication
+	                NotifyNetworkMembersUpdated(network);
+	                return;
 	            }
 	        }
-	        
-	        if (foundInNetwork)
-	            break;
 	    }
 	    
-	    if (!foundInNetwork)
-	    {
-	        Print("TDL_VIDEO_SYSTEM: WARNING - Broadcasting device's player not in any network!", LogLevel.DEBUG);
-	    }
+	    Print("TDL_VIDEO_SYSTEM: WARNING - Broadcasting device's player not in any network!", LogLevel.DEBUG);
 	}
 	
 	protected void UpdateVideoStreaming()

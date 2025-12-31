@@ -31,9 +31,8 @@ class TDL_EUDBoneComponent : ScriptComponent
     {
         super.OnPostInit(owner);
         
-        // Skip for preview entities
-        if (owner.GetWorld() != GetGame().GetWorld())
-            return;
+		InitBone(owner);
+        UpdateBone(owner);
         
         SetEventMask(owner, EntityEvent.FRAME);
     }
@@ -45,12 +44,12 @@ class TDL_EUDBoneComponent : ScriptComponent
         if (owner.GetWorld() != GetGame().GetWorld())
             return;
         
-        if (!m_bInitialized)
-        {
-            InitBone(owner);
-            if (!m_bInitialized)
-                return;
-        }
+//        if (!m_bInitialized)
+//        {
+//            InitBone(owner);
+//            if (!m_bInitialized)
+//                return;
+//        }
         
         UpdateLerp(timeSlice);
         UpdateBone(owner);

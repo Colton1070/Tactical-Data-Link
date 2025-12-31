@@ -213,47 +213,66 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         super.OnMenuUpdate(tDelta);
         
         if (m_bViewingRemoteFeed)
-        {
-            if (m_InputManager && m_InputManager.GetActionTriggered("MenuBack"))
-            {
-                ExitRemoteFeedView();
-                return;
-            }
-            
-            // Poll for pending attachment
-            if (m_PendingFeedSourceId != RplId.Invalid())
-            {
-                m_fFeedAttachTimer += tDelta;
-                
-                RplComponent rpl = RplComponent.Cast(Replication.FindItem(m_PendingFeedSourceId));
-                if (rpl)
-                {
-                    IEntity remoteEntity = rpl.GetEntity();
-                    if (remoteEntity)
-                    {
-                        AG0_TDLDeviceComponent remoteDevice = AG0_TDLDeviceComponent.Cast(
-                            remoteEntity.FindComponent(AG0_TDLDeviceComponent));
-                        
-                        if (remoteDevice && remoteDevice.m_CameraAttachment)
-                        {
-                            vector cameraTransform[4];
-                            GetCameraTransformFromDevice(remoteEntity, remoteDevice, cameraTransform);
-                            m_SpawnedFeedCamera.SetWorldTransform(cameraTransform);
-                            AttachCameraToDevice(remoteEntity, remoteDevice);
-                            
-                            m_AttachedFeedSourceId = m_PendingFeedSourceId;
-                            m_PendingFeedSourceId = RplId.Invalid();
-                        }
-                    }
-                }
-                
-                if (m_fFeedAttachTimer > FEED_ATTACH_TIMEOUT)
-                {
-                    m_PendingFeedSourceId = RplId.Invalid();
-                }
-            }
-            return;
-        }
+	    {
+	        if (m_InputManager && m_InputManager.GetActionTriggered("MenuBack"))
+	        {
+	            ExitRemoteFeedView();
+	            return;
+	        }
+	        
+	        // Poll for pending attachment (far distance - waiting for device to stream in)
+	        if (m_PendingFeedSourceId != RplId.Invalid())
+	        {
+	            m_fFeedAttachTimer += tDelta;
+	            
+	            // Keep camera at member's last known position while waiting
+	            if (m_SpawnedFeedCamera && m_PendingFeedPosition != vector.Zero)
+	            {
+	                vector pendingTransform[4];
+	                Math3D.MatrixIdentity4(pendingTransform);
+	                pendingTransform[3] = m_PendingFeedPosition;
+	                m_SpawnedFeedCamera.SetWorldTransform(pendingTransform);
+	            }
+	            
+	            RplComponent rpl = RplComponent.Cast(Replication.FindItem(m_PendingFeedSourceId));
+	            if (rpl)
+	            {
+	                IEntity remoteEntity = rpl.GetEntity();
+	                if (remoteEntity)
+	                {
+	                    AG0_TDLDeviceComponent remoteDevice = AG0_TDLDeviceComponent.Cast(
+	                        remoteEntity.FindComponent(AG0_TDLDeviceComponent));
+	                    
+	                    if (remoteDevice && remoteDevice.m_CameraAttachment)
+	                    {
+	                        AttachCameraToDevice(remoteEntity, remoteDevice);
+	                        
+	                        m_AttachedFeedSourceId = m_PendingFeedSourceId;
+	                        m_PendingFeedSourceId = RplId.Invalid();
+	                    }
+	                }
+	            }
+	            
+	            if (m_fFeedAttachTimer > FEED_ATTACH_TIMEOUT)
+	            {
+	                // Timed out waiting for device - exit feed view
+	                ExitRemoteFeedView();
+	            }
+	            return;
+	        }
+	        
+	        // Check if attached source is still valid (broadcasting and in range)
+	        if (m_AttachedFeedSourceId != RplId.Invalid())
+	        {
+	            if (!IsVideoSourceStillValid(m_AttachedFeedSourceId))
+	            {
+	                ExitRemoteFeedView();
+	                return;
+	            }
+	        }
+	        
+	        return;
+	    }
         
         // Process mouse drag input - calls controller for pan, disables tracking
         if (m_DragHandler && m_DisplayController)
@@ -1066,7 +1085,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (hasCamera)
         {
             bool isBroadcasting = cameraDevice.IsCameraBroadcasting();
-            ImageWidget icon = ImageWidget.Cast(m_wCameraButton.FindAnyWidget("Icon"));
+            ImageWidget icon = ImageWidget.Cast(m_wCameraButton.FindAnyWidget("CameraImage"));
             if (icon)
             {
                 if (isBroadcasting)
@@ -1100,125 +1119,154 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     
     //------------------------------------------------------------------------------------------------
     protected void EnterRemoteFeedView(RplId sourceDeviceRplId)
-    {
-        if (m_bViewingRemoteFeed)
-            return;
-        
-        CameraManager camMgr = GetGame().GetCameraManager();
-        if (!camMgr)
-            return;
-        
-        m_OriginalCamera = camMgr.CurrentCamera();
-        
-        IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-        if (!player)
-            return;
-        
-        // Spawn camera
-        vector spawnTransform[4];
-        player.GetWorldTransform(spawnTransform);
-        
-        EntitySpawnParams params = new EntitySpawnParams();
-        params.TransformMode = ETransformMode.WORLD;
-        params.Transform = spawnTransform;
-        
-        Resource res = Resource.Load(FEED_CAMERA_PREFAB);
-        if (!res || !res.IsValid())
-            return;
-        
-        m_SpawnedFeedCamera = GetGame().SpawnEntityPrefab(res, GetGame().GetWorld(), params);
-        if (!m_SpawnedFeedCamera)
-            return;
-        
-        CameraBase feedCamera = CameraBase.Cast(m_SpawnedFeedCamera);
-        if (!feedCamera)
-        {
-            SCR_EntityHelper.DeleteEntityAndChildren(m_SpawnedFeedCamera);
-            m_SpawnedFeedCamera = null;
-            return;
-        }
-        
-        // Try to find the remote device and position camera
-        RplComponent rpl = RplComponent.Cast(Replication.FindItem(sourceDeviceRplId));
-        if (rpl)
-        {
-            IEntity remoteEntity = rpl.GetEntity();
-            if (remoteEntity)
-            {
-                AG0_TDLDeviceComponent remoteDevice = AG0_TDLDeviceComponent.Cast(
-                    remoteEntity.FindComponent(AG0_TDLDeviceComponent));
-                
-                if (remoteDevice && remoteDevice.m_CameraAttachment)
-                {
-                    vector cameraTransform[4];
-                    GetCameraTransformFromDevice(remoteEntity, remoteDevice, cameraTransform);
-                    m_SpawnedFeedCamera.SetWorldTransform(cameraTransform);
-                    AttachCameraToDevice(remoteEntity, remoteDevice);
-                    m_AttachedFeedSourceId = sourceDeviceRplId;
-                }
-                else
-                {
-                    // Device exists but no attachment yet - start polling
-                    m_PendingFeedSourceId = sourceDeviceRplId;
-                    m_PendingFeedPosition = m_SelectedMember.GetPosition();
-                    m_fFeedAttachTimer = 0;
-                }
-            }
-            else
-            {
-                // Entity not streamed - start polling
-                m_PendingFeedSourceId = sourceDeviceRplId;
-                m_PendingFeedPosition = m_SelectedMember.GetPosition();
-                m_fFeedAttachTimer = 0;
-            }
-        }
-        else
-        {
-            // RplComponent not found - start polling
-            m_PendingFeedSourceId = sourceDeviceRplId;
-            m_PendingFeedPosition = m_SelectedMember.GetPosition();
-            m_fFeedAttachTimer = 0;
-        }
-        
-        // Activate camera
-        camMgr.SetCamera(feedCamera);
-        m_bViewingRemoteFeed = true;
-        
-        // Show overlay
-        if (m_wFeedOverlay)
-            m_wFeedOverlay.SetVisible(true);
-        
-        if (m_wFeedMemberName && m_SelectedMember)
-            m_wFeedMemberName.SetText(m_SelectedMember.GetPlayerName());
-    }
+	{
+	    if (m_bViewingRemoteFeed)
+	        return;
+	    
+	    CameraManager camMgr = GetGame().GetCameraManager();
+	    if (!camMgr)
+	        return;
+	    
+	    m_OriginalCamera = camMgr.CurrentCamera();
+	    
+	    IEntity player = GetGame().GetPlayerController().GetControlledEntity();
+	    if (!player)
+	        return;
+	    
+	    // Spawn camera
+	    vector spawnTransform[4];
+	    player.GetWorldTransform(spawnTransform);
+	    
+	    EntitySpawnParams params = new EntitySpawnParams();
+	    params.TransformMode = ETransformMode.WORLD;
+	    params.Transform = spawnTransform;
+	    
+	    Resource res = Resource.Load(FEED_CAMERA_PREFAB);
+	    if (!res || !res.IsValid())
+	        return;
+	    
+	    m_SpawnedFeedCamera = GetGame().SpawnEntityPrefab(res, GetGame().GetWorld(), params);
+	    if (!m_SpawnedFeedCamera)
+	        return;
+	    
+	    CameraBase feedCamera = CameraBase.Cast(m_SpawnedFeedCamera);
+	    if (!feedCamera)
+	    {
+	        SCR_EntityHelper.DeleteEntityAndChildren(m_SpawnedFeedCamera);
+	        m_SpawnedFeedCamera = null;
+	        return;
+	    }
+	    
+	    // Try to find the remote device and position camera
+	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(sourceDeviceRplId));
+	    if (rpl)
+	    {
+	        IEntity remoteEntity = rpl.GetEntity();
+	        if (remoteEntity)
+	        {
+	            AG0_TDLDeviceComponent remoteDevice = AG0_TDLDeviceComponent.Cast(
+	                remoteEntity.FindComponent(AG0_TDLDeviceComponent));
+	            
+	            if (remoteDevice && remoteDevice.m_CameraAttachment)
+	            {
+	                vector cameraTransform[4];
+	                GetCameraTransformFromDevice(remoteEntity, remoteDevice, cameraTransform);
+	                m_SpawnedFeedCamera.SetWorldTransform(cameraTransform);
+	                AttachCameraToDevice(remoteEntity, remoteDevice);
+	                m_AttachedFeedSourceId = sourceDeviceRplId;
+	            }
+	            else
+	            {
+	                m_PendingFeedSourceId = sourceDeviceRplId;
+	                m_PendingFeedPosition = m_SelectedMember.GetPosition();
+	                m_fFeedAttachTimer = 0;
+	            }
+	        }
+	        else
+	        {
+	            m_PendingFeedSourceId = sourceDeviceRplId;
+	            m_PendingFeedPosition = m_SelectedMember.GetPosition();
+	            m_fFeedAttachTimer = 0;
+	        }
+	    }
+	    else
+	    {
+	        m_PendingFeedSourceId = sourceDeviceRplId;
+	        m_PendingFeedPosition = m_SelectedMember.GetPosition();
+	        m_fFeedAttachTimer = 0;
+	    }
+	    
+	    // Activate camera
+	    camMgr.SetCamera(feedCamera);
+	    m_bViewingRemoteFeed = true;
+	    
+	    // ========================================
+	    // FIX: Hide main menu UI when viewing feed
+	    // ========================================
+	    HideMainMenuUI();
+	    
+	    // Show overlay
+	    if (m_wFeedOverlay)
+	        m_wFeedOverlay.SetVisible(true);
+	    
+	    if (m_wFeedMemberName && m_SelectedMember)
+	        m_wFeedMemberName.SetText(m_SelectedMember.GetPlayerName());
+	}
+	
+	protected void HideMainMenuUI()
+	{
+	    Widget mainFrame = m_wRoot.FindAnyWidget("MainFrame");
+	    if (mainFrame)
+	        mainFrame.SetVisible(false);
+	    
+	    Widget image0 = m_wRoot.FindAnyWidget("Image0");
+	    if (image0)
+	        image0.SetVisible(false);
+	}
+	
+	protected void ShowMainMenuUI()
+	{
+	    Widget mainFrame = m_wRoot.FindAnyWidget("MainFrame");
+	    if (mainFrame)
+	        mainFrame.SetVisible(true);
+	    
+	    Widget image0 = m_wRoot.FindAnyWidget("Image0");
+	    if (image0)
+	        image0.SetVisible(true);
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void ExitRemoteFeedView()
-    {
-        if (!m_bViewingRemoteFeed)
-            return;
-        
-        // Restore original camera
-        CameraManager camMgr = GetGame().GetCameraManager();
-        if (camMgr && m_OriginalCamera)
-            camMgr.SetCamera(m_OriginalCamera);
-        
-        // Delete spawned camera
-        if (m_SpawnedFeedCamera)
-        {
-            SCR_EntityHelper.DeleteEntityAndChildren(m_SpawnedFeedCamera);
-            m_SpawnedFeedCamera = null;
-        }
-        
-        m_bViewingRemoteFeed = false;
-        m_PendingFeedSourceId = RplId.Invalid();
-        m_AttachedFeedSourceId = RplId.Invalid();
-        m_OriginalCamera = null;
-        
-        // Hide overlay
-        if (m_wFeedOverlay)
-            m_wFeedOverlay.SetVisible(false);
-    }
+	{
+	    if (!m_bViewingRemoteFeed)
+	        return;
+	    
+	    // Restore original camera
+	    CameraManager camMgr = GetGame().GetCameraManager();
+	    if (camMgr && m_OriginalCamera)
+	        camMgr.SetCamera(m_OriginalCamera);
+	    
+	    // Delete spawned camera
+	    if (m_SpawnedFeedCamera)
+	    {
+	        SCR_EntityHelper.DeleteEntityAndChildren(m_SpawnedFeedCamera);
+	        m_SpawnedFeedCamera = null;
+	    }
+	    
+	    m_bViewingRemoteFeed = false;
+	    m_PendingFeedSourceId = RplId.Invalid();
+	    m_AttachedFeedSourceId = RplId.Invalid();
+	    m_OriginalCamera = null;
+	    
+	    // Hide overlay
+	    if (m_wFeedOverlay)
+	        m_wFeedOverlay.SetVisible(false);
+	    
+	    // ========================================
+	    // FIX: Restore main menu UI after exiting feed view
+	    // ========================================
+	    ShowMainMenuUI();
+	}
     
     //------------------------------------------------------------------------------------------------
     protected void GetCameraTransformFromDevice(IEntity deviceEntity, AG0_TDLDeviceComponent deviceComp, out vector outTransform[4])
@@ -1235,10 +1283,57 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     
     //------------------------------------------------------------------------------------------------
     protected void AttachCameraToDevice(IEntity deviceEntity, AG0_TDLDeviceComponent deviceComp)
-    {
-        if (!m_SpawnedFeedCamera || !deviceEntity)
-            return;
-        
-        deviceEntity.AddChild(m_SpawnedFeedCamera, -1, EAddChildFlags.AUTO_TRANSFORM);
-    }
+	{
+	    if (!m_SpawnedFeedCamera || !deviceEntity || !deviceComp || !deviceComp.m_CameraAttachment)
+	        return;
+	    
+	    int boneIndex = deviceComp.m_CameraAttachment.GetNodeId();
+	    
+	    deviceEntity.AddChild(m_SpawnedFeedCamera, boneIndex, EAddChildFlags.AUTO_TRANSFORM);
+	    
+	    vector localTransform[4];
+	    deviceComp.m_CameraAttachment.GetLocalTransform(localTransform);
+	    
+	    // Pitch the camera down?
+	    vector correctionAngles = Vector(0, -90, 0);
+	    vector correctionMat[3];
+	    Math3D.AnglesToMatrix(correctionAngles, correctionMat);
+	    
+	    // Apply correction to rotation (keep position)
+	    vector correctedTransform[4];
+	    Math3D.MatrixMultiply3(localTransform, correctionMat, correctedTransform);
+	    correctedTransform[3] = localTransform[3];  // Preserve position
+	    
+	    m_SpawnedFeedCamera.SetLocalTransform(correctedTransform);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected bool IsVideoSourceStillValid(RplId sourceId)
+	{
+	    // Check if source is still in our available sources
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return false;
+	    
+	    // Check local streaming devices
+	    if (!controller.IsVideoSourceAvailable(sourceId))
+	        return false;
+	    
+	    // Optionally verify device is still broadcasting
+	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(sourceId));
+	    if (rpl)
+	    {
+	        IEntity entity = rpl.GetEntity();
+	        if (entity)
+	        {
+	            AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+	                entity.FindComponent(AG0_TDLDeviceComponent));
+	            
+	            if (device && !device.IsCameraBroadcasting())
+	                return false;
+	        }
+	    }
+	    
+	    return true;
+	}
 }
