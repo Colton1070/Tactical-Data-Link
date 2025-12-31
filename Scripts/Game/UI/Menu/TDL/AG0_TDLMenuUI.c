@@ -1295,7 +1295,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    deviceComp.m_CameraAttachment.GetLocalTransform(localTransform);
 	    
 	    // Pitch the camera down?
-	    vector correctionAngles = Vector(0, -90, 0);
+	    vector correctionAngles = Vector(0, 0, 0);
 	    vector correctionMat[3];
 	    Math3D.AnglesToMatrix(correctionAngles, correctionMat);
 	    
