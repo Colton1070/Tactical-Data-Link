@@ -5,7 +5,7 @@
 
 class AG0_TDLMapView
 {
-	protected static const ResourceName MAP_SATELLITE_CONFIG = "{YOUR_GUID}Configs/MapSatelliteConfig.conf";
+	protected static const ResourceName MAP_SATELLITE_CONFIG = "{140BDA7A9C54113A}Configs/TDL/TDL_MapSatelliteConfig.conf";
 	
     // Canvas and rendering
     protected CanvasWidget m_wCanvas;

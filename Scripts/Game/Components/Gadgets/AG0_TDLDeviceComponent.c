@@ -36,6 +36,9 @@ class AG0_TDLDeviceComponentClass : ScriptGameComponentClass
 //Then when they have ownership, they can RPC input back to server.
 //Server can regain ownership and replicate radio props.
 //This is so much pain for a simple feature.
+//
+// UPDATE: Dialog handling has been moved to PlayerController to fix gamepad/console input issues.
+// The two-dialog sequential flow (Name -> Password) is now managed by SCR_PlayerController.
 
 
 class AG0_TDLDeviceComponent : ScriptGameComponent
@@ -113,21 +116,11 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	// RPC infrastructure
     protected RplComponent rplComp;
-    protected RplIdentity mfkerRplIdentity;
-    protected RplIdentity serverRplIdentity;
-	
 	
 	protected RplId m_LocalActiveVideoSource = RplId.Invalid();
 	
-    // Dialog state
-    protected ref AG0_TDL_LoginDialog m_networkDialog;
-    protected EditBoxWidget m_networkNameEdit;
-    protected EditBoxWidget m_networkPasswordEdit;
-    protected bool m_bCreateNetworkMode = false;
-	
 	protected bool m_bWasHeldPreviously = false;
     protected bool m_bCapabilitiesActive = true;
-	
 	
 	//Replication hack - trying to prevent VME...
 	protected bool m_bLeavingNetwork = false;
@@ -147,10 +140,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	{
 	    super.EOnInit(owner);
 	    rplComp = RplComponent.Cast(owner.FindComponent(RplComponent));
-	    
-	    if (rplComp && Replication.IsServer()) {
-	        serverRplIdentity = RplIdentity.Local();
-	    }
 		
 	    // Register with TDL system if we can access network
 	    if (CanAccessNetwork() && Replication.IsServer()) {
@@ -554,183 +543,68 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    Print("TDL_VIDEO: UpdateDisplayTransform - Transform applied successfully", LogLevel.DEBUG);
 	    return true;
 	}
-	
+
 //
 //
-// TDL LOGIN BELOW
+// TDL NETWORK DIALOG - Now delegated to PlayerController for gamepad/console support
 //
 //
 	
 	
 	//------------------------------------------------------------------------------------------------
 	// Public methods to be called by the User Action
+	// These now route through PlayerController for proper gamepad input handling
 	//------------------------------------------------------------------------------------------------
 	void CreateNetworkDialog(IEntity userEntity)
 	{
-	    m_bCreateNetworkMode = true;
-	    OpenNetworkDialog(userEntity);
+	    RequestNetworkDialogViaPlayerController(userEntity, true);
 	}
 	
 	void JoinNetworkDialog(IEntity userEntity)
 	{
-	    m_bCreateNetworkMode = false;
-	    OpenNetworkDialog(userEntity);
+	    RequestNetworkDialogViaPlayerController(userEntity, false);
 	}
 	
 	//------------------------------------------------------------------------------------------------
-	void OpenNetworkDialog(IEntity userEntity)
+	//! Routes network dialog request through PlayerController
+	//! This solves the gamepad/console input issue by letting PlayerController manage dialogs
+	protected void RequestNetworkDialogViaPlayerController(IEntity userEntity, bool createMode)
 	{
-	    if (!rplComp || !Replication.IsServer())
-	    {
-	        //Print("AG0_TDLRadioComponent: Cannot open network dialog - not the server.", LogLevel.WARNING);
+	    if (!Replication.IsServer())
 	        return;
-	    }
 	    
+	    // Get the player controller for this user
 	    PlayerManager playerManager = GetGame().GetPlayerManager();
-	    if (playerManager)
+	    if (!playerManager)
+	        return;
+	    
+	    int userPlayerId = playerManager.GetPlayerIdFromControlledEntity(userEntity);
+	    SCR_PlayerController playerController = SCR_PlayerController.Cast(
+	        playerManager.GetPlayerController(userPlayerId));
+	    
+	    if (!playerController)
 	    {
-	        int userPlayerId = playerManager.GetPlayerIdFromControlledEntity(userEntity);
-	        SCR_PlayerController playerController = SCR_PlayerController.Cast(playerManager.GetPlayerController(userPlayerId));
-	        if(!playerController) {
-	            return;
-	        }
-	        
-	        mfkerRplIdentity = playerController.GetRplIdentity();
-	        
-	        //PrintFormat("Giving ownership from %1 to %2", serverRplIdentity, mfkerRplIdentity);
-	        rplComp.GiveExt(mfkerRplIdentity, true);
-	        
-	        Replication.BumpMe();
-	        
-	        GetGame().GetCallqueue().CallLater(WaitForNetworkDialogOwnership, 1000, false);
-	    }
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	void WaitForNetworkDialogOwnership()
-	{
-	    Rpc(RpcDo_OpenNetworkDialog, m_bCreateNetworkMode);
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
-	void RpcDo_OpenNetworkDialog(bool createMode)
-	{
-	    if(System.IsConsoleApp())
-	        return; // Skip on dedicated server
-	        
-	    //Print(string.Format("AG0_TDLRadioComponent: Opening network dialog in %1 mode", createMode), LogLevel.DEBUG);
-	    
-	    // Store the mode locally
-	    m_bCreateNetworkMode = createMode;
-	    
-	    // Create dialog
-	    string dialogTitle = "JOIN TDL NETWORK";
-	    if(createMode) {
-			dialogTitle = "CREATE TDL NETWORK";
-		}
-		m_networkDialog = AG0_TDL_LoginDialog.CreateLoginDialog("Enter network credentials", dialogTitle);
-	    
-	    // Check if dialog creation failed
-	    if (!m_networkDialog || !m_networkDialog.GetRootWidget())
-	    {
-	        Print("AG0_TDLRadioComponent: Failed to create network dialog", LogLevel.ERROR);
-	        m_networkDialog = null;
+	        Print("TDL_DIALOG: Could not find PlayerController for user", LogLevel.WARNING);
 	        return;
 	    }
 	    
-	    // Hook up callbacks
-	    m_networkDialog.m_OnConfirm.Insert(OnNetworkDialogConfirm);
-	    m_networkDialog.m_OnCancel.Insert(OnNetworkDialogCancel);
-	    
-	    // Get the input fields - now we need the wrapper buttons
-		Widget nameWrapper = m_networkDialog.GetRootWidget().FindAnyWidget("NetworkNameInput");
-		Widget passWrapper = m_networkDialog.GetRootWidget().FindAnyWidget("NetworkPasswordInput");
-		
-		m_networkNameEdit = null;
-		m_networkPasswordEdit = null;
-		
-		if (nameWrapper)
-		    m_networkNameEdit = EditBoxWidget.Cast(nameWrapper.FindAnyWidget("EditBox"));
-		if (passWrapper)
-		    m_networkPasswordEdit = EditBoxWidget.Cast(passWrapper.FindAnyWidget("EditBox"));
-		
-		if (!m_networkNameEdit || !m_networkPasswordEdit)
-		{
-		    m_networkDialog.Close();
-		    m_networkDialog = null;
-		    return;
-		}
-		
-		// Focus the wrapper button (not the EditBox directly)
-		GetGame().GetWorkspace().SetFocusedWidget(nameWrapper);
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void OnNetworkDialogConfirm(SCR_ConfigurableDialogUi dialog)
-	{
-	    Print("OnNetworkDialogConfirm FIRED", LogLevel.DEBUG);
-    
-	    AG0_TDL_LoginDialog loginDialog = AG0_TDL_LoginDialog.Cast(dialog);
-	    if (!loginDialog) {
-	        Print("CAST FAILED - dialog is not AG0_TDL_LoginDialog!", LogLevel.ERROR);
+	    // Get our device RplId
+	    RplId deviceRplId = GetDeviceRplId();
+	    if (deviceRplId == RplId.Invalid())
+	    {
+	        Print("TDL_DIALOG: Invalid device RplId", LogLevel.WARNING);
 	        return;
 	    }
 	    
-	    string networkName = loginDialog.GetNetworkName();
-	    string networkPassword = loginDialog.GetNetworkPassword();
+	    Print(string.Format("TDL_DIALOG: Requesting %1 dialog via PlayerController for device %2", 
+	        createMode, deviceRplId), LogLevel.DEBUG);
 	    
-	    Print(string.Format("Got values: name='%1' pass='%2'", networkName, networkPassword), LogLevel.DEBUG);
-
-	    
-	    if (networkName.IsEmpty()) return;  // Only check you probably want
-	    
-	    if (m_bCreateNetworkMode)
-	        Rpc(RpcAsk_CreateNetworkTDL, networkName, networkPassword);
-	    else
-	        Rpc(RpcAsk_JoinNetworkTDL, networkName, networkPassword);
-	    
-	    CleanupNetworkDialogRefs();
+	    // Call public method which internally does the RPC to the owning client
+	    playerController.AskOpenNetworkDialog(deviceRplId, createMode);
 	}
 	
 	//------------------------------------------------------------------------------------------------
-	protected void OnNetworkDialogCancel(SCR_ConfigurableDialogUi dialog)
-	{
-	    // Should already be on client
-	    if (!GetGame().GetPlayerController()) return;
-	    
-	    //Print("AG0_TDLRadioComponent: Network dialog cancelled (Client).", LogLevel.DEBUG);
-	    CleanupNetworkDialogRefs();
-	    Rpc(RpcInform_NetworkDialogCancel);
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
-	protected void RpcInform_NetworkDialogCancel()
-	{
-	    // Return ownership to server
-	    if (rplComp && serverRplIdentity)
-	    {
-	        //Print(string.Format("AG0_TDLRadioComponent: Returning ownership to server %1", serverRplIdentity), LogLevel.DEBUG);
-	        rplComp.GiveExt(serverRplIdentity, true);
-	    }
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void CleanupNetworkDialogRefs()
-	{
-	    if (m_networkDialog)
-	    {
-	        m_networkDialog = null;
-	    }
-	    m_networkNameEdit = null;
-	    m_networkPasswordEdit = null;
-	}
-	
-	
-	
-	//------------------------------------------------------------------------------------------------
-	// Network management methods
+	// Network management methods (server-side execution)
 	//------------------------------------------------------------------------------------------------
 	bool CreateNetworkTDL(string networkName, string password)
 	{
@@ -1310,7 +1184,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    
 	    return info;
 	}
-	
+
 	// Get distance to a member
 	float GetDistanceToMember(RplId rplId)
 	{

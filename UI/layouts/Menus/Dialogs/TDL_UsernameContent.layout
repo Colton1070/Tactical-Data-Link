@@ -1,4 +1,4 @@
-OverlayWidgetClass "{66C612CA80AF8C2D}" {
+OverlayWidgetClass {
  Name "ContentRoot"
  Slot OverlayWidgetSlot "{5CB6C1EDF6BB076A}" {
   HorizontalAlign 3
@@ -47,57 +47,6 @@ OverlayWidgetClass "{66C612CA80AF8C2D}" {
                    Prefab "{5538C2058B18F877}"
                    "Placeholder text" "Network Name"
                    "Virtual Keyboard Title" "Network Name"
-                  }
-                 }
-                }
-               }
-              }
-             }
-            }
-           }
-          }
-         }
-        }
-       }
-      }
-     }
-    }
-    ButtonWidgetClass "{66C612CA80AF8C0F}" : "{0022F0B45ADBC5AC}UI/layouts/WidgetLibrary/EditBox/WLib_EditBox.layout" {
-     Name "NetworkPasswordInput"
-     Slot LayoutSlot "{5510B6A845F8349E}" {
-      VerticalAlign 0
-      Padding 0 0 0 5
-     }
-     components {
-      SCR_EditBoxComponent "{547290FFBD5B33E9}" {
-       m_bUseLabel 0
-       m_bShowWriteIcon 0
-      }
-     }
-     {
-      VerticalLayoutWidgetClass "{5AA4D27F39EB2514}" {
-       Prefab "{5AA4D27F39EB2514}"
-       {
-        SizeLayoutWidgetClass "{5538C205B27B0F5D}" {
-         Prefab "{5538C205B27B0F5D}"
-         {
-          OverlayWidgetClass "{55367D8E531FD623}" {
-           Prefab "{55367D8E531FD623}"
-           {
-            HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
-             Prefab "{55367D8E4592BC6E}"
-             {
-              OverlayWidgetClass "{5538C2059A570E94}" {
-               Prefab "{5538C2059A570E94}"
-               {
-                HorizontalLayoutWidgetClass "{58D095EE846E2B93}" {
-                 Prefab "{58D095EE846E2B93}"
-                 {
-                  EditBoxWidgetClass "{5538C2058B18F877}" {
-                   Prefab "{5538C2058B18F877}"
-                   "Placeholder text" "Password"
-                   "Obfuscation character" "*"
-                   "Virtual Keyboard Title" "Password"
                   }
                  }
                 }

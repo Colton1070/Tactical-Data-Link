@@ -40,6 +40,17 @@ modded class SCR_PlayerController
 	
 	protected TDL_EUDBoneComponent m_CachedEUDBoneComp;
 	protected const float EUD_ADJUST_STEP = 0.1;
+	
+	// ============================================
+	// NETWORK DIALOG STATE (CLIENT-SIDE)
+	// ============================================
+	protected RplId m_PendingDialogDeviceRplId = RplId.Invalid();
+	protected bool m_bPendingCreateNetworkMode = false;
+	protected string m_sPendingNetworkName = "";
+	
+	// Dialog references
+	protected ref AG0_TDL_NetworkNameDialog m_NetworkNameDialog;
+	protected ref AG0_TDL_NetworkPasswordDialog m_NetworkPasswordDialog;
     
     // ============================================
     // LIFECYCLE
@@ -518,6 +529,158 @@ modded class SCR_PlayerController
     }
     
     // ============================================
+    // TDL NETWORK DIALOGS - Two-Dialog Sequential Flow
+    // ============================================
+    
+    //------------------------------------------------------------------------------------------------
+    //! Public API - Called by device component to request network dialog
+    //! This starts the two-dialog flow: Name → Password
+    void RequestNetworkDialog(RplId deviceRplId, bool createMode)
+    {
+        if (System.IsConsoleApp())
+            return;
+        
+        // Store pending state
+        m_PendingDialogDeviceRplId = deviceRplId;
+        m_bPendingCreateNetworkMode = createMode;
+        m_sPendingNetworkName = "";
+        
+        // Show the first dialog (network name)
+        ShowNetworkNameDialog();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void ShowNetworkNameDialog()
+    {
+        // Clean up any existing dialog
+        CleanupNetworkDialogs();
+        
+        string title = "JOIN TDL NETWORK";
+		
+		if(m_bPendingCreateNetworkMode)
+			title = "CREATE TDL NETWORK";
+        
+        m_NetworkNameDialog = AG0_TDL_NetworkNameDialog.CreateDialog(title);
+        if (!m_NetworkNameDialog)
+        {
+            Print("TDL_DIALOG: Failed to create network name dialog", LogLevel.ERROR);
+            CleanupNetworkDialogState();
+            return;
+        }
+        
+        m_NetworkNameDialog.SetMessage("Enter network name");
+        m_NetworkNameDialog.m_OnConfirm.Insert(OnNetworkNameConfirm);
+        m_NetworkNameDialog.m_OnCancel.Insert(OnNetworkDialogCancel);
+        
+        Print("TDL_DIALOG: Opened network name dialog", LogLevel.DEBUG);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void OnNetworkNameConfirm(SCR_ConfigurableDialogUi dialog)
+    {
+        AG0_TDL_NetworkNameDialog nameDialog = AG0_TDL_NetworkNameDialog.Cast(dialog);
+        if (!nameDialog)
+        {
+            Print("TDL_DIALOG: Name dialog cast failed", LogLevel.ERROR);
+            CleanupNetworkDialogState();
+            return;
+        }
+        
+        m_sPendingNetworkName = nameDialog.GetNetworkName();
+        
+        if (m_sPendingNetworkName.IsEmpty())
+        {
+            Print("TDL_DIALOG: Empty network name, cancelling", LogLevel.DEBUG);
+            CleanupNetworkDialogState();
+            return;
+        }
+        
+        Print(string.Format("TDL_DIALOG: Network name entered: '%1'", m_sPendingNetworkName), LogLevel.DEBUG);
+        
+        // Clear the first dialog reference (it will close itself)
+        m_NetworkNameDialog = null;
+        
+        // Show the password dialog
+        ShowNetworkPasswordDialog();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void ShowNetworkPasswordDialog()
+    {
+       	string title = "JOIN TDL NETWORK";
+		
+		if(m_bPendingCreateNetworkMode)
+			title = "CREATE TDL NETWORK";
+        
+        m_NetworkPasswordDialog = AG0_TDL_NetworkPasswordDialog.CreateDialog(title);
+        if (!m_NetworkPasswordDialog)
+        {
+            Print("TDL_DIALOG: Failed to create password dialog", LogLevel.ERROR);
+            CleanupNetworkDialogState();
+            return;
+        }
+        
+        m_NetworkPasswordDialog.SetMessage(string.Format("Network: %1\nEnter password (optional)", m_sPendingNetworkName));
+        m_NetworkPasswordDialog.m_OnConfirm.Insert(OnNetworkPasswordConfirm);
+        m_NetworkPasswordDialog.m_OnCancel.Insert(OnNetworkDialogCancel);
+        
+        Print("TDL_DIALOG: Opened password dialog", LogLevel.DEBUG);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void OnNetworkPasswordConfirm(SCR_ConfigurableDialogUi dialog)
+    {
+        AG0_TDL_NetworkPasswordDialog passDialog = AG0_TDL_NetworkPasswordDialog.Cast(dialog);
+        string password = "";
+        
+        if (passDialog)
+            password = passDialog.GetPassword();
+        
+        Print(string.Format("TDL_DIALOG: Submitting - Name='%1' Pass='%2' Create=%3 Device=%4", 
+            m_sPendingNetworkName, password, m_bPendingCreateNetworkMode, m_PendingDialogDeviceRplId), LogLevel.DEBUG);
+        
+        // Send to server
+        if (m_bPendingCreateNetworkMode)
+            Rpc(RpcAsk_CreateNetworkForDevice, m_PendingDialogDeviceRplId, m_sPendingNetworkName, password);
+        else
+            Rpc(RpcAsk_JoinNetworkForDevice, m_PendingDialogDeviceRplId, m_sPendingNetworkName, password);
+        
+        // Clean up
+        CleanupNetworkDialogState();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void OnNetworkDialogCancel(SCR_ConfigurableDialogUi dialog)
+    {
+        Print("TDL_DIALOG: Dialog cancelled", LogLevel.DEBUG);
+        CleanupNetworkDialogState();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void CleanupNetworkDialogs()
+    {
+        if (m_NetworkNameDialog)
+        {
+            m_NetworkNameDialog.Close();
+            m_NetworkNameDialog = null;
+        }
+        if (m_NetworkPasswordDialog)
+        {
+            m_NetworkPasswordDialog.Close();
+            m_NetworkPasswordDialog = null;
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    protected void CleanupNetworkDialogState()
+    {
+        CleanupNetworkDialogs();
+        m_PendingDialogDeviceRplId = RplId.Invalid();
+        m_bPendingCreateNetworkMode = false;
+        m_sPendingNetworkName = "";
+    }
+    
+    // ============================================
     // RPCs - Owner (Client receives)
     // ============================================
     
@@ -560,6 +723,25 @@ modded class SCR_PlayerController
         
         m_bVideoSourcesDirty = true;
         Print(string.Format("TDL_PLAYERCONTROLLER: Updated broadcasting sources: %1", broadcastingSources.Count()), LogLevel.DEBUG);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Public method for server to request dialog on owning client
+    //! Called by DeviceComponent when user action triggers network dialog
+    void AskOpenNetworkDialog(RplId deviceRplId, bool createMode)
+    {
+        Rpc(RpcDo_OpenNetworkDialog, deviceRplId, createMode);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Server tells client to open network dialog - used when device initiates from user action
+    [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+    protected void RpcDo_OpenNetworkDialog(RplId deviceRplId, bool createMode)
+    {
+        if (System.IsConsoleApp())
+            return;
+        
+        RequestNetworkDialog(deviceRplId, createMode);
     }
     
     // ============================================
@@ -610,6 +792,56 @@ modded class SCR_PlayerController
         
         // Server-side call - SetCustomCallsign handles the logic + bump + system notify
         device.SetCustomCallsign(callsign);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Create network for a specific device
+    [RplRpc(RplChannel.Reliable, RplRcver.Server)]
+    protected void RpcAsk_CreateNetworkForDevice(RplId deviceRplId, string networkName, string password)
+    {
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system)
+            return;
+        
+        RplComponent rpl = RplComponent.Cast(Replication.FindItem(deviceRplId));
+        if (!rpl) return;
+        
+        IEntity entity = rpl.GetEntity();
+        if (!entity) return;
+        
+        AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+            entity.FindComponent(AG0_TDLDeviceComponent));
+        
+        if (!device)
+            return;
+        
+        system.CreateNetwork(device, networkName, password);
+        Print(string.Format("TDL_PC_RPC: Created network '%1' for device %2", networkName, deviceRplId), LogLevel.DEBUG);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Join network for a specific device
+    [RplRpc(RplChannel.Reliable, RplRcver.Server)]
+    protected void RpcAsk_JoinNetworkForDevice(RplId deviceRplId, string networkName, string password)
+    {
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system)
+            return;
+        
+        RplComponent rpl = RplComponent.Cast(Replication.FindItem(deviceRplId));
+        if (!rpl) return;
+        
+        IEntity entity = rpl.GetEntity();
+        if (!entity) return;
+        
+        AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
+            entity.FindComponent(AG0_TDLDeviceComponent));
+        
+        if (!device)
+            return;
+        
+        system.JoinNetwork(device, networkName, password);
+        Print(string.Format("TDL_PC_RPC: Joined network '%1' for device %2", networkName, deviceRplId), LogLevel.DEBUG);
     }
 	
 	//------------------------------------------------------------------------------------------------

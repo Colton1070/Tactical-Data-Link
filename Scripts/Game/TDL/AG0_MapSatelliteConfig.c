@@ -66,7 +66,7 @@ class AG0_MapSatelliteConfig
 class AG0_MapSatelliteConfigHelper
 {
     // Default config path - adjust to your mod's structure
-    protected static const ResourceName DEFAULT_CONFIG_PATH = "{YOUR_MOD_PATH}Configs/MapSatelliteConfig.conf";
+    protected static const ResourceName DEFAULT_CONFIG_PATH = "{140BDA7A9C54113A}Configs/TDL/TDL_MapSatelliteConfig.conf";
     
     protected static ref AG0_MapSatelliteConfig s_CachedConfig;
     protected static bool s_bConfigLoaded;
