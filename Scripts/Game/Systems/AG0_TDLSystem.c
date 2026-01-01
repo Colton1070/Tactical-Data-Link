@@ -10,6 +10,14 @@ class AG0_TDLNetwork
     protected int m_iNextNetworkIP = 1;
 	
 	
+	// Message storage
+    protected ref array<ref AG0_TDLMessage> m_aMessages = {};
+    protected int m_iNextMessageId = 1;
+    
+    // Message retention settings
+    protected const int MAX_MESSAGES = 100;           // Maximum messages to retain
+    protected const int MESSAGE_EXPIRY_SECONDS = 3600; // Messages expire after 1 hour
+	
     
     void AG0_TDLNetwork(int networkID, string name, string password)
     {
@@ -23,6 +31,8 @@ class AG0_TDLNetwork
     string GetNetworkPassword() { return m_sNetworkPassword; }
     array<AG0_TDLDeviceComponent> GetNetworkDevices() { return m_aNetworkDevices; }
     map<RplId, ref AG0_TDLNetworkMember> GetDeviceData() { return m_mDeviceData; }
+	array<ref AG0_TDLMessage> GetMessages() { return m_aMessages; }
+	int GetNextMessageId() { return m_iNextMessageId++; }
     
     void AddDevice(AG0_TDLDeviceComponent device, RplId deviceRplId, string playerName, vector position, int ownerPlayerId = -1)
     {
@@ -73,6 +83,174 @@ class AG0_TDLNetwork
     {
         return m_aNetworkDevices.Count() > 0;
     }
+	
+	//------------------------------------------------------------------------------------------------
+    // Add a broadcast message to the network
+    // Returns the message ID
+    //------------------------------------------------------------------------------------------------
+    static int AddBroadcastMessage(AG0_TDLNetwork network, RplId senderRplId, 
+                                   string senderCallsign, string content,
+                                   inout array<ref AG0_TDLMessage> messages, inout int nextMessageId)
+    {
+        AG0_TDLMessage msg = AG0_TDLMessage.CreateBroadcast(
+            nextMessageId,
+            network.GetNetworkID(),
+            senderRplId,
+            senderCallsign,
+            content
+        );
+        
+        messages.Insert(msg);
+        nextMessageId++;
+        
+        // Prune old messages if over limit
+        PruneMessages(messages);
+        
+        Print(string.Format("TDL_MESSAGE: Broadcast message %1 added from %2: '%3'", 
+            msg.GetMessageId(), senderCallsign, content), LogLevel.DEBUG);
+        
+        return msg.GetMessageId();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Add a direct message to the network
+    // Returns the message ID
+    //------------------------------------------------------------------------------------------------
+    static int AddDirectMessage(AG0_TDLNetwork network, RplId senderRplId, string senderCallsign,
+                                string content, RplId recipientRplId, string recipientCallsign,
+                                inout array<ref AG0_TDLMessage> messages, inout int nextMessageId)
+    {
+        AG0_TDLMessage msg = AG0_TDLMessage.CreateDirect(
+            nextMessageId,
+            network.GetNetworkID(),
+            senderRplId,
+            senderCallsign,
+            content,
+            recipientRplId,
+            recipientCallsign
+        );
+        
+        messages.Insert(msg);
+        nextMessageId++;
+        
+        // Prune old messages if over limit
+        PruneMessages(messages);
+        
+        Print(string.Format("TDL_MESSAGE: Direct message %1 added from %2 to %3: '%4'", 
+            msg.GetMessageId(), senderCallsign, recipientCallsign, content), LogLevel.DEBUG);
+        
+        return msg.GetMessageId();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Get a message by ID
+    //------------------------------------------------------------------------------------------------
+    static AG0_TDLMessage GetMessageById(array<ref AG0_TDLMessage> messages, int messageId)
+    {
+        foreach (AG0_TDLMessage msg : messages)
+        {
+            if (msg.GetMessageId() == messageId)
+                return msg;
+        }
+        return null;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Get all messages relevant to a device
+    //------------------------------------------------------------------------------------------------
+    static array<ref AG0_TDLMessage> GetMessagesForDevice(array<ref AG0_TDLMessage> messages, 
+                                                          RplId deviceRplId)
+    {
+        array<ref AG0_TDLMessage> result = {};
+        
+        foreach (AG0_TDLMessage msg : messages)
+        {
+            if (msg.IsRelevantTo(deviceRplId) && msg.IsDeliveredTo(deviceRplId))
+                result.Insert(msg);
+        }
+        
+        return result;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Get undelivered messages that CAN be delivered to a device given its connectivity
+    //------------------------------------------------------------------------------------------------
+    static array<ref AG0_TDLMessage> GetDeliverableMessages(array<ref AG0_TDLMessage> messages,
+                                                            RplId targetRplId, 
+                                                            set<RplId> connectedDevices)
+    {
+        array<ref AG0_TDLMessage> result = {};
+        
+        foreach (AG0_TDLMessage msg : messages)
+        {
+            if (msg.CanDeliverTo(targetRplId, connectedDevices))
+                result.Insert(msg);
+        }
+        
+        return result;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Mark a message as read by a device
+    //------------------------------------------------------------------------------------------------
+    static void MarkMessageRead(array<ref AG0_TDLMessage> messages, int messageId, RplId readerRplId)
+    {
+        AG0_TDLMessage msg = GetMessageById(messages, messageId);
+        if (msg)
+        {
+            msg.MarkReadBy(readerRplId);
+            Print(string.Format("TDL_MESSAGE: Message %1 marked read by %2", 
+                messageId, readerRplId), LogLevel.DEBUG);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Prune old messages to prevent unbounded growth
+    //------------------------------------------------------------------------------------------------
+    static void PruneMessages(inout array<ref AG0_TDLMessage> messages, 
+                              int maxMessages = 100, int expirySeconds = 3600)
+    {
+        int currentTime = System.GetUnixTime();
+        
+        // Remove expired messages
+        for (int i = messages.Count() - 1; i >= 0; i--)
+        {
+            if (currentTime - messages[i].GetTimestamp() > expirySeconds)
+            {
+                Print(string.Format("TDL_MESSAGE: Pruning expired message %1", 
+                    messages[i].GetMessageId()), LogLevel.DEBUG);
+                messages.Remove(i);
+            }
+        }
+        
+        // If still over limit, remove oldest
+        while (messages.Count() > maxMessages)
+        {
+            Print(string.Format("TDL_MESSAGE: Pruning oldest message %1 (over limit)", 
+                messages[0].GetMessageId()), LogLevel.DEBUG);
+            messages.Remove(0);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Build client message array for a specific device
+    //------------------------------------------------------------------------------------------------
+    static array<ref AG0_TDLMessageClient> BuildClientMessages(array<ref AG0_TDLMessage> messages,
+                                                                RplId viewerRplId)
+    {
+        array<ref AG0_TDLMessageClient> result = {};
+        
+        foreach (AG0_TDLMessage msg : messages)
+        {
+            if (msg.IsRelevantTo(viewerRplId) && msg.IsDeliveredTo(viewerRplId))
+            {
+                result.Insert(AG0_TDLMessageClient.FromServerMessage(msg, viewerRplId));
+            }
+        }
+        
+        return result;
+    }
+	
 }
 
 class AG0_TDLSystem : WorldSystem
@@ -136,6 +314,21 @@ class AG0_TDLSystem : WorldSystem
     //------------------------------------------------------------------------------------------------
     // Public helper methods for PlayerController and other systems
     //------------------------------------------------------------------------------------------------
+	array<ref AG0_TDLNetwork> GetNetworks() { return m_aNetworks; }
+
+	//------------------------------------------------------------------------------------------------
+	// Message API - called from PlayerController
+	//------------------------------------------------------------------------------------------------
+	void SendTDLMessage(RplId senderDeviceRplId, string content, ETDLMessageType messageType, RplId recipientRplId = RplId.Invalid())
+	{
+	    SendMessage(this, senderDeviceRplId, content, messageType, recipientRplId);
+	}
+	
+	void MarkTDLMessageRead(RplId readerDeviceRplId, int messageId)
+	{
+	    MarkMessageRead(this, readerDeviceRplId, messageId);
+	}
+	
     AG0_TDLDeviceComponent GetDeviceByRplId(RplId deviceId)
     {
         return m_mDeviceCache.Get(deviceId);
@@ -866,6 +1059,8 @@ class AG0_TDLSystem : WorldSystem
 	        
 	        // Use the fixed NotifyNetworkConnectivity which handles everything
 	        NotifyNetworkConnectivity(device, connectedMembers);
+			// Propagate messages based on new connectivity
+    		PropagateMessagesForDevice(this, network, device, connectedMembers);
 	    }
 		// After all devices processed, derive player connectivity
 	    map<int, ref set<int>> playerConnections = new map<int, ref set<int>>();
@@ -1254,6 +1449,356 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
 	}
+	
+	//------------------------------------------------------------------------------------------------
+    // MAIN ENTRY POINT: Send a message from a device
+    // Called via RPC from player controller
+    //------------------------------------------------------------------------------------------------
+    static void SendMessage(AG0_TDLSystem system, RplId senderDeviceRplId, string content,
+                           ETDLMessageType messageType, RplId recipientRplId = RplId.Invalid())
+    {
+        if (!Replication.IsServer()) return;
+        
+        // Validate content
+        if (content.IsEmpty())
+        {
+            Print("TDL_MESSAGE_SYSTEM: Empty message content, ignoring", LogLevel.WARNING);
+            return;
+        }
+        
+        // Find the sender device
+        AG0_TDLDeviceComponent senderDevice = system.GetDeviceByRplId(senderDeviceRplId);
+        if (!senderDevice)
+        {
+            Print(string.Format("TDL_MESSAGE_SYSTEM: Sender device %1 not found", senderDeviceRplId), LogLevel.WARNING);
+            return;
+        }
+        
+        // Find which network the sender is in
+        AG0_TDLNetwork network = FindNetworkForDevice(system, senderDevice);
+        if (!network)
+        {
+            Print(string.Format("TDL_MESSAGE_SYSTEM: Sender device %1 not in any network", senderDeviceRplId), LogLevel.WARNING);
+            return;
+        }
+        
+        string senderCallsign = senderDevice.GetDisplayName();
+        
+        // Create the message based on type
+        int messageId;
+        if (messageType == ETDLMessageType.NETWORK_BROADCAST)
+        {
+            messageId = AddBroadcastToNetwork(network, senderDeviceRplId, senderCallsign, content);
+        }
+        else if (messageType == ETDLMessageType.DIRECT)
+        {
+            // Get recipient callsign
+            string recipientCallsign = "Unknown";
+            AG0_TDLNetworkMember recipientMember = network.GetDeviceData().Get(recipientRplId);
+            if (recipientMember)
+                recipientCallsign = recipientMember.GetPlayerName();
+            
+            messageId = AddDirectToNetwork(network, senderDeviceRplId, senderCallsign, 
+                                          content, recipientRplId, recipientCallsign);
+        }
+        
+        // Immediately propagate to connected devices
+        PropagateMessagesInNetwork(system, network);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Mark a message as read
+    //------------------------------------------------------------------------------------------------
+    static void MarkMessageRead(AG0_TDLSystem system, RplId readerDeviceRplId, int messageId)
+    {
+        if (!Replication.IsServer()) return;
+        
+        AG0_TDLDeviceComponent readerDevice = system.GetDeviceByRplId(readerDeviceRplId);
+        if (!readerDevice) return;
+        
+        AG0_TDLNetwork network = FindNetworkForDevice(system, readerDevice);
+        if (!network) return;
+        
+        AG0_TDLMessage msg = GetNetworkMessage(network, messageId);
+        if (msg)
+        {
+            msg.MarkReadBy(readerDeviceRplId);
+            
+            // Notify the sender that their message was read
+            NotifySenderOfReadReceipt(system, network, msg, readerDeviceRplId);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Called during connectivity updates to propagate messages to newly reachable devices
+    // This is the key to mesh network message behavior
+    //------------------------------------------------------------------------------------------------
+    static void PropagateMessagesForDevice(AG0_TDLSystem system, AG0_TDLNetwork network,
+                                          AG0_TDLDeviceComponent device,
+                                          map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
+    {
+        if (!Replication.IsServer()) return;
+        if (!network || !device) return;
+        
+        RplId deviceRplId = device.GetDeviceRplId();
+        if (deviceRplId == RplId.Invalid()) return;
+        
+        // Build set of connected device RplIds
+        set<RplId> connectedRplIds = new set<RplId>();
+        foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
+        {
+            connectedRplIds.Insert(rplId);
+        }
+        
+        // Find messages that can now be delivered to this device
+        array<ref AG0_TDLMessage> deliverable = GetDeliverableMessages(network, deviceRplId, connectedRplIds);
+        
+        if (deliverable.Count() > 0)
+        {
+            Print(string.Format("TDL_MESSAGE_PROPAGATION: %1 new messages can be delivered to %2",
+                deliverable.Count(), device.GetDisplayName()), LogLevel.DEBUG);
+            
+            // Mark messages as delivered and notify client
+            foreach (AG0_TDLMessage msg : deliverable)
+            {
+                msg.MarkDeliveredTo(deviceRplId);
+            }
+            
+            // Send all relevant messages to client
+            SendMessagesToClient(system, network, device);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Propagate messages across entire network (called after new message or connectivity change)
+    //------------------------------------------------------------------------------------------------
+    static void PropagateMessagesInNetwork(AG0_TDLSystem system, AG0_TDLNetwork network)
+    {
+        if (!Replication.IsServer()) return;
+        if (!network) return;
+        
+        // Iterate until no more propagation happens
+        bool anyDelivered = true;
+        int iterations = 0;
+        const int MAX_ITERATIONS = 10; // Prevent infinite loops
+        
+        while (anyDelivered && iterations < MAX_ITERATIONS)
+        {
+            anyDelivered = false;
+            iterations++;
+            
+            foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
+            {
+                if (!device.CanAccessNetwork()) continue;
+                
+                RplId deviceRplId = device.GetDeviceRplId();
+                if (deviceRplId == RplId.Invalid()) continue;
+                
+                // Get this device's current connectivity
+                // We need to get the connected members for this specific device
+                // This requires accessing the system's connectivity data
+                set<RplId> connectedRplIds = GetDeviceConnectedRplIds(system, device, network);
+                
+                // Check each message
+                array<ref AG0_TDLMessage> messages = GetNetworkMessages(network);
+                foreach (AG0_TDLMessage msg : messages)
+                {
+                    if (msg.CanDeliverTo(deviceRplId, connectedRplIds))
+                    {
+                        msg.MarkDeliveredTo(deviceRplId);
+                        anyDelivered = true;
+                        
+                        Print(string.Format("TDL_MESSAGE_PROPAGATION: Message %1 delivered to %2",
+                            msg.GetMessageId(), device.GetDisplayName()), LogLevel.DEBUG);
+                    }
+                }
+            }
+        }
+        
+        // After propagation, notify all devices of their current message state
+        foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
+        {
+            SendMessagesToClient(system, network, device);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Get a device's connected RplIds by running connectivity check
+    //------------------------------------------------------------------------------------------------
+    static set<RplId> GetDeviceConnectedRplIds(AG0_TDLSystem system, AG0_TDLDeviceComponent device, 
+                                               AG0_TDLNetwork network)
+    {
+        set<RplId> result = new set<RplId>();
+        
+        // Always include self
+        RplId selfRplId = device.GetDeviceRplId();
+        if (selfRplId != RplId.Invalid())
+            result.Insert(selfRplId);
+        
+        // Check direct connectivity to other devices
+        foreach (AG0_TDLDeviceComponent otherDevice : network.GetNetworkDevices())
+        {
+            if (otherDevice == device) continue;
+            if (!otherDevice.CanAccessNetwork()) continue;
+            
+            // Use the system's connectivity check (simplified - direct range check)
+            if (system.AreDevicesConnected(device, otherDevice))
+            {
+                RplId otherRplId = otherDevice.GetDeviceRplId();
+                if (otherRplId != RplId.Invalid())
+                    result.Insert(otherRplId);
+            }
+        }
+        
+        return result;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Send current message state to a client
+    //------------------------------------------------------------------------------------------------
+    static void SendMessagesToClient(AG0_TDLSystem system, AG0_TDLNetwork network, 
+                                    AG0_TDLDeviceComponent device)
+    {
+        if (!device) return;
+        
+        RplId deviceRplId = device.GetDeviceRplId();
+        
+        // Get player controller for this device
+        IEntity player = system.GetPlayerFromDevice(device);
+        if (!player) return;
+        
+        PlayerManager playerMgr = GetGame().GetPlayerManager();
+        int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+        if (playerId < 0) return;
+        
+        SCR_PlayerController controller = SCR_PlayerController.Cast(
+            playerMgr.GetPlayerController(playerId)
+        );
+        if (!controller) return;
+        
+        // Build client message array
+        array<ref AG0_TDLMessageClient> clientMessages = BuildClientMessages(network, deviceRplId);
+        
+        // Send via RPC
+        controller.ReceiveTDLMessages(network.GetNetworkID(), clientMessages);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Notify sender that their message was read
+    //------------------------------------------------------------------------------------------------
+    static void NotifySenderOfReadReceipt(AG0_TDLSystem system, AG0_TDLNetwork network,
+                                         AG0_TDLMessage msg, RplId readerRplId)
+    {
+        RplId senderRplId = msg.GetSenderRplId();
+        
+        // Find sender's device
+        AG0_TDLDeviceComponent senderDevice = system.GetDeviceByRplId(senderRplId);
+        if (!senderDevice) return;
+        
+        // Get sender's player controller
+        IEntity senderPlayer = system.GetPlayerFromDevice(senderDevice);
+        if (!senderPlayer) return;
+        
+        PlayerManager playerMgr = GetGame().GetPlayerManager();
+        int playerId = playerMgr.GetPlayerIdFromControlledEntity(senderPlayer);
+        if (playerId < 0) return;
+        
+        SCR_PlayerController controller = SCR_PlayerController.Cast(
+            playerMgr.GetPlayerController(playerId)
+        );
+        if (!controller) return;
+        
+        // Check if sender is currently connected to reader (can receive the receipt)
+        set<RplId> senderConnected = GetDeviceConnectedRplIds(system, senderDevice, network);
+        if (!senderConnected.Contains(readerRplId))
+        {
+            // Sender not connected to reader - receipt will be delivered later
+            // (The status update will come with the next message sync)
+            return;
+        }
+        
+        // Send read receipt update
+        controller.ReceiveTDLReadReceipt(network.GetNetworkID(), msg.GetMessageId(), readerRplId);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // HELPER: Find network containing a device
+    //------------------------------------------------------------------------------------------------
+    static AG0_TDLNetwork FindNetworkForDevice(AG0_TDLSystem system, AG0_TDLDeviceComponent device)
+    {
+        array<ref AG0_TDLNetwork> networks = system.GetNetworks();
+        foreach (AG0_TDLNetwork network : networks)
+        {
+            if (network.GetNetworkDevices().Contains(device))
+                return network;
+        }
+        return null;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // HELPER: Add broadcast message to network storage
+    //------------------------------------------------------------------------------------------------
+    static int AddBroadcastToNetwork(AG0_TDLNetwork network, RplId senderRplId, 
+                                    string senderCallsign, string content)
+    {
+        // Access network's message storage (assuming these are added to AG0_TDLNetwork)
+        array<ref AG0_TDLMessage> messages = network.GetMessages();
+        int nextId = network.GetNextMessageId();
+        
+        return network.AddBroadcastMessage(
+            network, senderRplId, senderCallsign, content, messages, nextId
+        );
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // HELPER: Add direct message to network storage
+    //------------------------------------------------------------------------------------------------
+    static int AddDirectToNetwork(AG0_TDLNetwork network, RplId senderRplId, string senderCallsign,
+                                 string content, RplId recipientRplId, string recipientCallsign)
+    {
+        array<ref AG0_TDLMessage> messages = network.GetMessages();
+        int nextId = network.GetNextMessageId();
+        
+        return network.AddDirectMessage(
+            network, senderRplId, senderCallsign, content, recipientRplId, recipientCallsign,
+            messages, nextId
+        );
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // HELPER: Get message from network
+    //------------------------------------------------------------------------------------------------
+    static AG0_TDLMessage GetNetworkMessage(AG0_TDLNetwork network, int messageId)
+    {
+        return network.GetMessageById(network.GetMessages(), messageId);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // HELPER: Get all network messages
+    //------------------------------------------------------------------------------------------------
+    static array<ref AG0_TDLMessage> GetNetworkMessages(AG0_TDLNetwork network)
+    {
+        return network.GetMessages();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // HELPER: Get deliverable messages
+    //------------------------------------------------------------------------------------------------
+    static array<ref AG0_TDLMessage> GetDeliverableMessages(AG0_TDLNetwork network, RplId targetRplId,
+                                                           set<RplId> connectedDevices)
+    {
+        return network.GetDeliverableMessages(
+            network.GetMessages(), targetRplId, connectedDevices
+        );
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // HELPER: Build client messages
+    //------------------------------------------------------------------------------------------------
+    static array<ref AG0_TDLMessageClient> BuildClientMessages(AG0_TDLNetwork network, RplId viewerRplId)
+    {
+        return network.BuildClientMessages(network.GetMessages(), viewerRplId);
+    }
 	
 	
 	void LogNetworkState(string context = "")

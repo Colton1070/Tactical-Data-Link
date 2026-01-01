@@ -41,6 +41,17 @@ modded class SCR_PlayerController
 	protected TDL_EUDBoneComponent m_CachedEUDBoneComp;
 	protected const float EUD_ADJUST_STEP = 0.1;
 	
+	// Message storage per network
+    protected ref map<int, ref AG0_TDLMessageStore> m_mNetworkMessages = new map<int, ref AG0_TDLMessageStore>();
+    
+    // Local tracking of read messages (client-side)
+    protected ref set<int> m_LocallyReadMessages = new set<int>();
+    
+    // Callback for UI updates when messages change
+    protected ref ScriptInvoker m_OnMessagesUpdated = new ScriptInvoker();  // (int networkId)
+    protected ref ScriptInvoker m_OnNewMessageReceived = new ScriptInvoker();  // (int networkId, int messageId)
+    protected ref ScriptInvoker m_OnReadReceiptReceived = new ScriptInvoker();  // (int networkId, int messageId)
+	
 	// ============================================
 	// NETWORK DIALOG STATE (CLIENT-SIDE)
 	// ============================================
@@ -952,4 +963,216 @@ modded class SCR_PlayerController
         
         return "";
     }
+	
+	//------------------------------------------------------------------------------------------------
+    // Request to send a network broadcast message
+    // Call this from UI when player sends a message to the network chat
+    //------------------------------------------------------------------------------------------------
+    static void RequestSendNetworkMessage(SCR_PlayerController controller, RplId senderDeviceRplId, string content)
+    {
+        // Validate on client
+        if (content.IsEmpty()) return;
+        if (content.Length() > 500)
+        {
+            content = content.Substring(0, 500); // Truncate
+        }
+        
+        // Send to server
+        controller.Rpc(controller.RpcAsk_SendTDLMessage, senderDeviceRplId, content, 
+                      ETDLMessageType.NETWORK_BROADCAST, RplId.Invalid());
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Request to send a direct message to a specific contact
+    //------------------------------------------------------------------------------------------------
+    static void RequestSendDirectMessage(SCR_PlayerController controller, RplId senderDeviceRplId, 
+                                        string content, RplId recipientRplId)
+    {
+        // Validate on client
+        if (content.IsEmpty()) return;
+        if (recipientRplId == RplId.Invalid()) return;
+        if (content.Length() > 500)
+        {
+            content = content.Substring(0, 500);
+        }
+        
+        // Send to server
+        controller.Rpc(controller.RpcAsk_SendTDLMessage, senderDeviceRplId, content,
+                      ETDLMessageType.DIRECT, recipientRplId);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Notify server that player has read a message
+    //------------------------------------------------------------------------------------------------
+    static void RequestMarkMessageRead(SCR_PlayerController controller, RplId readerDeviceRplId, int messageId)
+    {
+        controller.Rpc(controller.RpcAsk_MarkTDLMessageRead, readerDeviceRplId, messageId);
+    }
+	
+	//------------------------------------------------------------------------------------------------
+    // CLIENT -> SERVER: Send a message
+    //------------------------------------------------------------------------------------------------
+    [RplRpc(RplChannel.Reliable, RplRcver.Server)]
+    protected void RpcAsk_SendTDLMessage(RplId senderDeviceRplId, string content, 
+                                         ETDLMessageType messageType, RplId recipientRplId)
+    {
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system) return;
+        
+        system.SendTDLMessage(senderDeviceRplId, content, messageType, recipientRplId);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // CLIENT -> SERVER: Mark message as read
+    //------------------------------------------------------------------------------------------------
+    [RplRpc(RplChannel.Reliable, RplRcver.Server)]
+    protected void RpcAsk_MarkTDLMessageRead(RplId readerDeviceRplId, int messageId)
+    {
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system) return;
+        
+        system.MarkTDLMessageRead(readerDeviceRplId, messageId);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // SERVER -> CLIENT: Receive messages update
+    // Called by system when messages change (new message, delivery status change, etc.)
+    //------------------------------------------------------------------------------------------------
+    [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	void RpcDo_ReceiveTDLMessages(int networkId, array<ref AG0_TDLMessageClient> messages)
+	{
+	    if (!m_mNetworkMessages.Contains(networkId))
+	        m_mNetworkMessages.Set(networkId, new AG0_TDLMessageStore());
+	    
+	    AG0_TDLMessageStore store = m_mNetworkMessages.Get(networkId);
+	    
+	    array<int> newMessageIds = {};
+	    
+	    foreach (AG0_TDLMessageClient msg : messages)
+	    {
+	        if (!msg) continue;
+	        
+	        AG0_TDLMessageClient existing = store.GetByMessageId(msg.messageId);
+	        if (!existing)
+	            newMessageIds.Insert(msg.messageId);
+	        
+	        store.AddOrUpdateMessage(msg);
+	    }
+	    
+	    Print(string.Format("TDL_MESSAGE_CLIENT: Received %1 messages for network %2 (%3 new)",
+	        messages.Count(), networkId, newMessageIds.Count()), LogLevel.DEBUG);
+	    
+	    m_OnMessagesUpdated.Invoke(networkId);
+	    
+	    foreach (int newId : newMessageIds)
+	    {
+	        m_OnNewMessageReceived.Invoke(networkId, newId);
+	    }
+	}
+    
+    //------------------------------------------------------------------------------------------------
+    // SERVER -> CLIENT: Receive read receipt notification
+    //------------------------------------------------------------------------------------------------
+    [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+    void RpcDo_ReceiveTDLReadReceipt(int networkId, int messageId, RplId readerRplId)
+    {
+        if (!m_mNetworkMessages.Contains(networkId)) return;
+        
+        AG0_TDLMessageStore store = m_mNetworkMessages.Get(networkId);
+        AG0_TDLMessageClient msg = store.GetByMessageId(messageId);
+        
+        if (msg)
+        {
+            msg.status = ETDLMessageStatus.READ;
+            
+            Print(string.Format("TDL_MESSAGE_CLIENT: Message %1 read by %2",
+                messageId, readerRplId), LogLevel.DEBUG);
+            
+            m_OnReadReceiptReceived.Invoke(networkId, messageId);
+            m_OnMessagesUpdated.Invoke(networkId);
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // PUBLIC API: Called by server-side system to send messages to this client
+    //------------------------------------------------------------------------------------------------
+    void ReceiveTDLMessages(int networkId, array<ref AG0_TDLMessageClient> messages)
+	{
+	    Rpc(RpcDo_ReceiveTDLMessages, networkId, messages);
+	}
+    
+    void ReceiveTDLReadReceipt(int networkId, int messageId, RplId readerRplId)
+    {
+        Rpc(RpcDo_ReceiveTDLReadReceipt, networkId, messageId, readerRplId);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // CLIENT-SIDE API: Get messages for UI
+    //------------------------------------------------------------------------------------------------
+    
+    // Get message store for a network
+    AG0_TDLMessageStore GetTDLMessageStore(int networkId)
+    {
+        if (!m_mNetworkMessages.Contains(networkId))
+            return null;
+        return m_mNetworkMessages.Get(networkId);
+    }
+    
+    // Get network broadcast messages
+    array<ref AG0_TDLMessageClient> GetNetworkChatMessages(int networkId)
+    {
+        AG0_TDLMessageStore store = GetTDLMessageStore(networkId);
+        if (!store) return new array<ref AG0_TDLMessageClient>();
+        return store.GetNetworkMessages();
+    }
+    
+    // Get direct messages with a contact
+    array<ref AG0_TDLMessageClient> GetDirectMessages(int networkId, RplId myDeviceRplId, RplId contactRplId)
+    {
+        AG0_TDLMessageStore store = GetTDLMessageStore(networkId);
+        if (!store) return new array<ref AG0_TDLMessageClient>();
+        return store.GetDirectMessages(myDeviceRplId, contactRplId);
+    }
+    
+    // Mark a message as locally read (client-side tracking)
+    void MarkMessageLocallyRead(int messageId)
+    {
+        m_LocallyReadMessages.Insert(messageId);
+    }
+    
+    // Check if message is locally read
+    bool IsMessageLocallyRead(int messageId)
+    {
+        return m_LocallyReadMessages.Contains(messageId);
+    }
+    
+    // Get unread count for network chat
+    int GetNetworkChatUnreadCount(int networkId, RplId myDeviceRplId)
+    {
+        AG0_TDLMessageStore store = GetTDLMessageStore(networkId);
+        if (!store) return 0;
+        return store.CountUnreadInConversation(myDeviceRplId, "NETWORK", m_LocallyReadMessages);
+    }
+    
+    // Get unread count for a direct conversation
+    int GetDirectChatUnreadCount(int networkId, RplId myDeviceRplId, RplId contactRplId)
+    {
+        AG0_TDLMessageStore store = GetTDLMessageStore(networkId);
+        if (!store) return 0;
+        return store.CountUnreadInConversation(myDeviceRplId, contactRplId.ToString(), m_LocallyReadMessages);
+    }
+    
+    // Get total unread count
+    int GetTotalUnreadCount(int networkId, RplId myDeviceRplId)
+    {
+        AG0_TDLMessageStore store = GetTDLMessageStore(networkId);
+        if (!store) return 0;
+        return store.CountTotalUnread(myDeviceRplId, m_LocallyReadMessages);
+    }
+    
+    // Subscribe to message updates
+    ScriptInvoker GetOnMessagesUpdated() { return m_OnMessagesUpdated; }
+    ScriptInvoker GetOnNewMessageReceived() { return m_OnNewMessageReceived; }
+    ScriptInvoker GetOnReadReceiptReceived() { return m_OnReadReceiptReceived; }
+	
 }
