@@ -679,6 +679,27 @@ modded class SCR_PlayerController
         m_bPendingCreateNetworkMode = false;
         m_sPendingNetworkName = "";
     }
+	
+	//------------------------------------------------------------------------------------------------
+	void RequestLeaveNetwork(RplId deviceRplId)
+	{
+	    Rpc(RpcAsk_LeaveNetwork, deviceRplId);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_LeaveNetwork(RplId deviceRplId)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return;
+	    
+	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
+	    if (!device)
+	        return;
+	    
+	    system.LeaveNetwork(device);
+	}
     
     // ============================================
     // RPCs - Owner (Client receives)

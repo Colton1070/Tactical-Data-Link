@@ -201,20 +201,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    if (system) system.RegisterDevice(this);
 	}
     
-    protected void OnDeviceDropped()
-    {
-        // Power providers stay active when dropped
-        if (HasCapability(AG0_ETDLDeviceCapability.POWER_PROVIDER)) return;
-        
-        // Everything else gets deactivated
-        DeactivateAllCapabilities();
-        
-        // Network providers leave the network entirely
-        if (HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS) && IsInNetwork()) {
-            LeaveNetworkTDL();
-        }
-    }
-    
     protected void DeactivateAllCapabilities()
     {
         m_bCapabilitiesActive = false;
@@ -565,6 +551,36 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    RequestNetworkDialogViaPlayerController(userEntity, false);
 	}
 	
+	bool LeaveNetworkTDL()
+	{
+        // Optimistically update local state for responsive UI
+        m_iCurrentNetworkID = -1;
+        m_mConnectedMembers.Clear();
+        if (m_LocalNetworkMembers)
+            m_LocalNetworkMembers.Clear();
+        
+		if(!System.IsConsoleApp()) {
+			 // Route through player controller - we don't own this device
+	        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	        if (pc)
+	        {
+	            pc.RequestLeaveNetwork(GetDeviceRplId());
+	        }
+		}
+		else {
+			AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+		    if (!system)
+		        return false;
+		    
+		    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(GetDeviceRplId());
+		    if (!device)
+		        return false;
+		    
+		    system.LeaveNetwork(device);
+		}
+        return true;
+	}
+	
 	//------------------------------------------------------------------------------------------------
 	//! Routes network dialog request through PlayerController
 	//! This solves the gamepad/console input issue by letting PlayerController manage dialogs
@@ -603,84 +619,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    playerController.AskOpenNetworkDialog(deviceRplId, createMode);
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	// Network management methods (server-side execution)
-	//------------------------------------------------------------------------------------------------
-	bool CreateNetworkTDL(string networkName, string password)
-	{
-	    if (!Replication.IsServer())
-	    {
-	        Rpc(RpcAsk_CreateNetworkTDL, networkName, password);
-	        return true;
-	    }
-	    
-	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-	    if (system)
-	    {
-	        int networkID = system.CreateNetwork(this, networkName, password);
-	        return networkID > 0;
-	    }
-	    
-	    return false;
-	}
-	
-	bool JoinNetworkTDL(string networkName, string password)
-	{
-	    if (!Replication.IsServer())
-	    {
-	        Rpc(RpcAsk_JoinNetworkTDL, networkName, password);
-	        return true;
-	    }
-	    
-	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-	    if (system)
-	    {
-	        return system.JoinNetwork(this, networkName, password);
-	    }
-	    
-	    return false;
-	}
-	
-	bool LeaveNetworkTDL()
-	{
-	    if (!Replication.IsServer())
-	    {
-	        Rpc(RpcAsk_LeaveNetworkTDL);
-	        return true;
-	    }
-	    
-	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-	    if (system)
-	    {
-	        system.LeaveNetwork(this);
-	        return true;
-	    }
-	    
-	    return false;
-	}
-	
 	//RPCs
-	
-	//------------------------------------------------------------------------------------------------
-	// RPC Methods - Client to Server
-	//------------------------------------------------------------------------------------------------
-	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
-	protected void RpcAsk_CreateNetworkTDL(string networkName, string password)
-	{
-	    CreateNetworkTDL(networkName, password);
-	}
-	
-	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
-	protected void RpcAsk_JoinNetworkTDL(string networkName, string password)
-	{
-	    JoinNetworkTDL(networkName, password);
-	}
-	
-	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
-	protected void RpcAsk_LeaveNetworkTDL()
-	{
-	    LeaveNetworkTDL();
-	}
 	
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
 	protected void RpcDo_NotifyNetworkJoined(int networkID, array<RplId> members) { 
