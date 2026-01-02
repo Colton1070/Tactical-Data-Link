@@ -885,6 +885,39 @@ FrameWidgetClass {
             }
            }
           }
+          ButtonWidgetClass "{6842E37FF7F09A62}" {
+           Name "ViewChatButton"
+           Slot LayoutSlot "{672744B7F13077A9}" {
+           }
+           components {
+            SCR_ModularButtonComponent "{672744B4318F20C9}" {
+             m_aEffects {
+              SCR_ButtonEffectColor "{672744B46F15C2EF}" {
+               m_eEvents 6149
+               m_sWidgetName "ViewChatText"
+               m_fAnimationTime 0.08
+               m_cDefault 0.75 0.75 0.75 1
+               m_cHovered 0.2 0.8 0.8 1
+               m_cActivated 0.2 0.8 0.8 1
+               m_cActivatedHovered 0.3 1 1 1
+               m_cClicked 0.3 1 1 1
+               m_cFocusGained 0.2 0.8 0.8 1
+               m_cFocusLost 0.75 0.75 0.75 1
+              }
+             }
+             m_bFocusOnMouseEnter 1
+            }
+           }
+           style blank
+           {
+            TextWidgetClass "{6842E37FF7F09A61}" {
+             Name "ViewChatText"
+             Slot ButtonWidgetSlot "{672744B3DCF248EE}" {
+             }
+             Text "View Chat"
+            }
+           }
+          }
           ButtonWidgetClass "{672744B7F13077D6}" {
            Name "ViewFeedButton"
            Slot LayoutSlot "{672744B7F13077A9}" {
@@ -1103,6 +1136,197 @@ FrameWidgetClass {
              Slot ButtonWidgetSlot "{672744B7C302E982}" {
              }
              Text "Back"
+            }
+           }
+          }
+         }
+        }
+        FrameWidgetClass "{6842E37FDBAB7E19}" {
+         Name "ChatContent"
+         Slot OverlayWidgetSlot "{672744B67D8BA8C1}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+          Padding 5 100 40 40
+         }
+         {
+          TextWidgetClass "{6842E37FDBAB3C59}" {
+           Name "ContactName"
+           Slot FrameWidgetSlot "{6842E3290ADE85D6}" {
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX 252.726
+            OffsetRight -252.726
+            SizeY 30
+            OffsetBottom -30
+           }
+           Text "ContactName"
+          }
+          ScrollLayoutWidgetClass "{6842E3299D7B697A}" {
+           Name "ScrollLayout"
+           Slot FrameWidgetSlot "{672744B6FAAB2B1B}" {
+            Anchor 0 0 1 0
+            PositionX 8.149
+            OffsetLeft 8.149
+            PositionY 38.269
+            OffsetTop 38.269
+            SizeX -9.62
+            OffsetRight 1.471
+            SizeY 830.087
+            OffsetBottom -868.356
+           }
+           components {
+            SCR_GamepadScrollComponent "{672744B72963802E}" {
+            }
+           }
+           "Up rule" Explicit
+           "Up target" "CloseButton"
+           {
+            VerticalLayoutWidgetClass "{6842E3299D7B6905}" {
+             Name "MessageList"
+             Slot AlignableSlot "{672744B72240C235}" {
+              HorizontalAlign 3
+              VerticalAlign 3
+             }
+            }
+           }
+          }
+          HorizontalLayoutWidgetClass "{6842E37CB1F8C814}" {
+           Name "HorizontalLayout0"
+           Slot FrameWidgetSlot "{6842E3291EBD12E7}" {
+            PositionX -1.307
+            OffsetLeft -1.307
+            PositionY 876.792
+            OffsetTop 876.792
+            SizeX 454.77
+            OffsetRight -453.463
+            SizeY 61.022
+            OffsetBottom -937.814
+           }
+           {
+            FrameWidgetClass "{6842E37C6E4A3932}" {
+             Name "CallsignEditBoxFrame0"
+             Slot LayoutSlot "{67282DB5ABF5B628}" {
+              Padding 10 10 10 10
+              SizeMode Fill
+             }
+             {
+              ButtonWidgetClass "{6842E37C6E4A3931}" {
+               Name "MessageEditBox"
+               Slot FrameWidgetSlot "{67282DB59DDA8392}" {
+                Anchor 0 0 1 0
+                PositionX 0
+                OffsetLeft 0
+                PositionY 0
+                OffsetTop 0
+                SizeX -499.559
+                OffsetRight 0
+                SizeY 48
+                OffsetBottom -48
+               }
+               components {
+                AG0_EditBoxComponent "{67282DB5F8F41964}" {
+                 m_cOutlineDefault 0.157 0.27 0.263 0.3
+                 m_cOutlineFocused 0 0.799 0.793 1
+                }
+               }
+               style blank
+               {
+                SizeLayoutWidgetClass "{6842E37C6E4A3930}" {
+                 Name "SizeLayout0"
+                 Slot ButtonWidgetSlot "{67282DB2A459FF29}" {
+                  HorizontalAlign 3
+                  VerticalAlign 3
+                 }
+                 {
+                  OverlayWidgetClass "{6842E37C6E4994E8}" {
+                   Name "Overlay0"
+                   Slot AlignableSlot "{67282DB2A1888CD7}" {
+                    HorizontalAlign 3
+                    VerticalAlign 3
+                   }
+                   {
+                    ImageWidgetClass "{6842E37C6E4994ED}" {
+                     Name "Outline"
+                     Slot OverlayWidgetSlot "{67282D8E789427EC}" {
+                      HorizontalAlign 3
+                      VerticalAlign 3
+                     }
+                    }
+                    EditBoxWidgetClass "{6842E37C6E4994EC}" {
+                     Name "EditBox"
+                     Slot OverlayWidgetSlot "{67282DB284A32D46}" {
+                      HorizontalAlign 3
+                      VerticalAlign 3
+                     }
+                     components {
+                      SCR_EventHandlerComponent "{67282DB2E48680F8}" {
+                      }
+                     }
+                     "Font Size" 36
+                     "Placeholder text" "Callsign"
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+            ButtonWidgetClass "{6842E37C8A5CEC4A}" {
+             Name "ChatSendButton"
+             Slot LayoutSlot "{67237B37113AD9E5}" {
+              HorizontalAlign 1
+              VerticalAlign 1
+             }
+             components {
+              SCR_ModularButtonComponent "{67237B371D7C889C}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{67237B37193CC41B}" {
+                 m_eEvents 6149
+                 m_sWidgetName "SendImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.9 0.2 0.2 1
+                 m_cActivated 0.9 0.2 0.2 1
+                 m_cActivatedHovered 1 0.4 0.4 1
+                 m_cClicked 1 0.4 0.4 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_eEventReturnValue 2147483645
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{6842E37C8A5CEC49}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{6842E37C8A5CEC48}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{6842E37C8A5CEC4F}" {
+                   Name "SendImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{65AFA8347C2E5123}UI/Textures/Icons/tdl_send.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
+                }
+               }
+              }
+             }
             }
            }
           }

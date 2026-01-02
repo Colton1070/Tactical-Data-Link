@@ -1,0 +1,128 @@
+ButtonWidgetClass {
+ Name "MessageCard"
+ Slot LayoutSlot "{65F049EE6A586DEF}" {
+  Padding 4 4 4 4
+ }
+ Color 0 0 0 1
+ components {
+  SCR_ModularButtonComponent "{65F7502A1B3E4C89}" {
+   m_aEffects {
+    SCR_ButtonEffectColor "{65F7502A1B3E4C8A}" {
+     m_eEvents 6144
+     m_sWidgetName "CardBackground"
+     m_fAnimationTime 0.15
+     m_cDefault 0.078 0.078 0.102 0.8
+     m_cHovered 0.14 0.14 0.18 0.98
+     m_cActivated 0.18 0.18 0.22 1
+     m_cFocusGained 0.14 0.14 0.18 0.98
+     m_cFocusLost 0.078 0.078 0.102 0.8
+    }
+    SCR_ButtonEffectSound "{65F7502A1B3E4C8B}" {
+     m_eEvents EVENT_FOCUS_GAINED
+     m_eInputDevices 61
+     m_sSound "SOUND_FE_BUTTON_HOVER"
+    }
+    SCR_ButtonEffectSound "{65F7502A1B3E4C8C}" {
+     m_eEvents EVENT_MOUSE_ENTER
+     m_eInputDevices 50
+     m_sSound "SOUND_FE_BUTTON_HOVER"
+    }
+   }
+   m_bFocusOnMouseEnter 1
+  }
+ }
+ style blank
+ {
+  SizeLayoutWidgetClass "{6842E37DD1160175}" {
+   Name "SizeLayout"
+   Slot ButtonWidgetSlot "{65F7502A1B3E4C8E}" {
+    HorizontalAlign 3
+    VerticalAlign 3
+   }
+   AllowMaxDesiredWidth 1
+   MaxDesiredWidth 400
+   {
+    OverlayWidgetClass "{6842E37DD116017B}" {
+     Name "CardOverlay"
+     Slot AlignableSlot "{6842E37DD116017C}" {
+      HorizontalAlign 3
+      VerticalAlign 0
+     }
+     {
+      ImageWidgetClass "{6842E37DD116017A}" {
+       Name "CardBackground"
+       Slot OverlayWidgetSlot "{67275C12BFAA6BA2}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+       }
+       Color 0.078 0.078 0.102 0.8
+      }
+      VerticalLayoutWidgetClass "{6842E3723C915D1C}" {
+       Name "ContentLayout"
+       Slot OverlayWidgetSlot "{6842E3723C915D31}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+        Padding 8 6 8 6
+       }
+       {
+        HorizontalLayoutWidgetClass "{6842E37DD1160178}" {
+         Name "HeaderRow"
+         Slot LayoutSlot "{6842E37DD1160179}" {
+         }
+         {
+          ImageWidgetClass "{6842E37DD116017F}" {
+           Name "StatusDot"
+           Slot LayoutSlot "{67275C1F76F0AD71}" {
+            HorizontalAlign 1
+            VerticalAlign 1
+            Padding 0 0 5 0
+           }
+           Size 10 10
+           Tiling None
+          }
+          TextWidgetClass "{6842E37DD11632D9}" {
+           Name "PlayerName"
+           Slot LayoutSlot "{65F7502A1B3E4C94}" {
+            HorizontalAlign 1
+            VerticalAlign 1
+           }
+           Color 1 1 1 1
+           Text "Player Name"
+           "Font Size" 16
+          }
+          SizeLayoutWidgetClass "{6842E37DD11632DB}" {
+           Name "Spacer"
+           Slot LayoutSlot "{65F7502A1B3E4C96}" {
+            SizeMode Fill
+           }
+          }
+          TextWidgetClass "{6842E37DD11632DA}" {
+           Name "Time"
+           Slot LayoutSlot "{65F7502A1B3E4C98}" {
+            HorizontalAlign 1
+            VerticalAlign 1
+           }
+           Color 0.6 0.6 0.6 1
+           Text "12:34"
+           "Font Size" 14
+          }
+         }
+        }
+        RichTextWidgetClass "{6842E3720FE6318F}" {
+         Name "MessageContent"
+         Slot LayoutSlot "{6842E3720FE631AC}" {
+          Padding 0 4 0 0
+         }
+         Color 0.85 0.85 0.85 1
+         Text "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
+         "Font Size" 14
+         Wrap 1
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

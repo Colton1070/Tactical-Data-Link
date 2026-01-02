@@ -10,6 +10,7 @@ enum ETDLPanelContent
     NONE,           // Panel hidden, map only
     NETWORK_LIST,   // Member list
     MEMBER_DETAIL,  // Selected member details
+	DIRECT_CHAT,
     SETTINGS        // Future: settings/config
 }
 
@@ -20,6 +21,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 {
     // Persistent state for menu-specific things (panel state survives open/close)
     static protected ETDLPanelContent s_eLastPanel = ETDLPanelContent.NETWORK_LIST;
+	static protected RplId s_LastSelectedDeviceId = RplId.Invalid();
+	static protected RplId s_LastChatContactRplId = RplId.Invalid();
+	static protected string s_sLastChatContactName;
     
     // ============================================
     // DISPLAY CONTROLLER - handles map, markers, self info, member cards
@@ -104,6 +108,24 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected vector m_PendingFeedPosition;
     protected float m_fFeedAttachTimer;
     protected const float FEED_ATTACH_TIMEOUT = 5.0;
+	
+	// Chat panel widgets
+	protected Widget m_wViewChatButton;
+	protected Widget m_wChatContent;
+	protected TextWidget m_wChatContactName;
+	protected ScrollLayoutWidget m_wChatScrollLayout;
+	protected Widget m_wChatMessageList;
+	protected Widget m_wChatEditBoxRoot;
+	protected ref AG0_EditBoxComponent m_ChatEditBox;
+	protected Widget m_wChatSendButton;
+	
+	// Chat state
+	protected RplId m_ChatContactRplId = RplId.Invalid();
+	protected string m_sChatContactName = "";
+	protected ref array<Widget> m_aChatMessageWidgets = {};
+	protected bool m_bScrollToBottom = false;
+	
+	protected const ResourceName MESSAGE_CARD_LAYOUT = "{2507AC45B21BBC57}UI/layouts/Menus/TDL/TDLMessageUI.layout";
     
     protected const ResourceName FEED_CAMERA_PREFAB = "{F3CDC6E4F329E496}Prefabs/Characters/Core/TDLDevicePlayerCamera.et";
     
@@ -167,6 +189,20 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         m_wFeedOverlay = m_wRoot.FindAnyWidget("FeedOverlay");
         m_wFeedMemberName = TextWidget.Cast(m_wRoot.FindAnyWidget("FeedMemberName"));
         m_wFeedBackButton = m_wRoot.FindAnyWidget("FeedBackButton");
+		
+		// Chat content widgets
+		m_wViewChatButton = m_wRoot.FindAnyWidget("ViewChatButton");
+		m_wChatContent = m_wRoot.FindAnyWidget("ChatContent");
+		m_wChatContactName = TextWidget.Cast(m_wRoot.FindAnyWidget("ContactName"));
+		m_wChatMessageList = m_wRoot.FindAnyWidget("MessageList");
+		m_wChatEditBoxRoot = m_wRoot.FindAnyWidget("MessageEditBox");
+		if (m_wChatEditBoxRoot)
+		    m_ChatEditBox = AG0_EditBoxComponent.FindComponent(m_wChatEditBoxRoot);
+		m_wChatSendButton = m_wRoot.FindAnyWidget("ChatSendButton");
+		
+		// Find scroll layout inside chat content
+		if (m_wChatContent)
+		    m_wChatScrollLayout = ScrollLayoutWidget.Cast(m_wChatContent.FindAnyWidget("ScrollLayout"));
         
         if (m_wFeedBackButton)
         {
@@ -189,9 +225,18 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         FindActiveDevice();
         FindNetworkDevice();
         RefreshPlugins();
+		
+		SubscribeToMessageUpdates();
         
-        // Restore or set initial panel state
-        SetPanelContent(s_eLastPanel);
+        m_SelectedDeviceId = s_LastSelectedDeviceId;
+		m_ChatContactRplId = s_LastChatContactRplId;
+		m_sChatContactName = s_sLastChatContactName;
+		
+		// Re-fetch member data if we have a valid device ID
+		if (m_SelectedDeviceId != RplId.Invalid())
+		    m_SelectedMember = GetNetworkMemberById(m_SelectedDeviceId);
+		
+		SetPanelContent(s_eLastPanel);
         
         // Hook button handlers
         HookButtonHandlers();
@@ -326,6 +371,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (m_eActivePanel == ETDLPanelContent.MEMBER_DETAIL)
             PopulateDetailView();
         
+		if (m_bScrollToBottom && m_wChatScrollLayout)
+		{
+		    m_wChatScrollLayout.SetSliderPos(0, 1.0);
+		    m_bScrollToBottom = false;
+		}
+		
         // Update camera button state
         UpdateCameraButtonState();
         
@@ -360,6 +411,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         }
         m_aActivePlugins.Clear();
         
+		UnsubscribeFromMessageUpdates();
+		
         // ============================================
         // CLEANUP DISPLAY CONTROLLER
         // ============================================
@@ -517,6 +570,22 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             if (comp)
                 comp.m_OnClicked.Insert(OnSettingsBackClicked);
         }
+		
+		if (m_wViewChatButton)
+		{
+		    SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+		        m_wViewChatButton.FindHandler(SCR_ModularButtonComponent));
+		    if (comp)
+		        comp.m_OnClicked.Insert(OnViewDirectChatClicked);
+		}
+		
+		if (m_wChatSendButton)
+		{
+		    SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+		        m_wChatSendButton.FindHandler(SCR_ModularButtonComponent));
+		    if (comp)
+		        comp.m_OnClicked.Insert(OnChatSendClicked);
+		}
     }
     
     //------------------------------------------------------------------------------------------------
@@ -630,6 +699,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         bool showPanel = (content != ETDLPanelContent.NONE);
         bool showNetwork = (content == ETDLPanelContent.NETWORK_LIST);
         bool showDetail = (content == ETDLPanelContent.MEMBER_DETAIL);
+		bool showChat = (content == ETDLPanelContent.DIRECT_CHAT);
         bool showSettings = (content == ETDLPanelContent.SETTINGS);
         
         string title = "CONTACTS";
@@ -641,6 +711,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             case ETDLPanelContent.SETTINGS:
                 title = "SETTINGS";
                 break;
+			case ETDLPanelContent.DIRECT_CHAT:
+			    title = m_sChatContactName;
+			    break;
         }
         
         // Update static state so device stays in sync
@@ -664,6 +737,17 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         if (m_wPanelTitle)
             m_wPanelTitle.SetText(title);
+		
+		if (m_wChatContent)
+		{
+		    m_wChatContent.SetVisible(showChat);
+		    if (showChat)
+		    {
+		        if (m_wChatContactName)
+		            m_wChatContactName.SetText(m_sChatContactName);
+		        PopulateChatView();
+		    }
+		}
         
         SetPanelFocus(content);
     }
@@ -697,6 +781,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 else if (m_wSettingsBackButton)
                     GetGame().GetWorkspace().SetFocusedWidget(m_wSettingsBackButton);
                 break;
+			
+			case ETDLPanelContent.DIRECT_CHAT:
+			    if (m_ChatEditBox)
+			        m_ChatEditBox.Focus();
+			    break;
                 
             case ETDLPanelContent.NONE:
                 if (m_wNetworkButton)
@@ -718,7 +807,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected void ShowDetailView(AG0_TDLNetworkMember member, RplId deviceId)
     {
         m_SelectedMember = member;
-        m_SelectedDeviceId = deviceId;
+	    m_SelectedDeviceId = deviceId;
+	    s_LastSelectedDeviceId = deviceId;
         
         PopulateDetailView();
         SetPanelContent(ETDLPanelContent.MEMBER_DETAIL);
@@ -797,6 +887,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             {
                 SetPanelContent(ETDLPanelContent.NETWORK_LIST);
             }
+			if (m_eActivePanel == ETDLPanelContent.DIRECT_CHAT)
+			{
+				SetPanelContent(ETDLPanelContent.MEMBER_DETAIL);
+			}
             else if (m_eActivePanel == ETDLPanelContent.SETTINGS)
             {
                 SetPanelContent(ETDLPanelContent.NETWORK_LIST);
@@ -1335,5 +1429,219 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    }
 	    
 	    return true;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	// CHAT METHODS
+	//------------------------------------------------------------------------------------------------
+	
+	protected void OnViewDirectChatClicked()
+	{
+	    if (!m_SelectedMember)
+	        return;
+	    
+	    OpenDirectChat(m_SelectedDeviceId, m_SelectedMember.GetPlayerName());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnChatSendClicked()
+	{
+	    SendChatMessage();
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	void OpenDirectChat(RplId contactRplId, string contactName)
+	{
+	    m_ChatContactRplId = contactRplId;
+	    m_sChatContactName = contactName;
+	    s_LastChatContactRplId = contactRplId;
+	    s_sLastChatContactName = contactName;
+	    SetPanelContent(ETDLPanelContent.DIRECT_CHAT);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void PopulateChatView()
+	{
+	    if (!m_wChatMessageList)
+	        return;
+	    
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller || !m_NetworkDevice)
+	        return;
+	    
+	    int networkId = m_NetworkDevice.GetCurrentNetworkID();
+	    RplId myDeviceRplId = m_NetworkDevice.GetDeviceRplId();
+	    
+	    // Get direct messages with this contact
+	    array<ref AG0_TDLMessageClient> messages = controller.GetDirectMessages(networkId, myDeviceRplId, m_ChatContactRplId);
+	    
+	    // Clear existing message widgets
+	    ClearChatMessages();
+	    
+	    // Create widgets for each message
+	    foreach (AG0_TDLMessageClient msg : messages)
+	    {
+	        CreateMessageWidget(msg, myDeviceRplId);
+	    }
+	    
+	    // Mark messages as read
+	    foreach (AG0_TDLMessageClient msg : messages)
+	    {
+	        if (!msg.IsOutgoing(myDeviceRplId) && !controller.IsMessageLocallyRead(msg.messageId))
+	        {
+	            controller.MarkMessageLocallyRead(msg.messageId);
+	            SCR_PlayerController.RequestMarkMessageRead(controller, myDeviceRplId, msg.messageId);
+	        }
+	    }
+	    
+	    m_bScrollToBottom = true;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void ClearChatMessages()
+	{
+	    foreach (Widget w : m_aChatMessageWidgets)
+	    {
+	        if (w)
+	            w.RemoveFromHierarchy();
+	    }
+	    m_aChatMessageWidgets.Clear();
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void CreateMessageWidget(AG0_TDLMessageClient msg, RplId viewerRplId)
+	{
+	    if (!m_wChatMessageList)
+	        return;
+	    
+	    Widget card = GetGame().GetWorkspace().CreateWidgets(MESSAGE_CARD_LAYOUT, m_wChatMessageList);
+	    if (!card)
+	        return;
+	    
+	    m_aChatMessageWidgets.Insert(card);
+	    
+	    TextWidget playerName = TextWidget.Cast(card.FindAnyWidget("PlayerName"));
+	    TextWidget messageContent = TextWidget.Cast(card.FindAnyWidget("MessageContent"));
+	    TextWidget timeWidget = TextWidget.Cast(card.FindAnyWidget("Time"));
+	    ImageWidget statusDot = ImageWidget.Cast(card.FindAnyWidget("StatusDot"));
+	    
+	    // Debug logging
+	    Print(string.Format("TDL_CHAT: Creating message widget - timestamp: %1", msg.timestamp), LogLevel.DEBUG);
+	    Print(string.Format("TDL_CHAT: timeWidget found: %1", timeWidget != null), LogLevel.DEBUG);
+	    
+	    if (playerName)
+	        playerName.SetText(msg.senderCallsign);
+	    
+	    if (messageContent)
+	        messageContent.SetText(msg.content);
+	    
+	    if (timeWidget)
+	    {
+	        string formatted = FormatTimestamp(msg.timestamp);
+	        Print(string.Format("TDL_CHAT: Setting time to: %1", formatted), LogLevel.DEBUG);
+	        timeWidget.SetText(formatted);
+	    }
+	    
+	    bool isOutgoing = msg.IsOutgoing(viewerRplId);
+	    if (statusDot)
+	    {
+	        if (isOutgoing)
+	        {
+	            switch (msg.status)
+	            {
+	                case ETDLMessageStatus.PENDING:
+	                    statusDot.SetColor(Color.Gray);
+	                    break;
+	                case ETDLMessageStatus.DELIVERED:
+	                    statusDot.SetColor(Color.FromInt(0xFF33CCCC));
+	                    break;
+	                case ETDLMessageStatus.READ:
+	                    statusDot.SetColor(Color.FromInt(0xFF00FF00));
+	                    break;
+	            }
+	        }
+	        else
+	        {
+	            statusDot.SetVisible(false);
+	        }
+	    }
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected string FormatTimestamp(int timestamp)
+	{
+	    int now = System.GetUnixTime();
+	    int diff = now - timestamp;
+	    
+	    if (diff < 60)
+	        return "Just now";
+	    else if (diff < 3600)
+	        return string.Format("%1m ago", diff / 60);
+	    else if (diff < 86400)
+	        return string.Format("%1h ago", diff / 3600);
+	    else
+	        return string.Format("%1d ago", diff / 86400);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void SendChatMessage()
+	{
+	    if (!m_ChatEditBox || !m_NetworkDevice)
+	        return;
+	    
+	    string content = m_ChatEditBox.GetText();
+	    if (content.IsEmpty())
+	        return;
+	    
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return;
+	    
+	    RplId senderDeviceRplId = m_NetworkDevice.GetDeviceRplId();
+	    
+	    if (m_ChatContactRplId != RplId.Invalid())
+	        SCR_PlayerController.RequestSendDirectMessage(controller, senderDeviceRplId, content, m_ChatContactRplId);
+	    
+	    m_ChatEditBox.SetText("");
+	    m_bScrollToBottom = true;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void SubscribeToMessageUpdates()
+	{
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return;
+	    
+	    controller.GetOnMessagesUpdated().Insert(OnMessagesUpdated);
+	    controller.GetOnNewMessageReceived().Insert(OnNewMessageReceived);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void UnsubscribeFromMessageUpdates()
+	{
+	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+	    if (!controller)
+	        return;
+	    
+	    controller.GetOnMessagesUpdated().Remove(OnMessagesUpdated);
+	    controller.GetOnNewMessageReceived().Remove(OnNewMessageReceived);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnMessagesUpdated(int networkId)
+	{
+	    if (m_eActivePanel == ETDLPanelContent.DIRECT_CHAT)
+	    {
+	        if (m_NetworkDevice && m_NetworkDevice.GetCurrentNetworkID() == networkId)
+	            PopulateChatView();
+	    }
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	protected void OnNewMessageReceived(int networkId, int messageId)
+	{
+	    if (m_eActivePanel == ETDLPanelContent.DIRECT_CHAT)
+	        m_bScrollToBottom = true;
 	}
 }
