@@ -65,7 +65,7 @@ class AG0_TDLMapView
     {
         if (!canvas)
         {
-            Print("[TDLMapView] Init failed - null canvas", LogLevel.ERROR);
+            Print("[TDLMapView] Init failed - null canvas", LogLevel.WARNING);
             return false;
         }
         
@@ -74,7 +74,7 @@ class AG0_TDLMapView
         // Get map dimensions from MapEntity
         if (!LoadMapData())
         {
-            Print("[TDLMapView] Failed to load map data from MapEntity", LogLevel.ERROR);
+            Print("[TDLMapView] Failed to load map data from MapEntity", LogLevel.WARNING);
             return false;
         }
         
@@ -167,7 +167,7 @@ class AG0_TDLMapView
 	        return false;
 	    }
 	    
-	    Print(string.Format("[TDLMapView] Loading texture: %1", texturePath), LogLevel.NORMAL);
+	    Print(string.Format("[TDLMapView] Loading texture: %1", texturePath), LogLevel.DEBUG);
 	    
 	    m_pMapTexture = CanvasWidget.LoadTexture(texturePath);
 	    if (!m_pMapTexture)

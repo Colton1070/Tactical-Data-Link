@@ -242,7 +242,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // Bind to the screen mesh
         m_RTWidget.SetRenderTarget(m_ScreenEntity);
         
-        Print("[TDL_WorldSpaceDisplay] Render target bound, initializing display controller...", LogLevel.NORMAL);
+        Print("[TDL_WorldSpaceDisplay] Render target bound, initializing display controller...", LogLevel.DEBUG);
         
         // Initialize the display controller with the ATAK layout
         m_DisplayController = new AG0_TDLDisplayController();
@@ -256,7 +256,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // Setup interaction system
         SetupInteraction();
         
-        Print("[TDL_WorldSpaceDisplay] World-space ATAK display initialized successfully", LogLevel.NORMAL);
+        Print("[TDL_WorldSpaceDisplay] World-space ATAK display initialized successfully", LogLevel.DEBUG);
     }
     
     // ============================================

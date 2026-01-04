@@ -254,7 +254,14 @@ class AG0_TDLNetwork
 }
 
 class AG0_TDLSystem : WorldSystem
-{	
+{
+	protected ref AG0_TDLApiManager m_ApiManager;
+	// API sync intervals (in seconds)
+	protected const float API_HEARTBEAT_INTERVAL = 60.0;      // Server heartbeat every 60s
+	protected const float API_STATE_SYNC_INTERVAL = 30.0;     // Full state sync every 30s
+	protected float m_fTimeSinceApiHeartbeat = 0;
+	protected float m_fTimeSinceApiStateSync = 0;
+
     // Networks storage
     protected ref array<ref AG0_TDLNetwork> m_aNetworks = {};
     protected int m_iNextNetworkID = 1;
@@ -351,6 +358,29 @@ class AG0_TDLSystem : WorldSystem
 	    return null;
 	}
     
+	override protected void OnInit()
+	{
+	    super.OnInit();
+	    
+	    // CRITICAL: Only initialize API on the server
+	    if (!Replication.IsServer())
+	    {
+	        Print("TDL_SYSTEM: Running on client/proxy - skipping API initialization", LogLevel.DEBUG);
+	        return;
+	    }
+	    
+	    // Initialize API Manager
+	    m_ApiManager = new AG0_TDLApiManager();
+	    if (m_ApiManager.Initialize())
+	    {
+	        Print("TDL_SYSTEM: API Manager initialized successfully", LogLevel.DEBUG);
+	    }
+	    else
+	    {
+	        Print("TDL_SYSTEM: API Manager initialization failed", LogLevel.DEBUG);
+	        m_ApiManager = null;
+	    }
+	}
     
     //------------------------------------------------------------------------------------------------
     override protected void OnUpdatePoint(WorldUpdatePointArgs args)
@@ -365,6 +395,27 @@ class AG0_TDLSystem : WorldSystem
             UpdateNetworks();
             m_fTimeSinceLastUpdate = 0;
         }
+		
+		if (m_ApiManager)
+	    {
+	        m_ApiManager.Update(timeSlice);
+	        
+	        // Heartbeat
+	        m_fTimeSinceApiHeartbeat += timeSlice;
+	        if (m_fTimeSinceApiHeartbeat >= API_HEARTBEAT_INTERVAL)
+	        {
+	            ApiSendHeartbeat();
+	            m_fTimeSinceApiHeartbeat = 0;
+	        }
+	        
+	        // Periodic state sync
+	        m_fTimeSinceApiStateSync += timeSlice;
+	        if (m_fTimeSinceApiStateSync >= API_STATE_SYNC_INTERVAL)
+	        {
+	            ApiSyncFullState();
+	            m_fTimeSinceApiStateSync = 0;
+	        }
+	    }
     }
     
     int GetAggregatedPlayerCapabilities(IEntity player)
@@ -658,7 +709,8 @@ class AG0_TDLSystem : WorldSystem
 	        if (!m_aNetworks[i].HasDevices())
 	        {
 	            Print(string.Format("TDL_NETWORK_CLEANUP: Removing empty network %1", m_aNetworks[i].GetNetworkName()), LogLevel.DEBUG);
-	            m_aNetworks.Remove(i);
+	            ApiNotifyNetworkDeleted(m_aNetworks[i].GetNetworkID(), m_aNetworks[i].GetNetworkName());
+				m_aNetworks.Remove(i);
 	            networksRemoved++;
 	        }
 	    }
@@ -715,6 +767,7 @@ class AG0_TDLSystem : WorldSystem
 	    Print(string.Format("TDL_NETWORK_CREATE: Successfully created network '%1' (ID: %2)", networkName, newNetwork.GetNetworkID()), LogLevel.DEBUG);
 	    
 	    NotifyNetworkJoined(creator, newNetwork.GetNetworkID(), newNetwork.GetDeviceData());
+		ApiNotifyNetworkCreated(newNetwork, playerName);
 	    
 	    return newNetwork.GetNetworkID();
 	}
@@ -765,6 +818,7 @@ class AG0_TDLSystem : WorldSystem
 	            Print(string.Format("TDL_NETWORK_JOIN: Device in range of network '%1', joining", network.GetNetworkName()), LogLevel.DEBUG);
 	            network.AddDevice(device, deviceRplId, device.GetDisplayName(), position);
 	            NotifyNetworkMembersUpdated(network);
+				ApiNotifyDeviceJoined(network, device);
 	            return true;
 	        }
 	    }
@@ -783,6 +837,7 @@ class AG0_TDLSystem : WorldSystem
             {
                 network.RemoveDevice(device);
                 NotifyNetworkLeft(device);
+				ApiNotifyDeviceLeft(network.GetNetworkID(), network.GetNetworkName(), device.GetDisplayName());
                 
                 if (network.HasDevices())
                 {
@@ -1111,7 +1166,7 @@ class AG0_TDLSystem : WorldSystem
 		    
 		    if (!controller) 
 		    {
-		        Print(string.Format("TDL_System: Controller not found for player %1", playerID), LogLevel.WARNING);
+		        Print(string.Format("TDL_System: Controller not found for player %1", playerID), LogLevel.DEBUG);
 		        continue; // Changed from return to continue so other players still get notified
 		    }
 		    
@@ -1190,7 +1245,7 @@ class AG0_TDLSystem : WorldSystem
 	    );
         if (!controller) 
         {
-            Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.WARNING);
+            Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.DEBUG);
             return;
         }
 	    if (controller && networkId > 0)
@@ -1246,7 +1301,7 @@ class AG0_TDLSystem : WorldSystem
 	    );
         if (!controller) 
         {
-            Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.WARNING);
+            Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.DEBUG);
             return;
         }
 	    
@@ -1462,7 +1517,7 @@ class AG0_TDLSystem : WorldSystem
         // Validate content
         if (content.IsEmpty())
         {
-            Print("TDL_MESSAGE_SYSTEM: Empty message content, ignoring", LogLevel.WARNING);
+            Print("TDL_MESSAGE_SYSTEM: Empty message content, ignoring", LogLevel.DEBUG);
             return;
         }
         
@@ -1470,7 +1525,7 @@ class AG0_TDLSystem : WorldSystem
         AG0_TDLDeviceComponent senderDevice = system.GetDeviceByRplId(senderDeviceRplId);
         if (!senderDevice)
         {
-            Print(string.Format("TDL_MESSAGE_SYSTEM: Sender device %1 not found", senderDeviceRplId), LogLevel.WARNING);
+            Print(string.Format("TDL_MESSAGE_SYSTEM: Sender device %1 not found", senderDeviceRplId), LogLevel.DEBUG);
             return;
         }
         
@@ -1478,7 +1533,7 @@ class AG0_TDLSystem : WorldSystem
         AG0_TDLNetwork network = FindNetworkForDevice(system, senderDevice);
         if (!network)
         {
-            Print(string.Format("TDL_MESSAGE_SYSTEM: Sender device %1 not in any network", senderDeviceRplId), LogLevel.WARNING);
+            Print(string.Format("TDL_MESSAGE_SYSTEM: Sender device %1 not in any network", senderDeviceRplId), LogLevel.DEBUG);
             return;
         }
         
@@ -1489,6 +1544,7 @@ class AG0_TDLSystem : WorldSystem
         if (messageType == ETDLMessageType.NETWORK_BROADCAST)
         {
             messageId = AddBroadcastToNetwork(network, senderDeviceRplId, senderCallsign, content);
+			system.ApiNotifyMessageSent(network, senderCallsign, "broadcast");
         }
         else if (messageType == ETDLMessageType.DIRECT)
         {
@@ -1500,6 +1556,7 @@ class AG0_TDLSystem : WorldSystem
             
             messageId = AddDirectToNetwork(network, senderDeviceRplId, senderCallsign, 
                                           content, recipientRplId, recipientCallsign);
+			system.ApiNotifyMessageSent(network, senderCallsign, "direct");
         }
         
         // Immediately propagate to connected devices
@@ -1799,6 +1856,219 @@ class AG0_TDLSystem : WorldSystem
     {
         return network.BuildClientMessages(network.GetMessages(), viewerRplId);
     }
+	
+	
+	//------------------------------------------------------------------------------------------------
+	// API INTEGRATION METHODS
+	//------------------------------------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	//! Send server heartbeat to API
+	protected void ApiSendHeartbeat()
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "heartbeat");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkCount", m_aNetworks.Count());
+	    json.WriteValue("deviceCount", m_aRegisteredNetworkDevices.Count());
+	    json.WriteValue("playerCount", GetConnectedPlayerCount());
+	    
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Sync full server state to API
+	protected void ApiSyncFullState()
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "state_sync");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    
+	    // Build networks array
+	    array<ref AG0_TDLNetworkState> networkStates = {};
+	    foreach (AG0_TDLNetwork network : m_aNetworks)
+	    {
+	        AG0_TDLNetworkState netState = new AG0_TDLNetworkState();
+	        netState.networkId = network.GetNetworkID();
+	        netState.networkName = network.GetNetworkName();
+	        netState.deviceCount = network.GetNetworkDevices().Count();
+	        netState.messageCount = network.GetMessages().Count();
+	        
+	        // Build device list for this network
+	        array<ref AG0_TDLDeviceState> deviceStates = {};
+	        foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
+	        {
+	            AG0_TDLDeviceState devState = new AG0_TDLDeviceState();
+	            if (device.GetDeviceRplId().IsValid())
+				    devState.rplId = 1;
+				else
+				    devState.rplId = 0;
+	            devState.callsign = device.GetDisplayName();
+	            devState.capabilities = device.GetActiveCapabilities();
+	            devState.isPowered = device.IsPowered();
+	            
+	            IEntity owner = device.GetOwner();
+	            if (owner)
+	            {
+	                vector pos = owner.GetOrigin();
+	                devState.posX = pos[0];
+	                devState.posY = pos[1];
+	                devState.posZ = pos[2];
+	            }
+	            
+	            deviceStates.Insert(devState);
+	        }
+	        netState.devices = deviceStates;
+	        networkStates.Insert(netState);
+	    }
+	    
+	    json.WriteValue("networks", networkStates);
+	    json.WriteValue("totalDevices", m_aRegisteredNetworkDevices.Count());
+	    
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Notify API of network creation
+	protected void ApiNotifyNetworkCreated(AG0_TDLNetwork network, string creatorName)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "network_created");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkName", network.GetNetworkName());
+	    json.WriteValue("creatorName", creatorName);
+	    
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Notify API of network deletion
+	protected void ApiNotifyNetworkDeleted(int networkId, string networkName)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "network_deleted");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkId", networkId);
+	    json.WriteValue("networkName", networkName);
+	    
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Notify API of device joining network
+	protected void ApiNotifyDeviceJoined(AG0_TDLNetwork network, AG0_TDLDeviceComponent device)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "device_joined");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkName", network.GetNetworkName());
+	    json.WriteValue("deviceCallsign", device.GetDisplayName());
+	    json.WriteValue("deviceCapabilities", device.GetActiveCapabilities());
+	    
+	    // Include player info if available
+	    IEntity player = GetPlayerFromDevice(device);
+	    if (player)
+	    {
+	        PlayerManager playerMgr = GetGame().GetPlayerManager();
+	        int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+	        if (playerId > 0)
+	        {
+	            json.WriteValue("playerName", playerMgr.GetPlayerName(playerId));
+	            json.WriteValue("playerId", playerId);
+	        }
+	    }
+	    
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Notify API of device leaving network
+	protected void ApiNotifyDeviceLeft(int networkId, string networkName, string deviceCallsign)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "device_left");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkId", networkId);
+	    json.WriteValue("networkName", networkName);
+	    json.WriteValue("deviceCallsign", deviceCallsign);
+	    
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Notify API of TDL message sent
+	protected void ApiNotifyMessageSent(AG0_TDLNetwork network, string senderCallsign, 
+	                                     string messageType, string recipientCallsign = "")
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "message_sent");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkName", network.GetNetworkName());
+	    json.WriteValue("senderCallsign", senderCallsign);
+	    json.WriteValue("messageType", messageType);
+	    
+	    if (!recipientCallsign.IsEmpty())
+	        json.WriteValue("recipientCallsign", recipientCallsign);
+	    
+	    // Note: We intentionally do NOT send message content for privacy
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Helper: Get connected player count
+	protected int GetConnectedPlayerCount()
+	{
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    if (!playerMgr)
+	        return 0;
+	    
+	    array<int> playerIds = {};
+	    playerMgr.GetPlayers(playerIds);
+	    return playerIds.Count();
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Public getter for API manager (for external systems)
+	AG0_TDLApiManager GetApiManager()
+	{
+	    return m_ApiManager;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Check if API is connected and ready
+	bool IsApiConnected()
+	{
+	    return m_ApiManager && m_ApiManager.CanCommunicate();
+	}
 	
 	
 	void LogNetworkState(string context = "")

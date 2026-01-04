@@ -110,7 +110,7 @@ class AG0_TDLDisplayController
             m_MapView = new AG0_TDLMapView();
             if (!m_MapView.Init(m_wMapCanvas))
             {
-                Print("[TDLDisplayController] Failed to init map view", LogLevel.ERROR);
+                Print("[TDLDisplayController] Failed to init map view", LogLevel.WARNING);
                 return false;
             }
             
