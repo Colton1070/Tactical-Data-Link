@@ -530,8 +530,7 @@ class AG0_TDLSystem : WorldSystem
             m_mSpatialGrid.Get(cellKey).Insert(device);
         }
         
-        Print(string.Format("TDL_SPATIAL_GRID: Rebuilt with %1 devices in %2 cells", 
-            m_aRegisteredNetworkDevices.Count(), m_mSpatialGrid.Count()), LogLevel.DEBUG);
+        //Print(string.Format("TDL_SPATIAL_GRID: Rebuilt with %1 devices in %2 cells", m_aRegisteredNetworkDevices.Count(), m_mSpatialGrid.Count()), LogLevel.DEBUG);
     }
 	
 	protected void UpdateMaxDeviceRange()
@@ -555,8 +554,7 @@ class AG0_TDLSystem : WorldSystem
 	        m_fGridCellSize = 2.0 * m_fMaxDeviceRange;  // Always 2x max range
 	        m_fTimeSinceGridRebuild = 999.0;  // Force immediate rebuild
 	        
-	        Print(string.Format("TDL_SPATIAL_GRID: Max device range updated to %1m, cell size now %2m", 
-	            m_fMaxDeviceRange, m_fGridCellSize), LogLevel.DEBUG);
+	        //Print(string.Format("TDL_SPATIAL_GRID: Max device range updated to %1m, cell size now %2m", m_fMaxDeviceRange, m_fGridCellSize), LogLevel.DEBUG);
 	    }
 	}
     

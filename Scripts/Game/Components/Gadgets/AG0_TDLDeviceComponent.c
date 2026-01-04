@@ -727,8 +727,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    if (GetOwner())
 	        ownerName = GetOwner().ToString();
 	    
-	    Print(string.Format("TDL_CONNECTIVITY_UPDATE: %1 now connected to %2 members", 
-	        ownerName, members.Count()), LogLevel.DEBUG);
+	    //Print(string.Format("TDL_CONNECTIVITY_UPDATE: %1 now connected to %2 members", ownerName, members.Count()), LogLevel.DEBUG);
 	    
 	    foreach (RplId memberId : members)
 	    {

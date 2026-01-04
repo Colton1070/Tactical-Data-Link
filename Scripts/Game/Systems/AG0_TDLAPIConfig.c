@@ -66,7 +66,7 @@ class AG0_TDLApiSubmitCallback : RestCallback
     //------------------------------------------------------------------------------------------------
     override void OnSuccess(string data, int dataSize)
     {
-        Print(string.Format("[TDL_API] Submit success: %1 bytes", dataSize), LogLevel.DEBUG);
+        //Print(string.Format("[TDL_API] Submit success: %1 bytes", dataSize), LogLevel.DEBUG);
         
         if (m_Manager)
             m_Manager.OnSubmitSuccess(data);
@@ -75,7 +75,7 @@ class AG0_TDLApiSubmitCallback : RestCallback
     //------------------------------------------------------------------------------------------------
     override void OnError(int errorCode)
     {
-        Print(string.Format("[TDL_API] Submit failed with error: %1", errorCode), LogLevel.WARNING);
+        //Print(string.Format("[TDL_API] Submit failed with error: %1", errorCode), LogLevel.WARNING);
         
         if (m_Manager)
             m_Manager.OnSubmitError(errorCode);
@@ -107,7 +107,7 @@ class AG0_TDLApiQueueCallback : RestCallback
     //------------------------------------------------------------------------------------------------
     override void OnSuccess(string data, int dataSize)
     {
-        Print(string.Format("[TDL_API] Queue poll success: %1 bytes", dataSize), LogLevel.DEBUG);
+        //Print(string.Format("[TDL_API] Queue poll success: %1 bytes", dataSize), LogLevel.DEBUG);
         
         if (m_Manager)
             m_Manager.OnQueuePollSuccess(data);
@@ -116,7 +116,7 @@ class AG0_TDLApiQueueCallback : RestCallback
     //------------------------------------------------------------------------------------------------
     override void OnError(int errorCode)
     {
-        Print(string.Format("[TDL_API] Queue poll failed with error: %1", errorCode), LogLevel.WARNING);
+        //Print(string.Format("[TDL_API] Queue poll failed with error: %1", errorCode), LogLevel.WARNING);
         
         if (m_Manager)
             m_Manager.OnQueuePollError(errorCode);
@@ -125,7 +125,7 @@ class AG0_TDLApiQueueCallback : RestCallback
     //------------------------------------------------------------------------------------------------
     override void OnTimeout()
     {
-        Print("[TDL_API] Queue poll request timed out", LogLevel.DEBUG);
+        //Print("[TDL_API] Queue poll request timed out", LogLevel.DEBUG);
         
         if (m_Manager)
             m_Manager.OnQueuePollTimeout();
@@ -148,7 +148,7 @@ class AG0_TDLApiValidateCallback : RestCallback
     //------------------------------------------------------------------------------------------------
     override void OnSuccess(string data, int dataSize)
     {
-        Print("[TDL_API] API key validated successfully", LogLevel.NORMAL);
+        //Print("[TDL_API] API key validated successfully", LogLevel.NORMAL);
         
         if (m_Manager)
             m_Manager.OnApiKeyValidated(true, data);
@@ -172,7 +172,7 @@ class AG0_TDLApiValidateCallback : RestCallback
     //------------------------------------------------------------------------------------------------
     override void OnTimeout()
     {
-        Print("[TDL_API] API key validation timed out", LogLevel.WARNING);
+        //Print("[TDL_API] API key validation timed out", LogLevel.WARNING);
         
         if (m_Manager)
             m_Manager.OnApiKeyValidated(false, "");
