@@ -322,6 +322,38 @@ class AG0_TDLSystem : WorldSystem
     // Public helper methods for PlayerController and other systems
     //------------------------------------------------------------------------------------------------
 	array<ref AG0_TDLNetwork> GetNetworks() { return m_aNetworks; }
+	
+	//------------------------------------------------------------------------------------------------
+	//! Get persistent player identity UUID from session player ID
+	//! @param playerId Session-specific player ID (integer)
+	//! @return Persistent Game Identity UUID string, or empty if unavailable
+	string GetPlayerIdentityId(int playerId)
+	{
+	    if (playerId <= 0)
+	        return "";
+	    
+	    BackendApi api = GetGame().GetBackendApi();
+	    if (!api)
+	        return "";
+	    
+	    return api.GetPlayerIdentityId(playerId);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Get player platform kind (Steam, Xbox, PlayStation)
+	//! @param playerId Session-specific player ID
+	//! @return PlatformKind enum value
+	PlatformKind GetPlayerPlatform(int playerId)
+	{
+	    if (playerId <= 0)
+	        return PlatformKind.NONE;
+	    
+	    BackendApi api = GetGame().GetBackendApi();
+	    if (!api)
+	        return PlatformKind.NONE;
+	    
+	    return api.GetPlayerPlatformKind(playerId);
+	}
 
 	//------------------------------------------------------------------------------------------------
 	// Message API - called from PlayerController
@@ -1919,6 +1951,24 @@ class AG0_TDLSystem : WorldSystem
 	                devState.posY = pos[1];
 	                devState.posZ = pos[2];
 	            }
+				
+				// Add player identity if device is player-associated
+			    IEntity player = GetPlayerFromDevice(device);
+			    if (player)
+			    {
+			        PlayerManager playerMgr = GetGame().GetPlayerManager();
+			        int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+			        if (playerId > 0)
+			        {
+			            devState.playerName = playerMgr.GetPlayerName(playerId);
+			            string identityId = GetPlayerIdentityId(playerId);
+			            if (!identityId.IsEmpty())
+			            {
+			                devState.playerIdentityId = identityId;
+			                devState.playerPlatform = GetPlayerPlatform(playerId);
+			            }
+			        }
+			    }
 	            
 	            deviceStates.Insert(devState);
 	        }
@@ -1993,6 +2043,12 @@ class AG0_TDLSystem : WorldSystem
 	        {
 	            json.WriteValue("playerName", playerMgr.GetPlayerName(playerId));
 	            json.WriteValue("playerId", playerId);
+				string identityId = GetPlayerIdentityId(playerId);
+	            if (!identityId.IsEmpty())
+	            {
+	                json.WriteValue("playerIdentityId", identityId);
+	                json.WriteValue("playerPlatform", GetPlayerPlatform(playerId));
+	            }
 	        }
 	    }
 	    

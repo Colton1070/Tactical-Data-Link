@@ -61,33 +61,32 @@ class AG0_TDLApiSubmitCallback : RestCallback
     void AG0_TDLApiSubmitCallback(AG0_TDLApiManager manager)
     {
         m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
     }
     
     //------------------------------------------------------------------------------------------------
-    override void OnSuccess(string data, int dataSize)
+    void OnSuccessHandler(RestCallback cb)
     {
-        //Print(string.Format("[TDL_API] Submit success: %1 bytes", dataSize), LogLevel.DEBUG);
-        
+        string data = cb.GetData();
         if (m_Manager)
             m_Manager.OnSubmitSuccess(data);
     }
     
     //------------------------------------------------------------------------------------------------
-    override void OnError(int errorCode)
+    void OnErrorHandler(RestCallback cb)
     {
-        //Print(string.Format("[TDL_API] Submit failed with error: %1", errorCode), LogLevel.WARNING);
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            Print("[TDL_API] Submit request timed out", LogLevel.DEBUG);
+            if (m_Manager)
+                m_Manager.OnSubmitTimeout();
+            return;
+        }
         
+        int errorCode = cb.GetHttpCode();
         if (m_Manager)
             m_Manager.OnSubmitError(errorCode);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    override void OnTimeout()
-    {
-        Print("[TDL_API] Submit request timed out", LogLevel.DEBUG);
-        
-        if (m_Manager)
-            m_Manager.OnSubmitTimeout();
     }
 }
 
@@ -102,33 +101,31 @@ class AG0_TDLApiQueueCallback : RestCallback
     void AG0_TDLApiQueueCallback(AG0_TDLApiManager manager)
     {
         m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
     }
     
     //------------------------------------------------------------------------------------------------
-    override void OnSuccess(string data, int dataSize)
+    void OnSuccessHandler(RestCallback cb)
     {
-        //Print(string.Format("[TDL_API] Queue poll success: %1 bytes", dataSize), LogLevel.DEBUG);
-        
+        string data = cb.GetData();
         if (m_Manager)
             m_Manager.OnQueuePollSuccess(data);
     }
     
     //------------------------------------------------------------------------------------------------
-    override void OnError(int errorCode)
+    void OnErrorHandler(RestCallback cb)
     {
-        //Print(string.Format("[TDL_API] Queue poll failed with error: %1", errorCode), LogLevel.WARNING);
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            if (m_Manager)
+                m_Manager.OnQueuePollTimeout();
+            return;
+        }
         
+        int errorCode = cb.GetHttpCode();
         if (m_Manager)
             m_Manager.OnQueuePollError(errorCode);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    override void OnTimeout()
-    {
-        //Print("[TDL_API] Queue poll request timed out", LogLevel.DEBUG);
-        
-        if (m_Manager)
-            m_Manager.OnQueuePollTimeout();
     }
 }
 
@@ -143,20 +140,30 @@ class AG0_TDLApiValidateCallback : RestCallback
     void AG0_TDLApiValidateCallback(AG0_TDLApiManager manager)
     {
         m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
     }
     
     //------------------------------------------------------------------------------------------------
-    override void OnSuccess(string data, int dataSize)
+    void OnSuccessHandler(RestCallback cb)
     {
-        //Print("[TDL_API] API key validated successfully", LogLevel.NORMAL);
-        
+        string data = cb.GetData();
         if (m_Manager)
             m_Manager.OnApiKeyValidated(true, data);
     }
     
     //------------------------------------------------------------------------------------------------
-    override void OnError(int errorCode)
+    void OnErrorHandler(RestCallback cb)
     {
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            if (m_Manager)
+                m_Manager.OnApiKeyValidated(false, "");
+            return;
+        }
+        
+        int errorCode = cb.GetHttpCode();
+        
         // 401 = invalid key, other errors might be network issues
         bool isInvalidKey = (errorCode == 401);
         
@@ -164,15 +171,6 @@ class AG0_TDLApiValidateCallback : RestCallback
             Print("[TDL_API] API key is invalid (401 Unauthorized)", LogLevel.WARNING);
         else
             Print(string.Format("[TDL_API] API key validation failed with error: %1", errorCode), LogLevel.WARNING);
-        
-        if (m_Manager)
-            m_Manager.OnApiKeyValidated(false, "");
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    override void OnTimeout()
-    {
-        //Print("[TDL_API] API key validation timed out", LogLevel.WARNING);
         
         if (m_Manager)
             m_Manager.OnApiKeyValidated(false, "");
@@ -552,8 +550,8 @@ class AG0_TDLApiManager
         bool success;
         if (json.ReadValue("success", success))
         {
-            if (success)
-                Print("[TDL_API] Server acknowledged submission", LogLevel.DEBUG);
+//            if (success)
+//                Print("[TDL_API] Server acknowledged submission", LogLevel.DEBUG);
         }
         
         // Handle any additional response fields here
@@ -655,6 +653,59 @@ class AG0_TDLApiManager
             }
         }
     }
+	
+	//------------------------------------------------------------------------------------------------
+	//! Submit account link request with external callback
+	//! Used by AG0_TDLLinkCommand for async handling via OnUpdate()
+	//! @param callback External RestCallback to receive result (e.g., StateBackendCallback)
+	//! @param linkCode Code from web app (4-16 alphanumeric)
+	//! @param identityId Player's persistent identity UUID from BackendApi
+	//! @param playerName Player's display name
+	//! @param playerId Session player ID (for logging)
+	//! @param platform Player's platform (Steam/Xbox/PSN)
+	//! @return true if request was initiated
+	bool SubmitAccountLink(RestCallback callback, string linkCode, string identityId, 
+	                       string playerName, int playerId, PlatformKind platform)
+	{
+	    if (!CanCommunicate())
+	    {
+	        Print("[TDL_API] Cannot submit link - API not ready", LogLevel.DEBUG);
+	        return false;
+	    }
+	    
+	    if (!callback || linkCode.IsEmpty() || identityId.IsEmpty())
+	        return false;
+	    
+	    RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+	    if (!ctx)
+	    {
+	        Print("[TDL_API] Failed to get REST context for account link", LogLevel.DEBUG);
+	        return false;
+	    }
+	    
+	    // Set authorization header
+	    string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
+	    ctx.SetHeaders(headers);
+	    
+	    // Build payload using SCR_JsonSaveContext for proper escaping
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "account_link");
+	    json.WriteValue("linkCode", linkCode);
+	    json.WriteValue("playerIdentityId", identityId);
+	    json.WriteValue("playerName", playerName);
+	    json.WriteValue("playerId", playerId);
+	    json.WriteValue("platform", platform);
+	    json.WriteValue("serverName", m_Config.serverName);
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    
+	    string payload = json.ExportToString();
+	    
+	    Print(string.Format("[TDL_API] Submitting account link for %1 (identity: %2...)", 
+	        playerName, identityId.Substring(0, 8)), LogLevel.DEBUG);
+	    
+	    ctx.POST(callback, "/link", payload);
+	    return true;
+	}
     
     //------------------------------------------------------------------------------------------------
     // Getters
@@ -755,6 +806,9 @@ class AG0_TDLDeviceState
     float posX;
     float posY;
     float posZ;
+	string playerName;
+    string playerIdentityId;
+    int playerPlatform;
 }
 
 class AG0_TDLNetworkState

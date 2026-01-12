@@ -1,2 +1,226 @@
-This work is licensed under the Arma Public License (APL).
-See https://www.bohemia.net/community/licenses/arma-public-license
+================================================================================
+                        TACTICAL DATA LINK (TDL) MOD
+                              LICENSE AGREEMENT
+================================================================================
+
+This mod ("TDL Mod" or "Tactical Data Link Mod") is licensed under the Arma
+Public License (APL). Additionally, this mod incorporates optional integration
+with an external online service operated by BLUFOR (blufor.info).
+
+IMPORTANT TAKEAWAY (CRITICAL):
+If you use TDL on ANY server that uses BLUFOR (tdl.blufor.info) features, you
+agree to the Terms of Service at https://tdl.blufor.info/terms — EVEN IF you did
+not initiate, configure, or intend the connection yourself. If you do not agree,
+do not use TDL on servers that use BLUFOR features.
+
+================================================================================
+                          SECTION A: ARMA PUBLIC LICENSE
+================================================================================
+
+The source code, assets, and materials of this mod are released under the Arma
+Public License (APL).
+
+Full license text: https://www.bohemia.net/community/licenses/arma-public-license
+
+--------------------------------------------------------------------------------
+                               BRIEF SUMMARY
+--------------------------------------------------------------------------------
+
+NOTE: This summary has no legal effect and is only informatory. The only
+legally binding provisions are those in the full text of the APL.
+
+With this licence you are free to adapt (modify, rework, or update) and share
+(copy, distribute, or transmit) the material under the following conditions:
+
+  * ATTRIBUTION - You must attribute the material in the manner specified by
+    the author or licensor (but not in any way that suggests that they endorse
+    you or your use of the material).
+
+  * NONCOMMERCIAL - You may not use this material for any commercial purposes.
+
+  * ARMA ONLY - You may not convert or adapt this material to be used in other
+    games than Arma.
+
+--------------------------------------------------------------------------------
+                               KEY DEFINITIONS
+--------------------------------------------------------------------------------
+
+"Adapted Material" means material subject to Copyright and Similar Rights that
+is derived from or based upon the Licensed Material and in which the Licensed
+Material is translated, altered, arranged, transformed, or otherwise modified.
+
+"ArmaOnly" means primarily intended for or directed towards the use in any of
+existing and future Arma games, including but not limited to Arma: Cold War
+Assault, Arma, Arma 2, Arma 3, Arma Reforger, and their official sequels and
+expansion packs.
+
+"NonCommercial" means not primarily intended for or directed towards commercial
+advantage or monetary compensation.
+
+"Share" means to provide material to the public by any means or process that
+requires permission under the Licensed Rights, such as reproduction, public
+display, distribution, dissemination, communication, or importation.
+
+--------------------------------------------------------------------------------
+                               LICENSE GRANT
+--------------------------------------------------------------------------------
+
+Subject to the terms and conditions of the Arma Public License, the Licensor
+hereby grants You a worldwide, royalty-free, non-sublicensable, non-exclusive,
+irrevocable license to exercise the Licensed Rights in the Licensed Material to:
+
+  1. Reproduce and Share the Licensed Material, in whole or in part, for
+     NonCommercial and ArmaOnly purposes only; and
+
+  2. Produce, reproduce, and Share Adapted Material for NonCommercial and
+     ArmaOnly purposes only.
+
+--------------------------------------------------------------------------------
+                           ATTRIBUTION REQUIREMENTS
+--------------------------------------------------------------------------------
+
+If You Share the Licensed Material (including in modified form), You must:
+
+  * Retain identification of the creator(s) of the Licensed Material and any
+    others designated to receive attribution;
+  * Retain any copyright notice;
+  * Retain a notice that refers to the Arma Public License;
+  * Retain a notice that refers to the disclaimer of warranties;
+  * Retain a URI or hyperlink to the Licensed Material to the extent reasonably
+    practicable;
+  * Indicate if You modified the Licensed Material and retain an indication of
+    any previous modifications; and
+  * Indicate the Licensed Material is licensed under the Arma Public License,
+    and include the text of, or the URI or hyperlink to, the APL.
+
+--------------------------------------------------------------------------------
+                         DISCLAIMER OF WARRANTIES
+--------------------------------------------------------------------------------
+
+UNLESS OTHERWISE SEPARATELY UNDERTAKEN BY THE LICENSOR, TO THE EXTENT POSSIBLE,
+THE LICENSOR OFFERS THE LICENSED MATERIAL AS-IS AND AS-AVAILABLE, AND MAKES NO
+REPRESENTATIONS OR WARRANTIES OF ANY KIND CONCERNING THE LICENSED MATERIAL,
+WHETHER EXPRESS, IMPLIED, STATUTORY, OR OTHER.
+
+TO THE EXTENT POSSIBLE, IN NO EVENT WILL THE LICENSOR BE LIABLE TO YOU ON ANY
+LEGAL THEORY FOR ANY DIRECT, SPECIAL, INDIRECT, INCIDENTAL, CONSEQUENTIAL,
+PUNITIVE, EXEMPLARY, OR OTHER LOSSES, COSTS, EXPENSES, OR DAMAGES ARISING OUT
+OF THIS LICENSE OR USE OF THE LICENSED MATERIAL.
+
+================================================================================
+                    SECTION B: EXTERNAL SERVICE INTEGRATION
+================================================================================
+
+TDL optionally integrates with an external online service hosted at
+https://tdl.blufor.info ("BLUFOR Service") for additional functionality,
+including:
+
+  * Image processing and display capabilities
+  * Server registration and management
+  * Cloud-based data storage and transmission
+  * API access for server integration
+
+--------------------------------------------------------------------------------
+                    TERMS OF SERVICE ACCEPTANCE (CRITICAL)
+--------------------------------------------------------------------------------
+
+Full Terms of Service: https://tdl.blufor.info/terms
+
+TDL MAY CONNECT TO BLUFOR SERVICES AUTOMATICALLY BASED ON THE SERVER YOU JOIN.
+BY USING TDL ON A SERVER THAT USES BLUFOR (tdl.blufor.info) FEATURES, YOU ARE
+CONSIDERED TO BE USING THE EXTERNAL SERVICE FEATURES AND YOU AGREE TO THE TERMS
+OF SERVICE ABOVE — EVEN IF YOU PERSONALLY DID NOT INITIATE OR CONFIGURE THE
+CONNECTION.
+
+If you do not agree to the Terms of Service, do not use TDL on servers that use
+BLUFOR features.
+
+BY USING THE EXTERNAL SERVICE FEATURES, YOU ACKNOWLEDGE THAT:
+
+  1. You have read and agree to the Terms of Service at the URL above.
+
+  2. You grant the Service permission to process, store, and transmit data as
+     described in those Terms.
+
+  3. You are responsible for ensuring any content you upload complies with the
+     Terms of Service, including prohibitions on illegal, copyrighted, explicit,
+     or otherwise prohibited content.
+
+  4. Your use of the Service is subject to content moderation and may be
+     suspended or terminated for violations.
+
+  5. The external service is provided "AS IS" without warranties of any kind.
+
+--------------------------------------------------------------------------------
+                           SERVICE INDEPENDENCE
+--------------------------------------------------------------------------------
+
+The BLUFOR Service is:
+
+  * NOT affiliated with Bohemia Interactive or Arma Reforger
+  * Operated independently from this mod's source code distribution
+  * Subject to its own terms, conditions, and policies
+  * Optional - the mod can function without external service features
+
+Use of the TDL mod source code under the APL does not require use of the
+external service. The APL license applies solely to the mod's source code and
+assets.
+
+--------------------------------------------------------------------------------
+                           API KEY RESPONSIBILITIES
+--------------------------------------------------------------------------------
+
+If you integrate a server with the BLUFOR Service:
+
+  * You are responsible for the security of your API keys
+  * You must not share or expose API keys publicly
+  * You are responsible for all actions taken using your credentials
+  * You must comply with API rate limits and fair use policies
+
+--------------------------------------------------------------------------------
+                         DATA PROCESSING NOTICE
+--------------------------------------------------------------------------------
+
+When using external service features, the following data may be processed:
+
+  * Image files uploaded for processing
+  * Server metadata and state information
+  * Network and device configurations
+  * Event logs and activity data
+
+Data may be stored in Cloudflare R2 cloud storage and transmitted via encrypted
+HTTPS connections. For full details on data handling, see the Terms of Service.
+
+================================================================================
+                              CONTACT INFORMATION
+================================================================================
+
+For questions regarding this license or the external service:
+
+  Email: contact@blufor.info
+
+For the full Arma Public License:
+
+  https://www.bohemia.net/community/licenses/arma-public-license
+
+For BLUFOR Terms of Service:
+
+  https://tdl.blufor.info/terms
+
+================================================================================
+                              BOHEMIA INTERACTIVE NOTICE
+================================================================================
+
+Bohemia Interactive a.s. is not a party to this License, and makes no warranty
+whatsoever in connection with the Licensed Material. Except for the limited
+purpose of indicating that the Licensed Material is shared under the Arma Public
+License, Bohemia Interactive a.s. does not authorize the use of the trademarks
+"Arma", "Bohemia Interactive" or any related trademark or logo without prior
+written consent.
+
+================================================================================
+
+© 2025-2026 TDL Mod Authors. Licensed under the Arma Public License (APL).
+External service operated by BLUFOR (blufor.info).
+
+================================================================================
