@@ -619,6 +619,14 @@ class AG0_TDLApiManager
                 HandleConfigUpdateCommand(cmdJson);
                 break;
                 
+			case "marker_delete":
+                HandleMarkerDeleteCommand(cmdJson);
+                break;
+                
+            case "marker_edit":
+                HandleMarkerEditCommand(cmdJson);
+                break;
+			
             default:
                 Print(string.Format("[TDL_API] Unknown command type: %1", cmdType), LogLevel.WARNING);
                 break;
@@ -652,6 +660,132 @@ class AG0_TDLApiManager
                 Print(string.Format("[TDL_API] Poll interval updated to: %1s", newPollInterval), LogLevel.DEBUG);
             }
         }
+    }
+	
+	//------------------------------------------------------------------------------------------------
+    //! Handle marker delete command from web API
+    protected void HandleMarkerDeleteCommand(SCR_JsonLoadContext cmdJson)
+    {
+        int markerId;
+        if (!cmdJson.ReadValue("markerId", markerId))
+        {
+            Print("[TDL_API] marker_delete missing 'markerId'", LogLevel.WARNING);
+            return;
+        }
+        
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+        {
+            Print("[TDL_API] marker_delete: Marker manager not available", LogLevel.WARNING);
+            return;
+        }
+        
+        SCR_MapMarkerBase marker = markerMgr.GetStaticMarkerByID(markerId);
+        if (!marker)
+        {
+            Print(string.Format("[TDL_API] marker_delete: Marker %1 not found", markerId), LogLevel.DEBUG);
+            return;
+        }
+        
+        if (!marker.IsTDLMarker())
+        {
+            Print(string.Format("[TDL_API] marker_delete: Marker %1 is not a TDL marker", markerId), LogLevel.WARNING);
+            return;
+        }
+        
+        markerMgr.OnRemoveSynchedMarker(markerId);
+        markerMgr.OnAskRemoveStaticMarker(markerId);
+        
+        Print(string.Format("[TDL_API] marker_delete: Removed marker %1", markerId), LogLevel.DEBUG);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Handle marker edit command from web API
+    //! Uses delete-and-recreate to broadcast changes — static markers have no update RPC
+    //! Preserves original player ownership through the recreate
+    protected void HandleMarkerEditCommand(SCR_JsonLoadContext cmdJson)
+    {
+        int markerId;
+        if (!cmdJson.ReadValue("markerId", markerId))
+        {
+            Print("[TDL_API] marker_edit missing 'markerId'", LogLevel.WARNING);
+            return;
+        }
+        
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+        {
+            Print("[TDL_API] marker_edit: Marker manager not available", LogLevel.WARNING);
+            return;
+        }
+        
+        SCR_MapMarkerBase oldMarker = markerMgr.GetStaticMarkerByID(markerId);
+        if (!oldMarker)
+        {
+            Print(string.Format("[TDL_API] marker_edit: Marker %1 not found", markerId), LogLevel.DEBUG);
+            return;
+        }
+        
+        if (!oldMarker.IsTDLMarker())
+        {
+            Print(string.Format("[TDL_API] marker_edit: Marker %1 is not a TDL marker", markerId), LogLevel.WARNING);
+            return;
+        }
+        
+        // Snapshot all fields from old marker
+        int pos[2];
+        oldMarker.GetWorldPos(pos);
+        int savedType = oldMarker.GetType();
+        int savedIconEntry = oldMarker.GetIconEntry();
+        int savedColorEntry = oldMarker.GetColorEntry();
+        string savedCustomText = oldMarker.GetCustomText();
+        int savedOwnerID = oldMarker.GetMarkerOwnerID();
+        int savedFlags = oldMarker.GetFlags();
+        int savedConfigID = oldMarker.GetMarkerConfigID();
+        int savedFactionFlags = oldMarker.GetMarkerFactionFlags();
+        int savedRotation = oldMarker.GetRotation();
+        
+        // Override only fields present in the command payload
+        string newCustomText;
+        if (cmdJson.ReadValue("customText", newCustomText))
+            savedCustomText = newCustomText;
+        
+        int newColorIndex;
+        if (cmdJson.ReadValue("colorIndex", newColorIndex))
+            savedColorEntry = newColorIndex;
+		
+		// Override position if both coordinates provided
+        float newPosX, newPosZ;
+        if (cmdJson.ReadValue("posX", newPosX) && cmdJson.ReadValue("posZ", newPosZ))
+        {
+            pos[0] = (int)newPosX;
+            pos[1] = (int)newPosZ;
+        }
+        
+        // Delete old marker — server-side removal + broadcast to clients
+        markerMgr.OnRemoveSynchedMarker(markerId);
+        markerMgr.OnAskRemoveStaticMarker(markerId);
+        
+        // Recreate with edited fields
+        SCR_MapMarkerBase newMarker = new SCR_MapMarkerBase();
+        newMarker.SetType(savedType);
+        newMarker.SetWorldPos(pos[0], pos[1]);
+        newMarker.SetIconEntry(savedIconEntry);
+        newMarker.SetColorEntry(savedColorEntry);
+        newMarker.SetCustomText(savedCustomText);
+        newMarker.SetFlags(savedFlags);
+        newMarker.SetMarkerConfigID(savedConfigID);
+        newMarker.SetMarkerFactionFlags(savedFactionFlags);
+        newMarker.SetRotation(savedRotation);
+        
+        // Assign new UID, preserve original owner, broadcast to clients
+        markerMgr.AssignMarkerUID(newMarker);
+        newMarker.SetMarkerOwnerID(savedOwnerID);
+        markerMgr.OnAddSynchedMarker(newMarker);
+        markerMgr.OnAskAddStaticMarker(newMarker);
+        
+        Print(string.Format("[TDL_API] marker_edit: Replaced marker %1 -> %2",
+            markerId, newMarker.GetMarkerID()), LogLevel.DEBUG);
     }
 	
 	//------------------------------------------------------------------------------------------------
@@ -823,4 +957,16 @@ class AG0_TDLNetworkState
     {
         devices = {};
     }
+}
+
+class AG0_TDLMapMarkerState
+{
+	int markerId;
+    string markerType;          // Quad name: "tdl_checkpoint", "tdl_pin", etc.
+    float posX;
+    float posZ;
+    int ownerPlayerId;
+    string ownerPlayerName;
+    string customText;
+    int colorIndex;
 }

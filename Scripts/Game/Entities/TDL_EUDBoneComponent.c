@@ -21,8 +21,10 @@ class TDL_EUDBoneComponent : ScriptComponent
     [Attribute("5.0", UIWidgets.Slider, "Lerp speed (higher = faster)", "0.5 20 0.5")]
     protected float m_fLerpSpeed;
     
+	[RplProp()]
     protected float m_fCurrentPosition;
-    protected const float POSITION_EPSILON = 0.001;
+    
+	protected const float POSITION_EPSILON = 0.001;
     protected int m_iBoneIdx = -1;
     protected bool m_bInitialized;
     

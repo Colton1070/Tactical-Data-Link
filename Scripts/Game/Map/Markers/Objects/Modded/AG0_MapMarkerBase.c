@@ -22,6 +22,73 @@ modded class SCR_MapMarkerBase
             }
         }
     }
+	
+	//------------------------------------------------------------------------------------------------
+    //! PUBLIC GETTERS - Used by AG0_TDLSystem for API marker sync
+    //------------------------------------------------------------------------------------------------
+    
+    bool IsTDLMarker()
+    {
+        if (m_bIsTDLMarker)
+            return true;
+        
+        // On dedicated server, OnCreateMarker() never runs so m_bIsTDLMarker is never set.
+        // Resolve on-demand from global config instead.
+        if (m_eType != SCR_EMapMarkerType.PLACED_CUSTOM)
+            return false;
+        
+        string quad = ResolveTDLQuad();
+        if (!quad.IsEmpty() && quad.Contains("tdl_"))
+        {
+            m_bIsTDLMarker = true;
+            return true;
+        }
+        
+        return false;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    string GetTDLMarkerQuad()
+    {
+        if (m_eType != SCR_EMapMarkerType.PLACED_CUSTOM)
+            return string.Empty;
+        
+        return ResolveTDLQuad();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Resolve quad name from icon entry index
+    //! Uses cached m_ConfigEntry on clients, falls back to global config on dedicated server
+    protected string ResolveTDLQuad()
+    {
+        SCR_MapMarkerEntryPlaced placedEntry;
+        
+        // Client path — m_ConfigEntry is set during OnCreateMarker()
+        if (m_ConfigEntry)
+        {
+            placedEntry = SCR_MapMarkerEntryPlaced.Cast(m_ConfigEntry);
+        }
+        else
+        {
+            // Dedicated server path — look up from marker manager's global config
+            SCR_MapMarkerManagerComponent mgr = SCR_MapMarkerManagerComponent.GetInstance();
+            if (!mgr || !mgr.GetMarkerConfig())
+                return string.Empty;
+            
+            placedEntry = SCR_MapMarkerEntryPlaced.Cast(
+                mgr.GetMarkerConfig().GetMarkerEntryConfigByType(SCR_EMapMarkerType.PLACED_CUSTOM));
+        }
+        
+        if (!placedEntry)
+            return string.Empty;
+        
+        ResourceName imageset, imagesetGlow;
+        string quad;
+        if (placedEntry.GetIconEntry(m_iIconEntry, imageset, imagesetGlow, quad))
+            return quad;
+        
+        return string.Empty;
+    }
     
     //------------------------------------------------------------------------------------------------
   	override bool OnUpdate(vector visibleMin = vector.Zero, vector visibleMax = vector.Zero)

@@ -255,6 +255,9 @@ class AG0_TDLNetwork
 
 class AG0_TDLSystem : WorldSystem
 {
+	// Shutdown guard to prevent access during cleanup
+    protected static bool s_bShuttingDown = false;
+	
 	protected ref AG0_TDLApiManager m_ApiManager;
 	// API sync intervals (in seconds)
 	protected const float API_HEARTBEAT_INTERVAL = 60.0;      // Server heartbeat every 60s
@@ -310,13 +313,16 @@ class AG0_TDLSystem : WorldSystem
     //--------------------------------------------------------------------------
     
     static AG0_TDLSystem GetInstance()
-    {
-        World world = GetGame().GetWorld();
-        if (!world)
-            return null;
-        
-        return AG0_TDLSystem.Cast(world.FindSystem(AG0_TDLSystem));
-    }
+	{
+	    if (s_bShuttingDown)
+	        return null;
+	    
+	    World world = GetGame().GetWorld();
+	    if (!world)
+	        return null;
+	    
+	    return AG0_TDLSystem.Cast(world.FindSystem(AG0_TDLSystem));
+	}
     
     //------------------------------------------------------------------------------------------------
     // Public helper methods for PlayerController and other systems
@@ -329,14 +335,10 @@ class AG0_TDLSystem : WorldSystem
 	//! @return Persistent Game Identity UUID string, or empty if unavailable
 	string GetPlayerIdentityId(int playerId)
 	{
-	    if (playerId <= 0)
+	    if (playerId < 0)
 	        return "";
 	    
-	    BackendApi api = GetGame().GetBackendApi();
-	    if (!api)
-	        return "";
-	    
-	    return api.GetPlayerIdentityId(playerId);
+	    return SCR_PlayerIdentityUtils.GetPlayerIdentityId(playerId);
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -394,6 +396,9 @@ class AG0_TDLSystem : WorldSystem
 	{
 	    super.OnInit();
 	    
+		// Reset shutdown flag on init (handles world reload)
+    	s_bShuttingDown = false;
+		
 	    // CRITICAL: Only initialize API on the server
 	    if (!Replication.IsServer())
 	    {
@@ -449,6 +454,16 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
     }
+	
+	//------------------------------------------------------------------------------------------------
+	void ~AG0_TDLSystem()
+	{
+	    s_bShuttingDown = true;
+	    
+	    // Clean up API manager
+	    if (m_ApiManager)
+	        m_ApiManager = null;
+	}
     
     int GetAggregatedPlayerCapabilities(IEntity player)
     {
@@ -1967,7 +1982,15 @@ class AG0_TDLSystem : WorldSystem
 			                devState.playerIdentityId = identityId;
 			                devState.playerPlatform = GetPlayerPlatform(playerId);
 			            }
+			            else
+			            {
+			                Print(string.Format("[TDL_API] Identity empty for player %1 (id: %2)", devState.playerName, playerId), LogLevel.DEBUG);
+			            }
 			        }
+			    }
+			    else
+			    {
+			        Print(string.Format("[TDL_API] No player found for device %1", device.GetDisplayName()), LogLevel.DEBUG);
 			    }
 	            
 	            deviceStates.Insert(devState);
@@ -1979,6 +2002,51 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("networks", networkStates);
 	    json.WriteValue("totalDevices", m_aRegisteredNetworkDevices.Count());
 	    
+		// === TDL Map Markers (player-placed) ===
+	    array<ref AG0_TDLMapMarkerState> markerStates = {};
+	    
+	    SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+	    if (markerMgr)
+	    {
+	        array<SCR_MapMarkerBase> staticMarkers = markerMgr.GetStaticMarkers();
+	        PlayerManager playerMgr = GetGame().GetPlayerManager();
+	        
+	        foreach (SCR_MapMarkerBase marker : staticMarkers)
+	        {
+	            if (!marker || !marker.IsTDLMarker())
+	                continue;
+	            
+	            string quad = marker.GetTDLMarkerQuad();
+	            if (quad.IsEmpty())
+	                continue;
+	            
+	            AG0_TDLMapMarkerState ms = new AG0_TDLMapMarkerState();
+	            ms.markerType = quad;
+				
+				ms.markerId = marker.GetMarkerID();
+	            
+	            int worldPos[2];
+	            marker.GetWorldPos(worldPos);
+	            ms.posX = worldPos[0];
+	            ms.posZ = worldPos[1];
+	            
+	            ms.ownerPlayerId = marker.GetMarkerOwnerID();
+	            ms.customText = marker.GetCustomText();
+	            ms.colorIndex = marker.GetColorEntry();
+	            
+	            if (ms.ownerPlayerId > 0 && playerMgr)
+	                ms.ownerPlayerName = playerMgr.GetPlayerName(ms.ownerPlayerId);
+	            else
+	                ms.ownerPlayerName = "";
+	            
+	            markerStates.Insert(ms);
+	        }
+	    }
+	    
+	    json.WriteValue("markers", markerStates);
+		
+		PrintFormat(json.ExportToString(), LogLevel.DEBUG);
+		
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
