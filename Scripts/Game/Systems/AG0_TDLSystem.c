@@ -261,7 +261,7 @@ class AG0_TDLSystem : WorldSystem
 	protected ref AG0_TDLApiManager m_ApiManager;
 	// API sync intervals (in seconds)
 	protected const float API_HEARTBEAT_INTERVAL = 60.0;      // Server heartbeat every 60s
-	protected const float API_STATE_SYNC_INTERVAL = 30.0;     // Full state sync every 30s
+	protected float m_fApiStateSyncInterval = 5.0;     // Full state sync every 30s
 	protected float m_fTimeSinceApiHeartbeat = 0;
 	protected float m_fTimeSinceApiStateSync = 0;
 
@@ -410,6 +410,7 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager = new AG0_TDLApiManager();
 	    if (m_ApiManager.Initialize())
 	    {
+			m_fApiStateSyncInterval = m_ApiManager.GetStateSyncInterval();
 	        Print("TDL_SYSTEM: API Manager initialized successfully", LogLevel.DEBUG);
 	    }
 	    else
@@ -447,7 +448,7 @@ class AG0_TDLSystem : WorldSystem
 	        
 	        // Periodic state sync
 	        m_fTimeSinceApiStateSync += timeSlice;
-	        if (m_fTimeSinceApiStateSync >= API_STATE_SYNC_INTERVAL)
+	        if (m_fTimeSinceApiStateSync >= m_fApiStateSyncInterval)
 	        {
 	            ApiSyncFullState();
 	            m_fTimeSinceApiStateSync = 0;
@@ -2045,7 +2046,7 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    json.WriteValue("markers", markerStates);
 		
-		PrintFormat(json.ExportToString(), LogLevel.DEBUG);
+		//PrintFormat(json.ExportToString(), LogLevel.DEBUG);
 		
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}

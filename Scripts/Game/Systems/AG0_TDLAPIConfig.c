@@ -15,6 +15,8 @@ class AG0_TDLApiConfigData : JsonApiStruct
     string serverName;
     bool enabled;
     int pollIntervalSeconds;
+	int stateSyncIntervalSeconds;
+
     
     //------------------------------------------------------------------------------------------------
     void AG0_TDLApiConfigData()
@@ -24,12 +26,14 @@ class AG0_TDLApiConfigData : JsonApiStruct
         RegV("serverName");
         RegV("enabled");
         RegV("pollIntervalSeconds");
+		RegV("stateSyncIntervalSeconds");
         
         // Set defaults
         apiKey = "";
         serverName = "Unnamed Server";
         enabled = true;
         pollIntervalSeconds = 30;
+		stateSyncIntervalSeconds = 5; // default 5s for sync worker
     }
     
     //------------------------------------------------------------------------------------------------
@@ -295,6 +299,21 @@ class AG0_TDLApiManager
             Print("[TDL_API] Failed to parse config file, creating fresh config", LogLevel.WARNING);
             return CreateDefaultConfig();
         }
+		
+		// Backfill fields added in newer versions
+	    bool needsSave = false;
+	    
+	    if (m_Config.stateSyncIntervalSeconds <= 0)
+	    {
+	        m_Config.stateSyncIntervalSeconds = 5;
+	        needsSave = true;
+	    }
+	    
+	    if (needsSave)
+	    {
+	        SaveConfig();
+	        Print("[TDL_API] Config updated with new default fields", LogLevel.DEBUG);
+	    }
         
         Print(string.Format("[TDL_API] Config loaded - Server: %1, Enabled: %2, Poll Interval: %3s, Has Key: %4",
             m_Config.serverName,
@@ -382,6 +401,14 @@ class AG0_TDLApiManager
             Print("[TDL_API] Please check your API key in: " + CONFIG_FILE, LogLevel.DEBUG);
         }
     }
+	
+	float GetStateSyncInterval()
+	{
+	    if (!m_Config)
+	        return 5.0;
+	    
+	    return Math.Clamp(m_Config.stateSyncIntervalSeconds, 1, 60);
+	}
     
     //------------------------------------------------------------------------------------------------
     //! Update function - call from system's OnUpdatePoint
@@ -650,16 +677,15 @@ class AG0_TDLApiManager
     protected void HandleConfigUpdateCommand(SCR_JsonLoadContext cmdJson)
     {
         // Remote config updates (optional feature)
-        int newPollInterval;
-        if (cmdJson.ReadValue("pollIntervalSeconds", newPollInterval))
-        {
-            if (newPollInterval >= 10 && newPollInterval <= 300)
-            {
-                m_Config.pollIntervalSeconds = newPollInterval;
-                SaveConfig();
-                Print(string.Format("[TDL_API] Poll interval updated to: %1s", newPollInterval), LogLevel.DEBUG);
-            }
-        }
+        int newSyncInterval;
+		if (cmdJson.ReadValue("stateSyncIntervalSeconds", newSyncInterval))
+		{
+		    if (newSyncInterval >= 1 && newSyncInterval <= 60)
+		    {
+		        m_Config.stateSyncIntervalSeconds = newSyncInterval;
+		        SaveConfig();
+		    }
+		}
     }
 	
 	//------------------------------------------------------------------------------------------------
