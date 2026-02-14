@@ -320,6 +320,23 @@ class AG0_TDLDisplayController
         if (headingImg)
             headingImg.SetRotation(m_MapView.GetRotation());
         
+		// Feed shapes into map view from player controller
+		SCR_PlayerController controller = SCR_PlayerController.Cast(
+			GetGame().GetPlayerController()
+		);
+		if (controller)
+		{
+			AG0_TDLMapShapeManager shapeMgr = controller.GetTDLShapeManager();
+			if (shapeMgr)
+				m_MapView.SetShapes(shapeMgr.GetShapes());
+			else
+				m_MapView.SetShapes(null);
+		}
+		else
+		{
+			m_MapView.SetShapes(null);
+		}
+		
         // Draw map
         m_MapView.Draw();
         

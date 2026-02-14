@@ -34,6 +34,10 @@ modded class SCR_PlayerController
     // TDL Menu input handling
     protected InputManager m_TDLInputManager;
 	
+	// TDL Map View
+	protected ref AG0_TDLMapShapeManager m_TDLShapeManager = new AG0_TDLMapShapeManager();
+	protected string m_sShapeSyncHash;
+	
 	// ============================================
 	// EUD SCREEN ADJUSTMENT
 	// ============================================
@@ -1092,6 +1096,40 @@ modded class SCR_PlayerController
             m_OnMessagesUpdated.Invoke(networkId);
         }
     }
+	
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_ReceiveTDLShapes(string packedShapes, string syncHash)
+	{
+		// Skip if we already have this version
+		if (syncHash == m_sShapeSyncHash && !syncHash.IsEmpty())
+			return;
+		
+		m_sShapeSyncHash = syncHash;
+		
+		if (!m_TDLShapeManager)
+			m_TDLShapeManager = new AG0_TDLMapShapeManager();
+		
+		int count = m_TDLShapeManager.ParsePackedShapeData(packedShapes, syncHash);
+		
+		Print(string.Format("[TDL_SHAPES_CLIENT] Received %1 shapes (hash: %2)",
+			count, syncHash), LogLevel.DEBUG);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Get shape manager for map rendering
+	AG0_TDLMapShapeManager GetTDLShapeManager()
+	{
+		return m_TDLShapeManager;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Server → Client: Send shape overlay data
+	//! Called when shapes change or when player joins a network
+	void ReceiveTDLShapes(string packedShapes, string syncHash)
+	{
+		Rpc(RpcDo_ReceiveTDLShapes, packedShapes, syncHash);
+	}
     
     //------------------------------------------------------------------------------------------------
     // PUBLIC API: Called by server-side system to send messages to this client

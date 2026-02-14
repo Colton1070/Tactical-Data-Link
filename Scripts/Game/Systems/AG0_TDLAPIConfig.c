@@ -134,6 +134,45 @@ class AG0_TDLApiQueueCallback : RestCallback
 }
 
 //------------------------------------------------------------------------------------------------
+// REST Callback for Shapes polling endpoint
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiShapesCallback : RestCallback
+{
+	protected AG0_TDLApiManager m_Manager;
+	
+	//------------------------------------------------------------------------------------------------
+	void AG0_TDLApiShapesCallback(AG0_TDLApiManager manager)
+	{
+		m_Manager = manager;
+		SetOnSuccess(OnSuccessHandler);
+		SetOnError(OnErrorHandler);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	void OnSuccessHandler(RestCallback cb)
+	{
+		string data = cb.GetData();
+		if (m_Manager)
+			m_Manager.OnShapesPollSuccess(data);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	void OnErrorHandler(RestCallback cb)
+	{
+		if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+		{
+			if (m_Manager)
+				m_Manager.OnShapesPollTimeout();
+			return;
+		}
+		
+		int errorCode = cb.GetHttpCode();
+		if (m_Manager)
+			m_Manager.OnShapesPollError(errorCode);
+	}
+}
+
+//------------------------------------------------------------------------------------------------
 // REST Callback for API Key Validation
 //------------------------------------------------------------------------------------------------
 class AG0_TDLApiValidateCallback : RestCallback
@@ -191,7 +230,7 @@ class AG0_TDLApiManager
     // API Configuration
     protected static const string CONFIG_FOLDER = "$profile:TDL";
     protected static const string CONFIG_FILE = "$profile:TDL/api_config.json";
-    protected static const string API_BASE_URL = "https://tdl.blufor.info/api/mod";
+    protected static const string API_BASE_URL = "https://tdl-sync.blufor.info/api/mod";
     
     // State
     protected ref AG0_TDLApiConfigData m_Config;
@@ -208,6 +247,13 @@ class AG0_TDLApiManager
     protected float m_fTimeSinceLastPoll = 0;
     protected bool m_bPollInProgress = false;
     
+    // Shape
+    protected ref AG0_TDLApiShapesCallback m_ShapesCallback;
+    protected ref AG0_TDLMapShapeManager m_ShapeManager;
+    protected bool m_bShapesPollInProgress = false;
+    protected int m_iSuccessfulShapePolls = 0;
+    protected int m_iFailedShapePolls = 0;
+	
     // Statistics
     protected int m_iSuccessfulSubmits = 0;
     protected int m_iFailedSubmits = 0;
@@ -220,6 +266,8 @@ class AG0_TDLApiManager
         m_SubmitCallback = new AG0_TDLApiSubmitCallback(this);
         m_QueueCallback = new AG0_TDLApiQueueCallback(this);
         m_ValidateCallback = new AG0_TDLApiValidateCallback(this);
+		m_ShapesCallback = new AG0_TDLApiShapesCallback(this);
+		m_ShapeManager = new AG0_TDLMapShapeManager();
     }
     
     //------------------------------------------------------------------------------------------------
@@ -404,7 +452,7 @@ class AG0_TDLApiManager
 	
 	float GetStateSyncInterval()
 	{
-	    if (!m_Config)
+	    if (!m_Config || m_Config.stateSyncIntervalSeconds <= 0)
 	        return 5.0;
 	    
 	    return Math.Clamp(m_Config.stateSyncIntervalSeconds, 1, 60);
@@ -654,6 +702,10 @@ class AG0_TDLApiManager
                 HandleMarkerEditCommand(cmdJson);
                 break;
 			
+			case "shapes_refresh":
+                HandleShapesRefreshCommand();
+                break;
+			
             default:
                 Print(string.Format("[TDL_API] Unknown command type: %1", cmdType), LogLevel.WARNING);
                 break;
@@ -815,6 +867,15 @@ class AG0_TDLApiManager
     }
 	
 	//------------------------------------------------------------------------------------------------
+    //! Handle shapes_refresh command from web API
+	//! Immediately triggers a shapes poll so in-game shapes stay in sync with the web map
+    protected void HandleShapesRefreshCommand()
+    {
+        Print("[TDL_API] shapes_refresh command received, triggering immediate shapes poll", LogLevel.DEBUG);
+		PollShapes();
+    }
+	
+	//------------------------------------------------------------------------------------------------
 	//! Submit account link request with external callback
 	//! Used by AG0_TDLLinkCommand for async handling via OnUpdate()
 	//! @param callback External RestCallback to receive result (e.g., StateBackendCallback)
@@ -955,6 +1016,119 @@ class AG0_TDLApiManager
             SaveConfig();
         }
     }
+	
+	//------------------------------------------------------------------------------------------------
+	//! Poll the shapes endpoint for current drawing overlay state
+	//! Called on its own timer, separate from queue polling
+	void PollShapes()
+	{
+		if (!CanCommunicate())
+			return;
+		
+		if (m_bShapesPollInProgress)
+			return;
+		
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+		{
+			Print("[TDL_API] Failed to get REST context for shapes poll", LogLevel.ERROR);
+			return;
+		}
+		
+		// Set authorization header
+		string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+		
+		m_bShapesPollInProgress = true;
+		
+		// Build query path — include syncHash for server-side short-circuit
+		string path = "/shapes";
+		string lastHash = m_ShapeManager.GetLastSyncHash();
+		if (!lastHash.IsEmpty())
+			path = string.Format("/shapes?since=%1", lastHash);
+		
+		ctx.GET(m_ShapesCallback, path);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Called when shapes poll succeeds
+	void OnShapesPollSuccess(string data)
+	{
+		m_bShapesPollInProgress = false;
+		m_iSuccessfulShapePolls++;
+		
+		if (data.IsEmpty())
+			return;
+		
+		// Check for "no changes" short-circuit response
+		SCR_JsonLoadContext quickCheck = new SCR_JsonLoadContext();
+		if (quickCheck.ImportFromString(data))
+		{
+			bool changed = true;
+			if (quickCheck.ReadValue("changed", changed) && !changed)
+			{
+				// No changes since last poll — skip full parse
+				return;
+			}
+		}
+		
+		// Remember previous hash to detect actual changes
+		string prevHash = m_ShapeManager.GetLastSyncHash();
+		
+		// Full parse (also stores raw JSON strings for redistribution)
+		int updated = m_ShapeManager.ParseShapesResponse(data);
+		
+		// Prune any expired shapes
+		m_ShapeManager.PruneStale();
+		
+		// If sync hash changed, distribute to all networked clients
+		string newHash = m_ShapeManager.GetLastSyncHash();
+		if (newHash != prevHash)
+		{
+			AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+			if (tdlSystem)
+				tdlSystem.DistributeShapesToClients();
+		}
+		
+		if (updated > 0)
+		{
+			Print(string.Format("[TDL_API] Shapes poll: %1 shapes updated, %2 total",
+				updated, m_ShapeManager.GetShapeCount()), LogLevel.DEBUG);
+		}
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	void OnShapesPollError(int errorCode)
+	{
+		m_bShapesPollInProgress = false;
+		m_iFailedShapePolls++;
+		
+		if (errorCode == 401)
+		{
+			Print("[TDL_API] Shapes poll returned 401 - API key may have been revoked", LogLevel.WARNING);
+			m_bApiKeyValid = false;
+		}
+		else if (errorCode == 404)
+		{
+			// Endpoint not implemented yet — silently ignore
+			// This allows the mod to ship before the web API is ready
+			Print("[TDL_API] Shapes endpoint not found (404) - feature not yet available on server", LogLevel.DEBUG);
+		}
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	void OnShapesPollTimeout()
+	{
+		m_bShapesPollInProgress = false;
+		m_iFailedShapePolls++;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Get the shape manager for reading shape data (used by map renderer)
+	AG0_TDLMapShapeManager GetShapeManager()
+	{
+		return m_ShapeManager;
+	}
 }
 
 class AG0_TDLDeviceState

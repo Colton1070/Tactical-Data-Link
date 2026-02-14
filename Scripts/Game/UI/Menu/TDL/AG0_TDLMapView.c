@@ -32,6 +32,8 @@ class AG0_TDLMapView
     
     // Member markers
     protected ref array<ref AG0_TDLMapMarker> m_aMarkers = {};
+	// Shape overlay (populated externally via SetShapes)
+    protected ref array<ref AG0_TDLMapShape> m_aShapes;
     
     // Building cache - progressive grid-based
     protected ref array<ref AG0_TDLBuildingData> m_aCachedBuildings = {};
@@ -391,6 +393,14 @@ class AG0_TDLMapView
         marker.m_sLabel = label;
         m_aMarkers.Insert(marker);
     }
+	
+	//------------------------------------------------------------------------------------------------
+	//! Set shapes to render from the shape manager
+	//! Call each frame or when shapes update — the array is read during Draw()
+	void SetShapes(array<ref AG0_TDLMapShape> shapes)
+	{
+		m_aShapes = shapes;
+	}
     
     //------------------------------------------------------------------------------------------------
     void AddSelfMarker(vector worldPos, float heading)
@@ -564,6 +574,9 @@ class AG0_TDLMapView
 		//Draw grid (over buildings)
 		DrawGrid();
 		
+		//Draw TDL shapes
+		DrawShapes();
+		
         // Draw markers (on top)
         DrawMarkers();
         
@@ -718,6 +731,420 @@ class AG0_TDLMapView
 	        m_aDrawCommands.Insert(fill);
 	    }
 	}
+	
+	// -----------------------------------------------------------------------
+	// ADAPTIVE SEGMENT COUNT
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	//! Calculate optimal polygon segment count for a circle at a given screen radius.
+	//! Uses the inscribed polygon error formula: N = π / arccos(1 - ε/r)
+	//! where ε is the maximum pixel error tolerance (0.5px).
+	//! Clamped to [8, 128] — 8 segments for tiny circles, up to 128 for huge ones.
+	protected int GetAdaptiveSegments(float screenRadius)
+	{
+		if (screenRadius < 2)
+			return 8;
+		
+		// Lookup-based approximation — avoids Math.Acos dependency.
+		// These thresholds match the exact formula to within ±1 segment.
+		if (screenRadius < 5)   return 8;
+		if (screenRadius < 15)  return 12;
+		if (screenRadius < 40)  return 20;
+		if (screenRadius < 100) return 32;
+		if (screenRadius < 250) return 48;
+		if (screenRadius < 500) return 72;
+		return 128;
+	}
+	
+	// -----------------------------------------------------------------------
+	// MAIN DISPATCH
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawShapes()
+	{
+		if (!m_aShapes || m_aShapes.IsEmpty())
+			return;
+		
+		float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
+		
+		foreach (AG0_TDLMapShape shape : m_aShapes)
+		{
+			// Viewport culling — skip shapes entirely off-screen
+			float screenX, screenY;
+			WorldToScreen(shape.m_vCenter, screenX, screenY);
+			
+			float boundingScreenR = shape.GetBoundingRadius() * pixelsPerWorldUnit;
+			float margin = boundingScreenR + 20;
+			
+			if (screenX + margin < 0 || screenX - margin > m_fCanvasWidth)
+				continue;
+			if (screenY + margin < 0 || screenY - margin > m_fCanvasHeight)
+				continue;
+			
+			switch (shape.m_eShapeType)
+			{
+				case AG0_ETDLShapeType.CIRCLE:
+					DrawShapeCircle(shape, screenX, screenY, pixelsPerWorldUnit);
+					break;
+				
+				case AG0_ETDLShapeType.SECTOR:
+					DrawShapeSector(shape, screenX, screenY, pixelsPerWorldUnit);
+					break;
+				
+				case AG0_ETDLShapeType.RANGE_RINGS:
+					DrawShapeRangeRings(shape, screenX, screenY, pixelsPerWorldUnit);
+					break;
+				
+				case AG0_ETDLShapeType.RECTANGLE:
+				case AG0_ETDLShapeType.POLYGON:
+				case AG0_ETDLShapeType.FREEHAND:
+					DrawShapePolygon(shape, pixelsPerWorldUnit);
+					break;
+				
+				case AG0_ETDLShapeType.ROUTE:
+					DrawShapeRoute(shape, pixelsPerWorldUnit);
+					break;
+			}
+		}
+	}
+	
+	// -----------------------------------------------------------------------
+	// CIRCLE
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawShapeCircle(AG0_TDLMapShape shape, float cx, float cy, float ppu)
+	{
+		float screenRadius = shape.m_fRadius * ppu;
+		if (screenRadius < 1)
+			return;
+		
+		int segments = GetAdaptiveSegments(screenRadius);
+		
+		array<float> verts = {};
+		TessellateCircle(cx, cy, screenRadius, segments, verts);
+		
+		// Fill
+		if (shape.m_iFillColor != 0)
+		{
+			PolygonDrawCommand fill = new PolygonDrawCommand();
+			fill.m_iColor = shape.m_iFillColor;
+			fill.m_Vertices = verts;
+			m_aDrawCommands.Insert(fill);
+		}
+		
+		// Stroke
+		DrawClosedStroke(verts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
+	}
+	
+	// -----------------------------------------------------------------------
+	// SECTOR (fan/wedge — weapon engagement zones, sensor FOV)
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawShapeSector(AG0_TDLMapShape shape, float cx, float cy, float ppu)
+	{
+		float screenRadius = shape.m_fRadius * ppu;
+		if (screenRadius < 1)
+			return;
+		
+		int fullCircleSegs = GetAdaptiveSegments(screenRadius);
+		
+		// Convert bearings (0=North, CW) to screen angles.
+		// Screen coords: +X=right, +Y=down.
+		// Bearing 0 (N) → up on screen → angle -π/2 in standard math.
+		// Bearing 90 (E) → right → angle 0.
+		// Formula: screenAngle = (bearing - 90) degrees
+		// Map rotation shifts all bearings on screen.
+		float startDeg = shape.m_fStartAngle - 90.0 + m_fRotation;
+		float endDeg   = shape.m_fEndAngle   - 90.0 + m_fRotation;
+		
+		float startRad = startDeg * Math.DEG2RAD;
+		float endRad   = endDeg   * Math.DEG2RAD;
+		
+		// Sweep — always positive (CW in bearing = CW on screen with Y-down)
+		float sweep = endRad - startRad;
+		if (sweep <= 0)
+			sweep += Math.PI * 2;
+		
+		// Arc segment count proportional to sweep fraction of full circle
+		int arcSegs = Math.Ceil(sweep / (Math.PI * 2) * fullCircleSegs);
+		if (arcSegs < 4)  arcSegs = 4;
+		if (arcSegs > 128) arcSegs = 128;
+		
+		// Build vertex list: center → arc → (implicit close back to center)
+		array<float> verts = {};
+		verts.Insert(cx);
+		verts.Insert(cy);
+		
+		for (int i = 0; i <= arcSegs; i++)
+		{
+			float angle = startRad + sweep * i / arcSegs;
+			verts.Insert(cx + Math.Cos(angle) * screenRadius);
+			verts.Insert(cy + Math.Sin(angle) * screenRadius);
+		}
+		
+		// Fill (PolygonDrawCommand auto-closes last vertex to first)
+		if (shape.m_iFillColor != 0)
+		{
+			PolygonDrawCommand fill = new PolygonDrawCommand();
+			fill.m_iColor = shape.m_iFillColor;
+			fill.m_Vertices = verts;
+			m_aDrawCommands.Insert(fill);
+		}
+		
+		// Stroke — radial line from center to arc start
+		LineDrawCommand radial1 = new LineDrawCommand();
+		radial1.m_iColor = shape.m_iStrokeColor;
+		radial1.m_fWidth = shape.m_fStrokeWidth;
+		radial1.m_Vertices = {cx, cy, verts[2], verts[3]};
+		m_aDrawCommands.Insert(radial1);
+		
+		// Stroke — arc segments
+		int vertCount = verts.Count();
+		for (int i = 2; i < vertCount - 2; i += 2)
+		{
+			LineDrawCommand arcLine = new LineDrawCommand();
+			arcLine.m_iColor = shape.m_iStrokeColor;
+			arcLine.m_fWidth = shape.m_fStrokeWidth;
+			arcLine.m_Vertices = {verts[i], verts[i + 1], verts[i + 2], verts[i + 3]};
+			m_aDrawCommands.Insert(arcLine);
+		}
+		
+		// Stroke — radial line from arc end back to center
+		LineDrawCommand radial2 = new LineDrawCommand();
+		radial2.m_iColor = shape.m_iStrokeColor;
+		radial2.m_fWidth = shape.m_fStrokeWidth;
+		radial2.m_Vertices = {verts[vertCount - 2], verts[vertCount - 1], cx, cy};
+		m_aDrawCommands.Insert(radial2);
+	}
+	
+	// -----------------------------------------------------------------------
+	// RANGE RINGS (concentric circles + center crosshair)
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawShapeRangeRings(AG0_TDLMapShape shape, float cx, float cy, float ppu)
+	{
+		// Draw each ring as stroke-only
+		foreach (float ringRadius : shape.m_aRings)
+		{
+			float screenR = ringRadius * ppu;
+			if (screenR < 1)
+				continue;
+			
+			int segments = GetAdaptiveSegments(screenR);
+			
+			array<float> verts = {};
+			TessellateCircle(cx, cy, screenR, segments, verts);
+			
+			DrawClosedStroke(verts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
+		}
+		
+		// Center crosshair
+		float crossSize = 6;
+		
+		LineDrawCommand hLine = new LineDrawCommand();
+		hLine.m_iColor = shape.m_iStrokeColor;
+		hLine.m_fWidth = 1;
+		hLine.m_Vertices = {cx - crossSize, cy, cx + crossSize, cy};
+		m_aDrawCommands.Insert(hLine);
+		
+		LineDrawCommand vLine = new LineDrawCommand();
+		vLine.m_iColor = shape.m_iStrokeColor;
+		vLine.m_fWidth = 1;
+		vLine.m_Vertices = {cx, cy - crossSize, cx, cy + crossSize};
+		m_aDrawCommands.Insert(vLine);
+	}
+	
+	// -----------------------------------------------------------------------
+	// POLYGON / RECTANGLE / FREEHAND (vertex-based closed shapes)
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawShapePolygon(AG0_TDLMapShape shape, float ppu)
+	{
+		int rawCount = shape.m_aVertices.Count();
+		if (rawCount < 4)
+			return; // Need at least 2 vertex pairs
+		
+		// Convert world vertices → screen
+		array<float> screenVerts = {};
+		for (int i = 0; i + 1 < rawCount; i += 2)
+		{
+			float sx, sy;
+			WorldToScreen(Vector(shape.m_aVertices[i], 0, shape.m_aVertices[i + 1]), sx, sy);
+			screenVerts.Insert(sx);
+			screenVerts.Insert(sy);
+		}
+		
+		// Fill (need 3+ vertices = 6+ floats for a meaningful polygon)
+		if (shape.m_iFillColor != 0 && screenVerts.Count() >= 6)
+		{
+			PolygonDrawCommand fill = new PolygonDrawCommand();
+			fill.m_iColor = shape.m_iFillColor;
+			fill.m_Vertices = screenVerts;
+			m_aDrawCommands.Insert(fill);
+		}
+		
+		// Stroke — closed perimeter
+		DrawClosedStroke(screenVerts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
+	}
+	
+	// -----------------------------------------------------------------------
+	// ROUTE (open polyline with waypoint dots)
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	protected void DrawShapeRoute(AG0_TDLMapShape shape, float ppu)
+	{
+		int rawCount = shape.m_aVertices.Count();
+		if (rawCount < 4)
+			return;
+		
+		// Convert world vertices → screen
+		array<float> screenVerts = {};
+		for (int i = 0; i + 1 < rawCount; i += 2)
+		{
+			float sx, sy;
+			WorldToScreen(Vector(shape.m_aVertices[i], 0, shape.m_aVertices[i + 1]), sx, sy);
+			screenVerts.Insert(sx);
+			screenVerts.Insert(sy);
+		}
+		
+		// Route line — open (not closed)
+		DrawOpenStroke(screenVerts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
+		
+		// Waypoint dots at each vertex
+		for (int i = 0; i + 1 < screenVerts.Count(); i += 2)
+		{
+			float wpX = screenVerts[i];
+			float wpY = screenVerts[i + 1];
+			
+			// Outline circle
+			array<float> outVerts = {};
+			TessellateCircle(wpX, wpY, 5, 8, outVerts);
+			
+			PolygonDrawCommand wpOutline = new PolygonDrawCommand();
+			wpOutline.m_iColor = m_iMarkerOutlineColor;
+			wpOutline.m_Vertices = outVerts;
+			m_aDrawCommands.Insert(wpOutline);
+			
+			// Filled circle
+			array<float> wpVerts = {};
+			TessellateCircle(wpX, wpY, 3.5, 8, wpVerts);
+			
+			PolygonDrawCommand wpFill = new PolygonDrawCommand();
+			wpFill.m_iColor = shape.m_iStrokeColor;
+			wpFill.m_Vertices = wpVerts;
+			m_aDrawCommands.Insert(wpFill);
+		}
+		
+		// Direction arrows along route segments
+		int pointCount = screenVerts.Count() / 2;
+		for (int i = 0; i < pointCount - 1; i++)
+		{
+			float x0 = screenVerts[i * 2];
+			float y0 = screenVerts[i * 2 + 1];
+			float x1 = screenVerts[(i + 1) * 2];
+			float y1 = screenVerts[(i + 1) * 2 + 1];
+			
+			// Midpoint
+			float mx = (x0 + x1) * 0.5;
+			float my = (y0 + y1) * 0.5;
+			
+			// Segment direction
+			float dx = x1 - x0;
+			float dy = y1 - y0;
+			float len = Math.Sqrt(dx * dx + dy * dy);
+			
+			if (len < 20)
+				continue; // Skip arrow on very short segments
+			
+			// Normalize
+			dx = dx / len;
+			dy = dy / len;
+			
+			// Arrow head — triangle pointing along the segment
+			float arrowLen = 6;
+			float arrowHalf = 3;
+			
+			// Tip at midpoint + half arrow length along direction
+			float tipX = mx + dx * arrowLen;
+			float tipY = my + dy * arrowLen;
+			
+			// Two base points perpendicular to direction
+			float perpX = -dy;
+			float perpY = dx;
+			
+			float baseX = mx - dx * arrowLen;
+			float baseY = my - dy * arrowLen;
+			
+			array<float> arrowVerts = {
+				tipX, tipY,
+				baseX + perpX * arrowHalf, baseY + perpY * arrowHalf,
+				baseX - perpX * arrowHalf, baseY - perpY * arrowHalf
+			};
+			
+			PolygonDrawCommand arrow = new PolygonDrawCommand();
+			arrow.m_iColor = shape.m_iStrokeColor;
+			arrow.m_Vertices = arrowVerts;
+			m_aDrawCommands.Insert(arrow);
+		}
+	}
+	
+	// -----------------------------------------------------------------------
+	// STROKE HELPERS
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	//! Draw line segments connecting consecutive vertex pairs, closing back to first vertex.
+	//! Used for circle perimeters, polygon outlines, etc.
+	protected void DrawClosedStroke(array<float> verts, int color, float width)
+	{
+		int count = verts.Count();
+		if (count < 4)
+			return;
+		
+		// Segments between consecutive vertices
+		for (int i = 0; i < count - 2; i += 2)
+		{
+			LineDrawCommand line = new LineDrawCommand();
+			line.m_iColor = color;
+			line.m_fWidth = width;
+			line.m_Vertices = {verts[i], verts[i + 1], verts[i + 2], verts[i + 3]};
+			m_aDrawCommands.Insert(line);
+		}
+		
+		// Closing segment: last vertex → first vertex
+		LineDrawCommand close = new LineDrawCommand();
+		close.m_iColor = color;
+		close.m_fWidth = width;
+		close.m_Vertices = {verts[count - 2], verts[count - 1], verts[0], verts[1]};
+		m_aDrawCommands.Insert(close);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Draw line segments connecting consecutive vertex pairs, open-ended (no closing segment).
+	//! Used for routes.
+	protected void DrawOpenStroke(array<float> verts, int color, float width)
+	{
+		int count = verts.Count();
+		if (count < 4)
+			return;
+		
+		for (int i = 0; i < count - 2; i += 2)
+		{
+			LineDrawCommand line = new LineDrawCommand();
+			line.m_iColor = color;
+			line.m_fWidth = width;
+			line.m_Vertices = {verts[i], verts[i + 1], verts[i + 2], verts[i + 3]};
+			m_aDrawCommands.Insert(line);
+		}
+	}
+	
     
     //------------------------------------------------------------------------------------------------
     protected void DrawMarkers()

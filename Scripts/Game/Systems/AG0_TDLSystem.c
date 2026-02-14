@@ -264,6 +264,10 @@ class AG0_TDLSystem : WorldSystem
 	protected float m_fApiStateSyncInterval = 5.0;     // Full state sync every 30s
 	protected float m_fTimeSinceApiHeartbeat = 0;
 	protected float m_fTimeSinceApiStateSync = 0;
+	protected const float API_SHAPES_POLL_INTERVAL = 5.0;  // Poll shapes every 15s
+    protected float m_fTimeSinceShapesPoll = 0;
+	
+
 
     // Networks storage
     protected ref array<ref AG0_TDLNetwork> m_aNetworks = {};
@@ -453,6 +457,14 @@ class AG0_TDLSystem : WorldSystem
 	            ApiSyncFullState();
 	            m_fTimeSinceApiStateSync = 0;
 	        }
+			
+			// Shape overlay sync
+			m_fTimeSinceShapesPoll += timeSlice;
+			if (m_fTimeSinceShapesPoll >= API_SHAPES_POLL_INTERVAL)
+			{
+				m_ApiManager.PollShapes();
+				m_fTimeSinceShapesPoll = 0;
+			}
 	    }
     }
 	
@@ -1252,6 +1264,85 @@ class AG0_TDLSystem : WorldSystem
 	    }
 	}
     
+	//------------------------------------------------------------------------------------------------
+	//! Push aggregated shape data to a single player across all their network memberships.
+	//! Collects every network the player has a device in, packs all matching shapes into
+	//! one RPC. If the player is in zero networks, sends empty (clears client shapes).
+	protected void PushPlayerShapes(SCR_PlayerController controller, int playerId)
+	{
+		if (!m_ApiManager || !controller) return;
+		
+		AG0_TDLMapShapeManager shapeMgr = m_ApiManager.GetShapeManager();
+		if (!shapeMgr) return;
+		
+		// Find all networks this player belongs to
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr) return;
+		
+		IEntity playerEntity = playerMgr.GetPlayerControlledEntity(playerId);
+		if (!playerEntity)
+		{
+			// Player has no entity — send empty to clear
+			controller.ReceiveTDLShapes("", "");
+			return;
+		}
+		
+		set<int> playerNetworkIds = new set<int>();
+		array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(playerEntity);
+		
+		foreach (AG0_TDLDeviceComponent device : playerDevices)
+		{
+			foreach (AG0_TDLNetwork network : m_aNetworks)
+			{
+				if (network.GetNetworkDevices().Contains(device))
+				{
+					playerNetworkIds.Insert(network.GetNetworkID());
+					break;
+				}
+			}
+		}
+		
+		// Pack shapes from all player's networks in one shot
+		string packedShapes = shapeMgr.GetPackedShapeDataForNetworks(playerNetworkIds);
+		string syncHash = shapeMgr.GetLastSyncHash();
+		
+		controller.ReceiveTDLShapes(packedShapes, syncHash);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Distribute current shape data to all networked players.
+	//! Called by ApiManager when shapes change (syncHash differs from previous poll).
+	void DistributeShapesToClients()
+	{
+		if (!Replication.IsServer()) return;
+		
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr) return;
+		
+		// Collect unique players across all networks
+		set<int> pushedPlayers = new set<int>();
+		
+		foreach (AG0_TDLNetwork network : m_aNetworks)
+		{
+			foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
+			{
+				IEntity player = GetPlayerFromDevice(device);
+				if (!player) continue;
+				
+				int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+				if (playerId < 0 || pushedPlayers.Contains(playerId))
+					continue;
+				pushedPlayers.Insert(playerId);
+				
+				SCR_PlayerController controller = SCR_PlayerController.Cast(
+					playerMgr.GetPlayerController(playerId)
+				);
+				if (controller)
+					PushPlayerShapes(controller, playerId);
+			}
+		}
+	}
+	
     //------------------------------------------------------------------------------------------------
     // RPC notifications
     //------------------------------------------------------------------------------------------------
@@ -1267,9 +1358,31 @@ class AG0_TDLSystem : WorldSystem
     
     protected void NotifyNetworkMembersUpdated(AG0_TDLNetwork network)
     {
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		set<int> shapePushedPlayers = new set<int>();
+		
         foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
         {
             NotifyNetworkJoined(device, network.GetNetworkID(), network.GetDeviceData());
+			
+			// Push aggregated shapes per unique player
+			if (playerMgr)
+			{
+				IEntity player = GetPlayerFromDevice(device);
+				if (player)
+				{
+					int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+					if (playerId >= 0 && !shapePushedPlayers.Contains(playerId))
+					{
+						shapePushedPlayers.Insert(playerId);
+						SCR_PlayerController controller = SCR_PlayerController.Cast(
+							playerMgr.GetPlayerController(playerId)
+						);
+						if (controller)
+							PushPlayerShapes(controller, playerId);
+					}
+				}
+			}
         }
 		NotifyNetworkBroadcastingChange(network);
     }
@@ -1298,6 +1411,9 @@ class AG0_TDLSystem : WorldSystem
 	    {
 	        controller.NotifyClearNetwork(networkId);
 	    }
+		
+		// Re-push shapes aggregated from remaining networks (empty if player has none left)
+		PushPlayerShapes(controller, playerId);
     }
 
     protected void NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
@@ -1903,6 +2019,14 @@ class AG0_TDLSystem : WorldSystem
         return network.BuildClientMessages(network.GetMessages(), viewerRplId);
     }
 	
+	//------------------------------------------------------------------------------------------------
+	//! Get shape manager for rendering (used by AG0_TDLDisplayController / AG0_TDLMapView)
+	AG0_TDLMapShapeManager GetShapeManager()
+	{
+		if (!m_ApiManager)
+			return null;
+		return m_ApiManager.GetShapeManager();
+	}
 	
 	//------------------------------------------------------------------------------------------------
 	// API INTEGRATION METHODS
