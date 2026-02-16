@@ -18,6 +18,13 @@ class AG0_TDLMapView
     protected float m_fMapOffsetX;
     protected float m_fMapOffsetY;
     protected bool m_bTextureLoaded;
+	
+	// Overlay textures - loaded from config, drawn in order on top of satellite
+    protected ref array<ref SharedItemRef> m_aOverlayTextures = {};
+    protected ref array<float> m_aOverlayOpacities = {};
+    protected ref array<string> m_aOverlayNames = {};
+    protected ref array<bool> m_aOverlayEnabled = {};
+    protected bool m_bHasStructureOverlay;  // When true, skip runtime DrawBuildings()
     
     // View state
     protected vector m_vCenterWorld;      // World position we're centered on
@@ -58,6 +65,11 @@ class AG0_TDLMapView
         m_pMapTexture = null;
         m_aDrawCommands = null;
         m_aMarkers = null;
+		// Add to destructor alongside existing cleanup:
+    	m_aOverlayTextures = null;
+    	m_aOverlayOpacities = null;
+    	m_aOverlayNames = null;
+    	m_aOverlayEnabled = null;
     }
     
     //------------------------------------------------------------------------------------------------
@@ -86,6 +98,9 @@ class AG0_TDLMapView
             Print("[TDLMapView] Failed to load map texture", LogLevel.WARNING);
             // Continue anyway - we can still show markers without background
         }
+		
+		// Load overlay layers
+    	LoadOverlays();
         
         // Cache canvas size
         m_wCanvas.GetScreenSize(m_fCanvasWidth, m_fCanvasHeight);
@@ -181,6 +196,70 @@ class AG0_TDLMapView
 	    m_bTextureLoaded = true;
 	    return true;
 	}
+	
+	//------------------------------------------------------------------------------------------------
+    //! Load overlay textures from satellite config for current world
+    protected void LoadOverlays()
+    {
+        AG0_MapSatelliteEntry mapEntry = AG0_MapSatelliteConfigHelper.GetMapEntryForCurrentWorld(MAP_SATELLITE_CONFIG);
+        if (!mapEntry || !mapEntry.m_aOverlays || mapEntry.m_aOverlays.IsEmpty())
+            return;
+        
+        // Sort by draw order
+        array<ref AG0_MapOverlayEntry> sorted = {};
+        foreach (AG0_MapOverlayEntry overlay : mapEntry.m_aOverlays)
+        {
+            if (!overlay)
+                continue;
+            
+            // Insertion sort by draw order
+            bool inserted = false;
+            for (int i = 0; i < sorted.Count(); i++)
+            {
+                if (overlay.m_iDrawOrder < sorted[i].m_iDrawOrder)
+                {
+                    sorted.InsertAt(overlay, i);
+                    inserted = true;
+                    break;
+                }
+            }
+            if (!inserted)
+                sorted.Insert(overlay);
+        }
+        
+        // Load each overlay texture
+        foreach (AG0_MapOverlayEntry overlay : sorted)
+        {
+            if (overlay.m_OverlayTexture.IsEmpty())
+            {
+                Print(string.Format("[TDLMapView] Overlay '%1' has no texture, skipping", overlay.m_sLayerName), LogLevel.WARNING);
+                continue;
+            }
+            
+            SharedItemRef texture = CanvasWidget.LoadTexture(overlay.m_OverlayTexture);
+            if (!texture)
+            {
+                Print(string.Format("[TDLMapView] Failed to load overlay texture: %1", overlay.m_OverlayTexture), LogLevel.WARNING);
+                continue;
+            }
+            
+            m_aOverlayTextures.Insert(texture);
+            m_aOverlayOpacities.Insert(overlay.m_fOpacity);
+            m_aOverlayNames.Insert(overlay.m_sLayerName);
+            m_aOverlayEnabled.Insert(overlay.m_bEnabledByDefault);
+            
+            // Check if we have a structures overlay (to skip runtime building queries)
+            string nameLower = overlay.m_sLayerName;
+            nameLower.ToLower();
+            if (nameLower.Contains("struct") || nameLower.Contains("building"))
+                m_bHasStructureOverlay = true;
+            
+            Print(string.Format("[TDLMapView] Loaded overlay: '%1' (order %2, opacity %3)", 
+                overlay.m_sLayerName, overlay.m_iDrawOrder, overlay.m_fOpacity), LogLevel.DEBUG);
+        }
+        
+        Print(string.Format("[TDLMapView] Loaded %1 overlay layers", m_aOverlayTextures.Count()), LogLevel.DEBUG);
+    }
 	
 	//------------------------------------------------------------------------------------------------
 	// Fallback texture lookup for maps without proper prefab configuration
@@ -568,8 +647,13 @@ class AG0_TDLMapView
         else
             DrawFallbackBackground();
         
-        // Draw buildings (under markers)
-        DrawBuildings();
+        // Draw overlay layers (structures, roads, water, contours)
+        DrawOverlays();
+        
+        // Draw buildings via runtime query ONLY if no structure overlay is available
+        // (overlay textures are much cheaper than per-building polygon rendering)
+        if (!m_bHasStructureOverlay)
+            DrawBuildings();
         
 		//Draw grid (over buildings)
 		DrawGrid();
@@ -641,6 +725,77 @@ class AG0_TDLMapView
 	    
 	    m_aDrawCommands.Insert(cmd);
 	}
+	
+	//------------------------------------------------------------------------------------------------
+    //! Draw a single overlay texture using the same coordinate mapping as the satellite
+    //! The overlay images are rasterized to the exact same world extent as the satellite,
+    //! so they share identical UV mapping and transform math.
+    protected void DrawOverlay(SharedItemRef texture, float opacity)
+    {
+        if (!texture)
+            return;
+        
+        ImageDrawCommand cmd = new ImageDrawCommand();
+        cmd.m_pTexture = texture;
+        
+        // --- Same coordinate math as DrawMapTexture() ---
+        float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
+        float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+        float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
+        
+        float diagonal = Math.Sqrt(viewWorldSizeX * viewWorldSizeX + viewWorldSizeZ * viewWorldSizeZ);
+        
+        float viewMinX = m_vCenterWorld[0] - diagonal * 0.5;
+        float viewMaxX = m_vCenterWorld[0] + diagonal * 0.5;
+        float viewMinZ = m_vCenterWorld[2] - diagonal * 0.5;
+        float viewMaxZ = m_vCenterWorld[2] + diagonal * 0.5;
+        
+        float u0, v0, u1, v1;
+        WorldToUV(Vector(viewMinX, 0, viewMaxZ), u0, v0);
+        WorldToUV(Vector(viewMaxX, 0, viewMinZ), u1, v1);
+        
+        cmd.m_fUV[0] = u0;
+        cmd.m_fUV[1] = v0;
+        cmd.m_fUV[2] = u1;
+        cmd.m_fUV[3] = v1;
+        
+        float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
+        float drawSize = diagonal * pixelsPerWorldUnit;
+        float halfDraw = drawSize * 0.5;
+        
+        float rotRad = m_fRotation * Math.DEG2RAD;
+        float cosR = Math.Cos(rotRad);
+        float sinR = Math.Sin(rotRad);
+        
+        float offsetX = (m_fCanvasWidth * 0.5) - halfDraw * (cosR - sinR);
+        float offsetY = (m_fCanvasHeight * 0.5) - halfDraw * (sinR + cosR);
+        
+        cmd.m_Position = Vector(offsetX, offsetY, 0);
+        cmd.m_Size = Vector(drawSize, drawSize, 0);
+        cmd.m_Pivot = Vector(0, 0, 0);
+        cmd.m_fRotation = m_fRotation;
+        
+        // Apply opacity via color alpha channel (ARGB)
+        int alpha = Math.ClampInt(opacity * 255, 0, 255);
+        cmd.m_iColor = (alpha << 24) | 0x00FFFFFF;
+        
+        cmd.m_iFlags = WidgetFlags.STRETCH | WidgetFlags.BLEND;
+        
+        m_aDrawCommands.Insert(cmd);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Draw all enabled overlay layers in order
+    protected void DrawOverlays()
+    {
+        for (int i = 0; i < m_aOverlayTextures.Count(); i++)
+        {
+            if (!m_aOverlayEnabled[i])
+                continue;
+            
+            DrawOverlay(m_aOverlayTextures[i], m_aOverlayOpacities[i]);
+        }
+    }
     
     //------------------------------------------------------------------------------------------------
     protected void DrawFallbackBackground()
@@ -1292,6 +1447,57 @@ class AG0_TDLMapView
         }
     }
     
+	
+	//------------------------------------------------------------------------------------------------
+    //! Toggle an overlay layer on/off by index
+    void SetOverlayEnabled(int index, bool enabled)
+    {
+        if (index >= 0 && index < m_aOverlayEnabled.Count())
+            m_aOverlayEnabled[index] = enabled;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Toggle an overlay layer on/off by name (case-insensitive partial match)
+    void SetOverlayEnabledByName(string name, bool enabled)
+    {
+        name.ToLower();
+        for (int i = 0; i < m_aOverlayNames.Count(); i++)
+        {
+            string layerName = m_aOverlayNames[i];
+            layerName.ToLower();
+            if (layerName.Contains(name))
+            {
+                m_aOverlayEnabled[i] = enabled;
+                return;
+            }
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Get overlay count (for building UI toggles)
+    int GetOverlayCount()
+    {
+        return m_aOverlayNames.Count();
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Get overlay name by index
+    string GetOverlayName(int index)
+    {
+        if (index >= 0 && index < m_aOverlayNames.Count())
+            return m_aOverlayNames[index];
+        return "";
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Get overlay enabled state by index
+    bool IsOverlayEnabled(int index)
+    {
+        if (index >= 0 && index < m_aOverlayEnabled.Count())
+            return m_aOverlayEnabled[index];
+        return false;
+    }
+	
     //------------------------------------------------------------------------------------------------
     // ACCESSORS
     //------------------------------------------------------------------------------------------------

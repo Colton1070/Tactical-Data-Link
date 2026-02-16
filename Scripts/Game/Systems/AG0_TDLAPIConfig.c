@@ -230,7 +230,7 @@ class AG0_TDLApiManager
     // API Configuration
     protected static const string CONFIG_FOLDER = "$profile:TDL";
     protected static const string CONFIG_FILE = "$profile:TDL/api_config.json";
-    protected static const string API_BASE_URL = "https://tdl-sync.blufor.info/api/mod";
+    protected static const string API_BASE_URL = "https://tdl.blufor.info/api/mod";
     
     // State
     protected ref AG0_TDLApiConfigData m_Config;

@@ -1,6 +1,33 @@
 //------------------------------------------------------------------------------------------------
+// AG0_MapSatelliteConfig.c
+// Map satellite texture configuration with overlay layer support
+//------------------------------------------------------------------------------------------------
+
+//------------------------------------------------------------------------------------------------
+//! Individual overlay layer entry
+//! Defines a single texture overlay with draw order and optional opacity
+[BaseContainerProps(), SCR_BaseContainerCustomTitleField("m_sLayerName")]
+class AG0_MapOverlayEntry
+{
+    [Attribute("", UIWidgets.EditBox, "Layer name (for UI toggle labels)")]
+    string m_sLayerName;
+    
+    [Attribute("", UIWidgets.ResourceNamePicker, "Overlay texture (transparent PNG imported as .edds)", params: "edds")]
+    ResourceName m_OverlayTexture;
+    
+    [Attribute("0", UIWidgets.Slider, "Draw order (lower = drawn first, behind higher layers)", params: "0 100 1")]
+    int m_iDrawOrder;
+    
+    [Attribute("1.0", UIWidgets.Slider, "Opacity multiplier (0.0 = invisible, 1.0 = full)", params: "0 1 0.05")]
+    float m_fOpacity;
+    
+    [Attribute("1", UIWidgets.CheckBox, "Enabled by default")]
+    bool m_bEnabledByDefault;
+}
+
+//------------------------------------------------------------------------------------------------
 //! Individual map satellite texture entry
-//! Associates a world file identifier with its satellite imagery path
+//! Associates a world file identifier with its satellite imagery path and optional overlays
 [BaseContainerProps(), SCR_BaseContainerCustomTitleField("m_sWorldIdentifier")]
 class AG0_MapSatelliteEntry
 {
@@ -9,6 +36,9 @@ class AG0_MapSatelliteEntry
     
     [Attribute("", UIWidgets.ResourceNamePicker, "Satellite background image texture", params: "edds")]
     ResourceName m_SatelliteTexture;
+    
+    [Attribute("", UIWidgets.Object, "Overlay layers (structures, roads, water, contours, etc.)")]
+    ref array<ref AG0_MapOverlayEntry> m_aOverlays;
 }
 
 //------------------------------------------------------------------------------------------------
@@ -21,23 +51,35 @@ class AG0_MapSatelliteConfig
     ref array<ref AG0_MapSatelliteEntry> m_aMapEntries;
     
     //------------------------------------------------------------------------------------------------
-    //! Find satellite texture for current world
+    //! Find the full map entry for current world
     //! @param worldFile - The world file path from GetGame().GetWorldFile()
-    //! @return ResourceName of satellite texture, or empty if not found
-    ResourceName GetSatelliteTexture(string worldFile)
+    //! @return The matching entry, or null if not found
+    AG0_MapSatelliteEntry GetMapEntry(string worldFile)
     {
         if (!m_aMapEntries)
-            return ResourceName.Empty;
+            return null;
         
         foreach (AG0_MapSatelliteEntry entry : m_aMapEntries)
         {
             if (!entry || entry.m_sWorldIdentifier.IsEmpty())
                 continue;
             
-            // Partial match - allows "Cain" to match "worlds/Cain/Cain.ent"
             if (worldFile.Contains(entry.m_sWorldIdentifier))
-                return entry.m_SatelliteTexture;
+                return entry;
         }
+        
+        return null;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Find satellite texture for current world (backward compatible)
+    //! @param worldFile - The world file path from GetGame().GetWorldFile()
+    //! @return ResourceName of satellite texture, or empty if not found
+    ResourceName GetSatelliteTexture(string worldFile)
+    {
+        AG0_MapSatelliteEntry entry = GetMapEntry(worldFile);
+        if (entry)
+            return entry.m_SatelliteTexture;
         
         return ResourceName.Empty;
     }
@@ -55,8 +97,15 @@ class AG0_MapSatelliteConfig
         Print(string.Format("[MapSatelliteConfig] %1 entries configured:", m_aMapEntries.Count()), LogLevel.DEBUG);
         foreach (int i, AG0_MapSatelliteEntry entry : m_aMapEntries)
         {
-            if (entry)
-                Print(string.Format("  [%1] %2 -> %3", i, entry.m_sWorldIdentifier, entry.m_SatelliteTexture), LogLevel.DEBUG);
+            if (!entry)
+                continue;
+            
+            int overlayCount = 0;
+            if (entry.m_aOverlays)
+                overlayCount = entry.m_aOverlays.Count();
+            
+            Print(string.Format("  [%1] %2 -> %3 (%4 overlays)", 
+                i, entry.m_sWorldIdentifier, entry.m_SatelliteTexture, overlayCount), LogLevel.DEBUG);
         }
     }
 }
@@ -73,11 +122,8 @@ class AG0_MapSatelliteConfigHelper
     
     //------------------------------------------------------------------------------------------------
     //! Get the cached config, loading it if necessary
-    //! @param configPath - Optional custom config path, uses default if empty
-    //! @return The map satellite config, or null if loading failed
     static AG0_MapSatelliteConfig GetConfig(ResourceName configPath = "")
     {
-        // Return cached if already loaded
         if (s_bConfigLoaded)
             return s_CachedConfig;
         
@@ -85,7 +131,6 @@ class AG0_MapSatelliteConfigHelper
         if (pathToLoad.IsEmpty())
             pathToLoad = DEFAULT_CONFIG_PATH;
         
-        // Load config
         Resource resource = BaseContainerTools.LoadContainer(pathToLoad);
         if (!resource || !resource.IsValid())
         {
@@ -113,8 +158,6 @@ class AG0_MapSatelliteConfigHelper
     
     //------------------------------------------------------------------------------------------------
     //! Convenience method to get satellite texture for current world
-    //! @param configPath - Optional custom config path
-    //! @return ResourceName of satellite texture, or empty if not found
     static ResourceName GetSatelliteTextureForCurrentWorld(ResourceName configPath = "")
     {
         AG0_MapSatelliteConfig config = GetConfig(configPath);
@@ -126,7 +169,19 @@ class AG0_MapSatelliteConfigHelper
     }
     
     //------------------------------------------------------------------------------------------------
-    //! Force reload of config (useful for development/debugging)
+    //! Get the full map entry for current world (includes overlays)
+    static AG0_MapSatelliteEntry GetMapEntryForCurrentWorld(ResourceName configPath = "")
+    {
+        AG0_MapSatelliteConfig config = GetConfig(configPath);
+        if (!config)
+            return null;
+        
+        string worldFile = GetGame().GetWorldFile();
+        return config.GetMapEntry(worldFile);
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! Force reload of config
     static void ReloadConfig()
     {
         s_CachedConfig = null;
