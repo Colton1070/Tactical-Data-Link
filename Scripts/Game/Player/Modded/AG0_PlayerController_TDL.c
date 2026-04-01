@@ -66,6 +66,10 @@ modded class SCR_PlayerController
 	// Dialog references
 	protected ref AG0_TDL_NetworkNameDialog m_NetworkNameDialog;
 	protected ref AG0_TDL_NetworkPasswordDialog m_NetworkPasswordDialog;
+	
+	protected RplId m_PendingRadioCryptoRplId;
+	protected EditBoxWidget m_PendingRadioCryptoEditBox;
+	protected ref AG0_TDL_KeyDialog m_RadioCryptoDialog;
     
     // ============================================
     // LIFECYCLE
@@ -1212,5 +1216,83 @@ modded class SCR_PlayerController
     ScriptInvoker GetOnMessagesUpdated() { return m_OnMessagesUpdated; }
     ScriptInvoker GetOnNewMessageReceived() { return m_OnNewMessageReceived; }
     ScriptInvoker GetOnReadReceiptReceived() { return m_OnReadReceiptReceived; }
+	
+	
+	//! Called server-side by any radio component that needs a crypto key entered.
+	//! entityRplId is the RplId of the owning entity (e.g. vehicle), passed back
+	//! through the bridge invoker so the subscriber can identify itself.
+	void AskOpenRadioCryptoFill(RplId entityRplId)
+	{
+		Rpc(RpcDo_OpenRadioCryptoFill, entityRplId);
+	}
+ 
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_OpenRadioCryptoFill(RplId entityRplId)
+	{
+		if (System.IsConsoleApp())
+			return;
+ 
+		if (m_RadioCryptoDialog)
+			return;
+ 
+		m_PendingRadioCryptoRplId = entityRplId;
+ 
+		m_RadioCryptoDialog = AG0_TDL_KeyDialog.CreateKeyDialog("ENTER CRYPTO KEY", "RADIO KEY");
+		if (!m_RadioCryptoDialog || !m_RadioCryptoDialog.GetRootWidget())
+		{
+			m_RadioCryptoDialog = null;
+			return;
+		}
+ 
+		m_PendingRadioCryptoEditBox = EditBoxWidget.Cast(m_RadioCryptoDialog.GetRootWidget().FindAnyWidget("InputField"));
+		if (!m_PendingRadioCryptoEditBox)
+		{
+			m_RadioCryptoDialog.Close();
+			m_RadioCryptoDialog = null;
+			return;
+		}
+ 
+		m_RadioCryptoDialog.m_OnConfirm.Insert(OnRadioCryptoDialogConfirm);
+		m_RadioCryptoDialog.m_OnCancel.Insert(OnRadioCryptoDialogCancel);
+ 
+		GetGame().GetWorkspace().SetFocusedWidget(m_PendingRadioCryptoEditBox);
+		m_PendingRadioCryptoEditBox.ActivateWriteMode();
+	}
+ 
+	protected void OnRadioCryptoDialogConfirm(SCR_ConfigurableDialogUi dialog)
+	{
+		if (!m_PendingRadioCryptoEditBox)
+		{
+			CleanupRadioCryptoDialog();
+			return;
+		}
+ 
+		string key = m_PendingRadioCryptoEditBox.GetText();
+		RplId entityRplId = m_PendingRadioCryptoRplId;
+		CleanupRadioCryptoDialog();
+ 
+		if (key.IsEmpty())
+			return;
+ 
+		Rpc(RpcAsk_SetRadioCryptoKey, entityRplId, key);
+	}
+ 
+	protected void OnRadioCryptoDialogCancel(SCR_ConfigurableDialogUi dialog)
+	{
+		CleanupRadioCryptoDialog();
+	}
+ 
+	protected void CleanupRadioCryptoDialog()
+	{
+		m_RadioCryptoDialog = null;
+		m_PendingRadioCryptoEditBox = null;
+		m_PendingRadioCryptoRplId = RplId.Invalid();
+	}
+ 
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_SetRadioCryptoKey(RplId entityRplId, string key)
+	{
+		AG0_RadioCryptoFillBridge.s_OnKeyReceived.Invoke(entityRplId, key);
+	}
 	
 }

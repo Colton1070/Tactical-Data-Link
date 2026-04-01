@@ -9,6 +9,12 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	protected AG0_TDLDeviceComponent m_DeviceComp;
 
 	
+	//! Fires on the server after a key fill or drop commits.
+	//! Signature: void Func(string newKey)
+	//! Used by SCR_VehicleRadioComponent and SCR_VehicleICSComponent to
+	//! propagate keys to all crew virtual radios.
+	ref ScriptInvoker m_OnCryptoKeyChanged = new ScriptInvoker();
+	
 	// Dialog references
 	protected ref AG0_TDL_KeyDialog m_inputDialog;
 	protected EditBoxWidget m_editBox;

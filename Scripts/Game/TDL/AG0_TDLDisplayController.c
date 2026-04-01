@@ -344,9 +344,10 @@ class AG0_TDLDisplayController
         UpdateSelfMapMarker(player);
         UpdateMemberMapMarkers();
         
-        // Keep static state in sync
-        s_fZoom = m_MapView.GetZoom();
-        s_vCenter = m_MapView.GetCenter();
+        // NOTE: Do NOT sync zoom/center to static state here.
+        // Multiple instances (menu + world-space device) run UpdateMapView every frame,
+        // each with their own independent zoom. Syncing here causes the world-space device
+        // to overwrite menu zoom changes continuously. State is saved correctly in Cleanup().
     }
     
     //------------------------------------------------------------------------------------------------

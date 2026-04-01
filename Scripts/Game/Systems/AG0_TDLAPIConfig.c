@@ -702,6 +702,10 @@ class AG0_TDLApiManager
                 HandleMarkerEditCommand(cmdJson);
                 break;
 			
+			case "marker_add":
+			    HandleMarkerAddCommand(cmdJson);
+			    break;
+			
 			case "shapes_refresh":
                 HandleShapesRefreshCommand();
                 break;
@@ -865,6 +869,111 @@ class AG0_TDLApiManager
         Print(string.Format("[TDL_API] marker_edit: Replaced marker %1 -> %2",
             markerId, newMarker.GetMarkerID()), LogLevel.DEBUG);
     }
+	
+	//------------------------------------------------------------------------------------------------
+	//! Resolve a TDL icon quad name (e.g. "tdl_pin") to its icon entry index
+	//! Returns -1 if not found
+	protected int ResolveIconEntryFromQuad(string targetQuad)
+	{
+	    SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+	    if (!markerMgr || !markerMgr.GetMarkerConfig())
+	        return -1;
+	    
+	    SCR_MapMarkerEntryPlaced placedEntry = SCR_MapMarkerEntryPlaced.Cast(
+	        markerMgr.GetMarkerConfig().GetMarkerEntryConfigByType(SCR_EMapMarkerType.PLACED_CUSTOM));
+	    
+	    if (!placedEntry)
+	        return -1;
+	    
+	    // Iterate icon entries until GetIconEntry returns false (end of list)
+	    ResourceName imageset, imagesetGlow;
+	    string quad;
+	    for (int i = 0; i < 100; i++)  // Safety cap
+	    {
+	        if (!placedEntry.GetIconEntry(i, imageset, imagesetGlow, quad))
+	            break;
+	        
+	        if (quad == targetQuad)
+	            return i;
+	    }
+	    
+	    return -1;
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Handle marker_add command from web API
+	//! Creates a new PLACED_CUSTOM marker with TDL icon, assigned to the linked player
+	protected void HandleMarkerAddCommand(SCR_JsonLoadContext cmdJson)
+	{
+	    // --- Read payload fields ---
+	    string customText;
+	    if (!cmdJson.ReadValue("customText", customText))
+	        customText = "";
+	    
+	    string markerType;
+	    if (!cmdJson.ReadValue("markerType", markerType))
+	    {
+	        Print("[TDL_API] marker_add missing 'markerType'", LogLevel.WARNING);
+	        return;
+	    }
+	    
+	    int colorIndex;
+	    if (!cmdJson.ReadValue("colorIndex", colorIndex))
+	        colorIndex = 0;
+	    
+	    float posX, posZ;
+	    if (!cmdJson.ReadValue("posX", posX) || !cmdJson.ReadValue("posZ", posZ))
+	    {
+	        Print("[TDL_API] marker_add missing position (posX/posZ)", LogLevel.WARNING);
+	        return;
+	    }
+	    
+	    // --- Validate icon quad is a TDL type ---
+	    if (!markerType.Contains("tdl_"))
+	    {
+	        Print(string.Format("[TDL_API] marker_add: '%1' is not a TDL marker type", markerType), LogLevel.WARNING);
+	        return;
+	    }
+	    
+	    // --- Resolve quad name to icon entry index ---
+	    int iconEntry = ResolveIconEntryFromQuad(markerType);
+	    if (iconEntry < 0)
+	    {
+	        Print(string.Format("[TDL_API] marker_add: Could not resolve icon entry for '%1'", markerType), LogLevel.WARNING);
+	        return;
+	    }
+	    
+	    // --- Get marker manager ---
+	    SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+	    if (!markerMgr)
+	    {
+	        Print("[TDL_API] marker_add: Marker manager not available", LogLevel.WARNING);
+	        return;
+	    }
+	    
+	    // --- Resolve owner player ID from payload (web session linked player) ---
+	    int ownerPlayerId = -1;  // Default: server-owned (visible to all connected)
+	    int payloadPlayerId;
+	    if (cmdJson.ReadValue("playerId", payloadPlayerId) && payloadPlayerId > 0)
+	        ownerPlayerId = payloadPlayerId;
+	    
+	    // --- Create the marker ---
+	    SCR_MapMarkerBase marker = new SCR_MapMarkerBase();
+	    marker.SetType(SCR_EMapMarkerType.PLACED_CUSTOM);
+	    marker.SetWorldPos((int)posX, (int)posZ);
+	    marker.SetIconEntry(iconEntry);
+	    marker.SetColorEntry(colorIndex);
+	    marker.SetCustomText(customText);
+	    
+	    // Assign UID, set ownership, broadcast to all clients
+	    markerMgr.AssignMarkerUID(marker);
+	    marker.SetMarkerOwnerID(ownerPlayerId);
+	    markerMgr.OnAddSynchedMarker(marker);
+	    markerMgr.OnAskAddStaticMarker(marker);
+	    
+	    Print(string.Format("[TDL_API] marker_add: Created marker %1 ('%2', icon=%3, color=%4) at [%5, %6] owner=%7",
+	        marker.GetMarkerID(), customText, markerType, colorIndex, posX, posZ, ownerPlayerId), LogLevel.DEBUG);
+	}
 	
 	//------------------------------------------------------------------------------------------------
     //! Handle shapes_refresh command from web API
