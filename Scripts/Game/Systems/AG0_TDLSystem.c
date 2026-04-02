@@ -1,10 +1,42 @@
 // AG0_TDLSystem.c - Device-Centric TDL Network Management
 
+//------------------------------------------------------------------------------------------------
+// Bridge link between two networks with incompatible waveforms.
+// Registered each update cycle by UpdateBridgeLinks() and consumed by
+// AppendBridgedMembers() during connectivity distribution.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLBridgeLink
+{
+    int m_iNetworkA;
+    int m_iNetworkB;
+    RplId m_BridgeDeviceRplId;
+
+    void AG0_TDLBridgeLink(int netA, int netB, RplId bridgeDevice)
+    {
+        m_iNetworkA = netA;
+        m_iNetworkB = netB;
+        m_BridgeDeviceRplId = bridgeDevice;
+    }
+
+    bool InvolvesNetwork(int networkId)
+    {
+        return m_iNetworkA == networkId || m_iNetworkB == networkId;
+    }
+
+    int GetOtherNetwork(int networkId)
+    {
+        if (networkId == m_iNetworkA) return m_iNetworkB;
+        if (networkId == m_iNetworkB) return m_iNetworkA;
+        return -1;
+    }
+}
+
 class AG0_TDLNetwork
 {
     protected int m_iNetworkID;
     protected string m_sNetworkName;
     protected string m_sNetworkPassword;
+    protected AG0_ETDLWaveform m_eWaveform;
     protected ref array<AG0_TDLDeviceComponent> m_aNetworkDevices = {};
     protected ref map<RplId, ref AG0_TDLNetworkMember> m_mDeviceData = new map<RplId, ref AG0_TDLNetworkMember>();
     protected int m_iNextNetworkIP = 1;
@@ -15,20 +47,22 @@ class AG0_TDLNetwork
     protected int m_iNextMessageId = 1;
     
     // Message retention settings
-    protected const int MAX_MESSAGES = 100;           // Maximum messages to retain
-    protected const int MESSAGE_EXPIRY_SECONDS = 3600; // Messages expire after 1 hour
+    protected const int MAX_MESSAGES = 100;
+    protected const int MESSAGE_EXPIRY_SECONDS = 3600;
 	
     
-    void AG0_TDLNetwork(int networkID, string name, string password)
+    void AG0_TDLNetwork(int networkID, string name, string password, AG0_ETDLWaveform waveform = AG0_ETDLWaveform.LEGACY)
     {
         m_iNetworkID = networkID;
         m_sNetworkName = name;
         m_sNetworkPassword = password;
+        m_eWaveform = waveform;
     }
     
     int GetNetworkID() { return m_iNetworkID; }
     string GetNetworkName() { return m_sNetworkName; }
     string GetNetworkPassword() { return m_sNetworkPassword; }
+    AG0_ETDLWaveform GetWaveform() { return m_eWaveform; }
     array<AG0_TDLDeviceComponent> GetNetworkDevices() { return m_aNetworkDevices; }
     map<RplId, ref AG0_TDLNetworkMember> GetDeviceData() { return m_mDeviceData; }
 	array<ref AG0_TDLMessage> GetMessages() { return m_aMessages; }
@@ -260,11 +294,11 @@ class AG0_TDLSystem : WorldSystem
 	
 	protected ref AG0_TDLApiManager m_ApiManager;
 	// API sync intervals (in seconds)
-	protected const float API_HEARTBEAT_INTERVAL = 60.0;      // Server heartbeat every 60s
-	protected float m_fApiStateSyncInterval = 5.0;     // Full state sync every 30s
+	protected const float API_HEARTBEAT_INTERVAL = 60.0;
+	protected float m_fApiStateSyncInterval = 5.0;
 	protected float m_fTimeSinceApiHeartbeat = 0;
 	protected float m_fTimeSinceApiStateSync = 0;
-	protected const float API_SHAPES_POLL_INTERVAL = 5.0;  // Poll shapes every 15s
+	protected const float API_SHAPES_POLL_INTERVAL = 5.0;
     protected float m_fTimeSinceShapesPoll = 0;
 	
 
@@ -272,6 +306,9 @@ class AG0_TDLSystem : WorldSystem
     // Networks storage
     protected ref array<ref AG0_TDLNetwork> m_aNetworks = {};
     protected int m_iNextNetworkID = 1;
+    
+    // Active bridge links — rebuilt every UpdateNetworks() cycle
+    protected ref array<ref AG0_TDLBridgeLink> m_aBridgeLinks = {};
     
     // Configuration
     protected float m_fUpdateInterval = 5.0;
@@ -289,12 +326,12 @@ class AG0_TDLSystem : WorldSystem
 	
 	protected ref map<RplId, AG0_TDLDeviceComponent> m_mDeviceCache = new map<RplId, AG0_TDLDeviceComponent>();
     
-    protected float m_fGridCellSize = 2000.0; // Set to 2x your maximum device range
+    protected float m_fGridCellSize = 2000.0;
     protected ref map<string, ref array<AG0_TDLDeviceComponent>> m_mSpatialGrid = new map<string, ref array<AG0_TDLDeviceComponent>>();
-    protected float m_fTimeSinceGridRebuild = 999.0; // Force rebuild on first update
-    protected float m_fGridRebuildInterval = 5.0; // Rebuild every 5 seconds
-	protected float m_fMaxDeviceRange = 1000.0;  // Track maximum range
-	protected bool m_bCellSizeNeedsUpdate = false; // Flag for cell size change
+    protected float m_fTimeSinceGridRebuild = 999.0;
+    protected float m_fGridRebuildInterval = 5.0;
+	protected float m_fMaxDeviceRange = 1000.0;
+	protected bool m_bCellSizeNeedsUpdate = false;
 
 	
     //------------------------------------------------------------------------------------------------
@@ -307,7 +344,6 @@ class AG0_TDLSystem : WorldSystem
 	        .SetAbstract(false)
 	        .SetLocation(WorldSystemLocation.Server)
 	        .AddPoint(WorldSystemPoint.Frame);
-	        //.AddController(AG0_TDLController);
 	        
 	    Print("AG0_TDLSystem: Device-centric system initialized", LogLevel.DEBUG);
 	}
@@ -335,8 +371,6 @@ class AG0_TDLSystem : WorldSystem
 	
 	//------------------------------------------------------------------------------------------------
 	//! Get persistent player identity UUID from session player ID
-	//! @param playerId Session-specific player ID (integer)
-	//! @return Persistent Game Identity UUID string, or empty if unavailable
 	string GetPlayerIdentityId(int playerId)
 	{
 	    if (playerId < 0)
@@ -347,8 +381,6 @@ class AG0_TDLSystem : WorldSystem
 	
 	//------------------------------------------------------------------------------------------------
 	//! Get player platform kind (Steam, Xbox, PlayStation)
-	//! @param playerId Session-specific player ID
-	//! @return PlatformKind enum value
 	PlatformKind GetPlayerPlatform(int playerId)
 	{
 	    if (playerId <= 0)
@@ -389,7 +421,6 @@ class AG0_TDLSystem : WorldSystem
 	        
             if (playerId > 0)
                return owner;
-			//TODO: just return the playerId when found... since that's what we need to use anyways.
 	        
 	        owner = owner.GetParent();
 	    }
@@ -400,17 +431,14 @@ class AG0_TDLSystem : WorldSystem
 	{
 	    super.OnInit();
 	    
-		// Reset shutdown flag on init (handles world reload)
-    	s_bShuttingDown = false;
+		s_bShuttingDown = false;
 		
-	    // CRITICAL: Only initialize API on the server
 	    if (!Replication.IsServer())
 	    {
 	        Print("TDL_SYSTEM: Running on client/proxy - skipping API initialization", LogLevel.DEBUG);
 	        return;
 	    }
 	    
-	    // Initialize API Manager
 	    m_ApiManager = new AG0_TDLApiManager();
 	    if (m_ApiManager.Initialize())
 	    {
@@ -442,7 +470,6 @@ class AG0_TDLSystem : WorldSystem
 	    {
 	        m_ApiManager.Update(timeSlice);
 	        
-	        // Heartbeat
 	        m_fTimeSinceApiHeartbeat += timeSlice;
 	        if (m_fTimeSinceApiHeartbeat >= API_HEARTBEAT_INTERVAL)
 	        {
@@ -450,7 +477,6 @@ class AG0_TDLSystem : WorldSystem
 	            m_fTimeSinceApiHeartbeat = 0;
 	        }
 	        
-	        // Periodic state sync
 	        m_fTimeSinceApiStateSync += timeSlice;
 	        if (m_fTimeSinceApiStateSync >= m_fApiStateSyncInterval)
 	        {
@@ -458,7 +484,6 @@ class AG0_TDLSystem : WorldSystem
 	            m_fTimeSinceApiStateSync = 0;
 	        }
 			
-			// Shape overlay sync
 			m_fTimeSinceShapesPoll += timeSlice;
 			if (m_fTimeSinceShapesPoll >= API_SHAPES_POLL_INTERVAL)
 			{
@@ -473,7 +498,6 @@ class AG0_TDLSystem : WorldSystem
 	{
 	    s_bShuttingDown = true;
 	    
-	    // Clean up API manager
 	    if (m_ApiManager)
 	        m_ApiManager = null;
 	}
@@ -589,8 +613,6 @@ class AG0_TDLSystem : WorldSystem
             
             m_mSpatialGrid.Get(cellKey).Insert(device);
         }
-        
-        //Print(string.Format("TDL_SPATIAL_GRID: Rebuilt with %1 devices in %2 cells", m_aRegisteredNetworkDevices.Count(), m_mSpatialGrid.Count()), LogLevel.DEBUG);
     }
 	
 	protected void UpdateMaxDeviceRange()
@@ -598,7 +620,6 @@ class AG0_TDLSystem : WorldSystem
 	    float previousMaxRange = m_fMaxDeviceRange;
 	    float currentMaxRange = 0.0;
 	    
-	    // Find the device with the longest range
 	    foreach (AG0_TDLDeviceComponent device : m_aRegisteredNetworkDevices)
 	    {
 	        float deviceRange = device.GetEffectiveNetworkRange();
@@ -606,15 +627,12 @@ class AG0_TDLSystem : WorldSystem
 	            currentMaxRange = deviceRange;
 	    }
 	    
-	    // Only update if range changed significantly (>10% or >100m)
 	    float rangeDifference = Math.AbsFloat(currentMaxRange - previousMaxRange);
 	    if (rangeDifference > 100.0 || rangeDifference > (previousMaxRange * 0.1))
 	    {
 	        m_fMaxDeviceRange = currentMaxRange;
-	        m_fGridCellSize = 2.0 * m_fMaxDeviceRange;  // Always 2x max range
-	        m_fTimeSinceGridRebuild = 999.0;  // Force immediate rebuild
-	        
-	        //Print(string.Format("TDL_SPATIAL_GRID: Max device range updated to %1m, cell size now %2m", m_fMaxDeviceRange, m_fGridCellSize), LogLevel.DEBUG);
+	        m_fGridCellSize = 2.0 * m_fMaxDeviceRange;
+	        m_fTimeSinceGridRebuild = 999.0;
 	    }
 	}
     
@@ -627,7 +645,6 @@ class AG0_TDLSystem : WorldSystem
         int cy = Math.Floor(pos[1] / m_fGridCellSize);
         int cz = Math.Floor(pos[2] / m_fGridCellSize);
         
-        // Check 3x3x3 cube of cells (27 cells total in 3D space)
         for (int dx = -1; dx <= 1; dx++)
         {
             for (int dy = -1; dy <= 1; dy++)
@@ -641,7 +658,6 @@ class AG0_TDLSystem : WorldSystem
                     {
                         foreach (AG0_TDLDeviceComponent device : cellDevices)
                         {
-                            // Only include devices from this specific network
                             if (networkDevices.Contains(device))
                                 nearby.Insert(device);
                         }
@@ -680,7 +696,6 @@ class AG0_TDLSystem : WorldSystem
 	        return;
 	    }
 	    
-	    // Just register immediately - no delay needed
 	    DelayedDeviceRegistration(device);
 	}
 	
@@ -705,7 +720,6 @@ class AG0_TDLSystem : WorldSystem
 	        return;
 	    }
 	    
-	    // Only register devices with network capability
 	    if (!device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS))
 	    {
 	        Print("TDL_DEVICE_REGISTRATION: Device lacks NETWORK_ACCESS capability", LogLevel.DEBUG);
@@ -750,7 +764,6 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    m_fTimeSinceGridRebuild = 999.0;
 	    
-	    // Remove from any networks
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        if (network.GetNetworkDevices().Contains(device))
@@ -760,7 +773,6 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
 	    
-	    // Clean up empty networks
 	    int networksRemoved = 0;
 	    for (int i = m_aNetworks.Count() - 1; i >= 0; i--)
 	    {
@@ -806,23 +818,27 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    Print(string.Format("TDL_NETWORK_CREATE: Attempting to create network '%1' by %2", networkName, playerName), LogLevel.DEBUG);
 	    
-	    // Check for existing network with same credentials
+	    // Check for existing network with same credentials AND compatible waveform.
+	    // Same name+password on a different waveform is a distinct network — allow creation.
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
-	        if (network.GetNetworkName() == networkName && network.GetNetworkPassword() == password)
+	        if (network.GetNetworkName() == networkName && network.GetNetworkPassword() == password
+	            && (creator.GetWaveform() & network.GetWaveform()) != 0)
 	        {
-	            Print(string.Format("TDL_NETWORK_CREATE: Network '%1' already exists, joining instead", networkName), LogLevel.DEBUG);
+	            Print(string.Format("TDL_NETWORK_CREATE: Network '%1' already exists with compatible waveform, joining instead", networkName), LogLevel.DEBUG);
 	            JoinNetwork(creator, networkName, password);
 	            return network.GetNetworkID();
 	        }
 	    }
 	    
-	    // Create new network
-	    AG0_TDLNetwork newNetwork = new AG0_TDLNetwork(m_iNextNetworkID++, networkName, password);
+	    // Create new network — inherits waveform from the creating device
+	    AG0_ETDLWaveform creatorWaveform = creator.GetWaveform();
+	    AG0_TDLNetwork newNetwork = new AG0_TDLNetwork(m_iNextNetworkID++, networkName, password, creatorWaveform);
 	    newNetwork.AddDevice(creator, deviceRplId, creator.GetDisplayName(), position);
 	    m_aNetworks.Insert(newNetwork);
 	    
-	    Print(string.Format("TDL_NETWORK_CREATE: Successfully created network '%1' (ID: %2)", networkName, newNetwork.GetNetworkID()), LogLevel.DEBUG);
+	    Print(string.Format("TDL_NETWORK_CREATE: Successfully created network '%1' (ID: %2, Waveform: %3)", 
+	        networkName, newNetwork.GetNetworkID(), creatorWaveform), LogLevel.DEBUG);
 	    
 	    NotifyNetworkJoined(creator, newNetwork.GetNetworkID(), newNetwork.GetDeviceData());
 		ApiNotifyNetworkCreated(newNetwork, playerName);
@@ -868,9 +884,17 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    Print(string.Format("TDL_NETWORK_JOIN: Found %1 matching networks", matchingNetworks.Count()), LogLevel.DEBUG);
 	    
-	    // Check if in range of any existing network device
+	    // Check if in range of any existing network device — waveform must be compatible
 	    foreach (AG0_TDLNetwork network : matchingNetworks)
 	    {
+	        // Waveform gate: joining device must share at least one waveform bit with the network
+	        if ((device.GetWaveform() & network.GetWaveform()) == 0)
+	        {
+	            Print(string.Format("TDL_NETWORK_JOIN: Device waveform %1 incompatible with network waveform %2, skipping",
+	                device.GetWaveform(), network.GetWaveform()), LogLevel.DEBUG);
+	            continue;
+	        }
+	        
 	        if (IsDeviceInNetworkRange(device, network))
 	        {
 	            Print(string.Format("TDL_NETWORK_JOIN: Device in range of network '%1', joining", network.GetNetworkName()), LogLevel.DEBUG);
@@ -881,7 +905,7 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
 	    
-	    Print(string.Format("TDL_NETWORK_JOIN: Device not in range of any matching networks"), LogLevel.DEBUG);
+	    Print(string.Format("TDL_NETWORK_JOIN: Device not in range of any compatible matching networks"), LogLevel.DEBUG);
 	    return false;
 	}
     
@@ -939,6 +963,10 @@ class AG0_TDLSystem : WorldSystem
 	    if (!deviceA || !deviceB) return false;
 	    if (!deviceA.CanAccessNetwork() || !deviceB.CanAccessNetwork()) return false;
 	    
+	    // Waveform gate: devices must share at least one waveform bit to link at the RF layer
+	    if ((deviceA.GetWaveform() & deviceB.GetWaveform()) == 0)
+	        return false;
+	    
 	    vector posA = deviceA.GetOwner().GetOrigin();
 	    vector posB = deviceB.GetOwner().GetOrigin();
 	    
@@ -947,12 +975,10 @@ class AG0_TDLSystem : WorldSystem
 	    float maxPossibleRange = Math.Max(rangeA, rangeB);
 	    
 	    // OPTIMIZATION: Early rejection using axis-aligned bounding box (AABB)
-	    // This is much cheaper than distance calculation (no sqrt)
 	    if (Math.AbsFloat(posA[0] - posB[0]) > maxPossibleRange) return false;
 	    if (Math.AbsFloat(posA[1] - posB[1]) > maxPossibleRange) return false;
 	    if (Math.AbsFloat(posA[2] - posB[2]) > maxPossibleRange) return false;
 	    
-	    // Now do the actual distance calculation
 	    float distance = vector.Distance(posA, posB);
 	    float maxRange = Math.Min(rangeA, rangeB);
 	    
@@ -995,13 +1021,9 @@ class AG0_TDLSystem : WorldSystem
    	protected void UpdateNetworks()
 	{
 	    if (!Replication.IsServer()) return;
-	    
-	    //Print("TDL_SYSTEM_UPDATE: Starting network update cycle", LogLevel.DEBUG);
-	    //LogNetworkState("UpdateNetworks");
 		
 		UpdateMaxDeviceRange();
 	    
-	    // OPTIMIZATION: Rebuild spatial grid periodically
 	    m_fTimeSinceGridRebuild += GetWorld().GetFixedTimeSlice();
 	    if (m_fTimeSinceGridRebuild >= m_fGridRebuildInterval)
 	    {
@@ -1011,15 +1033,15 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    CheckNetworkMerges();
 	    
+	    // Rebuild bridge links after merges so AppendBridgedMembers has fresh data
+	    UpdateBridgeLinks();
+	    
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        UpdateNetworkConnectivity(network);
 	    }
 	    
-	    // Update video streaming after network connectivity changes
 	    UpdateVideoStreaming();
-	    
-	    //Print("TDL_SYSTEM_UPDATE: Network update cycle complete", LogLevel.DEBUG);
 	}
     
     protected void CheckNetworkMerges()
@@ -1034,6 +1056,12 @@ class AG0_TDLSystem : WorldSystem
                 
                 if (networkA.GetNetworkName() != networkB.GetNetworkName() || 
                     networkA.GetNetworkPassword() != networkB.GetNetworkPassword())
+                    continue;
+                
+                // Only merge networks that share at least one waveform bit.
+                // Incompatible-waveform networks with matching credentials are bridged,
+                // not merged — bridging is handled separately by UpdateBridgeLinks().
+                if ((networkA.GetWaveform() & networkB.GetWaveform()) == 0)
                     continue;
                 
                 bool canMerge = false;
@@ -1074,6 +1102,168 @@ class AG0_TDLSystem : WorldSystem
         }
     }
     
+    //------------------------------------------------------------------------------------------------
+    // Scan all player entities for bridge conditions and register AG0_TDLBridgeLink instances.
+    // A bridge exists when one player entity has devices in 2+ distinct networks AND at least one
+    // of their held devices carries the BRIDGE capability.
+    // Bridge links are transient — cleared and rebuilt every update cycle.
+    //------------------------------------------------------------------------------------------------
+    protected void UpdateBridgeLinks()
+    {
+        if (!Replication.IsServer()) return;
+        
+        m_aBridgeLinks.Clear();
+        
+        PlayerManager playerMgr = GetGame().GetPlayerManager();
+        if (!playerMgr) return;
+        
+        array<int> playerIds = {};
+        playerMgr.GetPlayers(playerIds);
+        
+        foreach (int playerId : playerIds)
+        {
+            IEntity player = playerMgr.GetPlayerControlledEntity(playerId);
+            if (!player) continue;
+            
+            array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(player);
+            
+            // Collect distinct network IDs this player's powered devices are members of,
+            // and check for BRIDGE capability across all devices (powered or not).
+            array<int> playerNetworkIds = {};
+            bool hasBridgeCapability = false;
+            RplId bridgeDeviceRplId = RplId.Invalid();
+            
+            foreach (AG0_TDLDeviceComponent device : playerDevices)
+            {
+                // BRIDGE capability check doesn't require the device to be powered —
+                // a dedicated bridge box might have no RF of its own.
+                if (device.HasCapability(AG0_ETDLDeviceCapability.BRIDGE))
+                {
+                    hasBridgeCapability = true;
+                    bridgeDeviceRplId = device.GetDeviceRplId();
+                }
+                
+                if (!device.IsPowered()) continue;
+                
+                int netId = device.GetCurrentNetworkID();
+                if (netId > 0 && playerNetworkIds.Find(netId) == -1)
+                    playerNetworkIds.Insert(netId);
+            }
+            
+            // Need at least 2 distinct networks and BRIDGE capability to form a link
+            if (!hasBridgeCapability || playerNetworkIds.Count() < 2) continue;
+            
+            // Register a bridge link for every pair of networks this player bridges
+            for (int i = 0; i < playerNetworkIds.Count() - 1; i++)
+            {
+                for (int j = i + 1; j < playerNetworkIds.Count(); j++)
+                {
+                    int netA = playerNetworkIds[i];
+                    int netB = playerNetworkIds[j];
+                    
+                    // Deduplicate — don't register the same pair twice
+                    bool alreadyLinked = false;
+                    foreach (AG0_TDLBridgeLink existingLink : m_aBridgeLinks)
+                    {
+                        if ((existingLink.m_iNetworkA == netA && existingLink.m_iNetworkB == netB) ||
+                            (existingLink.m_iNetworkA == netB && existingLink.m_iNetworkB == netA))
+                        {
+                            alreadyLinked = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!alreadyLinked)
+                    {
+                        m_aBridgeLinks.Insert(new AG0_TDLBridgeLink(netA, netB, bridgeDeviceRplId));
+                        Print(string.Format("TDL_BRIDGE: Active link Network %1 <-> Network %2 via player %3",
+                            netA, netB, playerMgr.GetPlayerName(playerId)), LogLevel.DEBUG);
+                    }
+                }
+            }
+        }
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    // Append members from bridged networks into a device's connectedMembers map.
+    // Called from UpdateNetworkConnectivity before NotifyNetworkConnectivity so that
+    // bridged SA flows through the existing notification path transparently.
+    //------------------------------------------------------------------------------------------------
+    protected void AppendBridgedMembers(AG0_TDLNetwork network, AG0_TDLDeviceComponent device,
+                                        inout map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
+    {
+        int myNetworkId = network.GetNetworkID();
+        
+        foreach (AG0_TDLBridgeLink link : m_aBridgeLinks)
+        {
+            if (!link.InvolvesNetwork(myNetworkId)) continue;
+            
+            int foreignNetworkId = link.GetOtherNetwork(myNetworkId);
+            AG0_TDLNetwork foreignNetwork = FindNetworkByID(foreignNetworkId);
+            if (!foreignNetwork) continue;
+            
+            foreach (AG0_TDLDeviceComponent foreignDevice : foreignNetwork.GetNetworkDevices())
+            {
+                RplId foreignRplId = foreignDevice.GetDeviceRplId();
+                if (foreignRplId == RplId.Invalid()) continue;
+                
+                // Don't duplicate a member already visible on this network
+                if (connectedMembers.Contains(foreignRplId)) continue;
+                
+                AG0_TDLNetworkMember foreignMemberData = foreignNetwork.GetDeviceData().Get(foreignRplId);
+                if (!foreignMemberData) continue;
+                
+                IEntity foreignEntity = foreignDevice.GetOwner();
+                if (!foreignEntity) continue;
+                
+                // Build a bridged member entry using live position
+                AG0_TDLNetworkMember bridgedData = new AG0_TDLNetworkMember();
+                bridgedData.SetRplId(foreignMemberData.GetRplId());
+                bridgedData.SetPlayerName(foreignDevice.GetDisplayName());
+                
+                vector foreignPos = foreignEntity.GetOrigin();
+                foreignNetwork.UpdateDevicePosition(foreignRplId, foreignPos);
+                bridgedData.SetPosition(foreignPos);
+                
+                bridgedData.SetNetworkIP(foreignMemberData.GetNetworkIP());
+                
+                // Aggregate capabilities from the foreign player's all devices
+                IEntity foreignPlayer = GetPlayerFromDevice(foreignDevice);
+                int aggregatedCaps = 0;
+                int foreignOwnerPlayerId = -1;
+                if (foreignPlayer)
+                {
+                    PlayerManager playerMgr = GetGame().GetPlayerManager();
+                    foreignOwnerPlayerId = playerMgr.GetPlayerIdFromControlledEntity(foreignPlayer);
+                    
+                    array<AG0_TDLDeviceComponent> foreignPlayerDevices = GetPlayerAllTDLDevices(foreignPlayer);
+                    foreach (AG0_TDLDeviceComponent dev : foreignPlayerDevices)
+                    {
+                        if (dev.IsCameraBroadcasting() && dev.HasCapability(AG0_ETDLDeviceCapability.VIDEO_SOURCE))
+                            bridgedData.SetVideoSourceRplId(dev.GetDeviceRplId());
+                        if (dev.IsPowered())
+                            aggregatedCaps |= dev.GetActiveCapabilities();
+                    }
+                }
+                else
+                {
+                    aggregatedCaps = foreignMemberData.GetCapabilities();
+                }
+                bridgedData.SetCapabilities(aggregatedCaps);
+                bridgedData.SetOwnerPlayerId(foreignOwnerPlayerId);
+                
+                // Signal not meaningful across a bridge — use 100 to indicate active bridge link
+                bridgedData.SetSignalStrength(100.0);
+                
+                // Tag as bridged so UI can visually distinguish foreign-network members
+                bridgedData.SetIsBridged(true);
+                bridgedData.SetSourceNetworkId(foreignNetworkId);
+                
+                connectedMembers.Set(foreignRplId, bridgedData);
+            }
+        }
+    }
+    
     protected void UpdateNetworkConnectivity(AG0_TDLNetwork network)
 	{
 	    if (!network || !network.HasDevices()) return;
@@ -1082,7 +1272,6 @@ class AG0_TDLSystem : WorldSystem
 	    {
 	        if (!device.CanAccessNetwork()) continue;
 	        
-	        // First, update this device's position in the authoritative network data
 	        RplId deviceRplId = device.GetDeviceRplId();
 	        if (deviceRplId != RplId.Invalid())
 	        {
@@ -1110,7 +1299,6 @@ class AG0_TDLSystem : WorldSystem
 	            
 	            if (connectedRplId != RplId.Invalid())
 	            {
-	                // Update the connected device's position in authoritative data too
 	                IEntity connectedEntity = connectedDevice.GetOwner();
 	                if (connectedEntity)
 	                {
@@ -1132,7 +1320,6 @@ class AG0_TDLSystem : WorldSystem
 	                        AG0_TDLNetworkMember connectedData = new AG0_TDLNetworkMember();
 	                        connectedData.SetRplId(memberData.GetRplId());
 	                        connectedData.SetPlayerName(connectedDevice.GetDisplayName());
-	                        // Use LIVE position, not stored position!
 	                        connectedData.SetPosition(connectedPos);
 	                        connectedData.SetNetworkIP(memberData.GetNetworkIP());
 							IEntity connectedPlayer = GetPlayerFromDevice(connectedDevice);
@@ -1170,16 +1357,16 @@ class AG0_TDLSystem : WorldSystem
 	            }
 	        }
 	        
-	        // Use the fixed NotifyNetworkConnectivity which handles everything
+	        // Append SA from any networks bridged to this one
+	        AppendBridgedMembers(network, device, connectedMembers);
+	        
 	        NotifyNetworkConnectivity(device, connectedMembers);
-			// Propagate messages based on new connectivity
-    		PropagateMessagesForDevice(this, network, device, connectedMembers);
+			PropagateMessagesForDevice(this, network, device, connectedMembers);
 	    }
 		// After all devices processed, derive player connectivity
 	    map<int, ref set<int>> playerConnections = new map<int, ref set<int>>();
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
 	    
-	    // Walk through all devices and their connections
 	    foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
 	    {
 	        IEntity playerEntity = GetPlayerFromDevice(device);
@@ -1194,7 +1381,6 @@ class AG0_TDLSystem : WorldSystem
 	        if (!playerConnections.Contains(ownerID))
 	            playerConnections.Insert(ownerID, new set<int>());
 	        
-	        // Check device's connected members
 	        array<RplId> connectedRplIds = device.GetConnectedMembers();
 	        foreach (RplId connectedRplId : connectedRplIds)
 	        {
@@ -1210,14 +1396,12 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
 	    
-	    // Convert and RPC
 	    foreach (int playerID, set<int> connections : playerConnections)
 		{
 		    array<int> connArray = {};
 		    foreach (int id : connections)
 		        connArray.Insert(id);
 		    
-		    // Get the specific player's controller
 		    SCR_PlayerController controller = SCR_PlayerController.Cast(
 		        GetGame().GetPlayerManager().GetPlayerController(playerID)
 		    );
@@ -1225,12 +1409,10 @@ class AG0_TDLSystem : WorldSystem
 		    if (!controller) 
 		    {
 		        Print(string.Format("TDL_System: Controller not found for player %1", playerID), LogLevel.DEBUG);
-		        continue; // Changed from return to continue so other players still get notified
+		        continue;
 		    }
 		    
-		    //PrintFormat("TDL_System: Notifying player controller for player %1, %2", playerID, controller, LogLevel.DEBUG);
 		    controller.NotifyConnectedPlayers(connArray);
-		    //PrintFormat("Notified connected players: %1", connArray, LogLevel.DEBUG);
 		}
 	}
     
@@ -1247,7 +1429,6 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    vector sourcePos = sourceEntity.GetOrigin();
 	    
-	    // OPTIMIZATION: Only check nearby devices using spatial grid
 	    array<AG0_TDLDeviceComponent> nearbyDevices = GetNearbyDevices(sourcePos, network);
 	    
 	    foreach (AG0_TDLDeviceComponent device : nearbyDevices)
@@ -1266,8 +1447,6 @@ class AG0_TDLSystem : WorldSystem
     
 	//------------------------------------------------------------------------------------------------
 	//! Push aggregated shape data to a single player across all their network memberships.
-	//! Collects every network the player has a device in, packs all matching shapes into
-	//! one RPC. If the player is in zero networks, sends empty (clears client shapes).
 	protected void PushPlayerShapes(SCR_PlayerController controller, int playerId)
 	{
 		if (!m_ApiManager || !controller) return;
@@ -1275,14 +1454,12 @@ class AG0_TDLSystem : WorldSystem
 		AG0_TDLMapShapeManager shapeMgr = m_ApiManager.GetShapeManager();
 		if (!shapeMgr) return;
 		
-		// Find all networks this player belongs to
 		PlayerManager playerMgr = GetGame().GetPlayerManager();
 		if (!playerMgr) return;
 		
 		IEntity playerEntity = playerMgr.GetPlayerControlledEntity(playerId);
 		if (!playerEntity)
 		{
-			// Player has no entity — send empty to clear
 			controller.ReceiveTDLShapes("", "");
 			return;
 		}
@@ -1302,7 +1479,6 @@ class AG0_TDLSystem : WorldSystem
 			}
 		}
 		
-		// Pack shapes from all player's networks in one shot
 		string packedShapes = shapeMgr.GetPackedShapeDataForNetworks(playerNetworkIds);
 		string syncHash = shapeMgr.GetLastSyncHash();
 		
@@ -1311,7 +1487,6 @@ class AG0_TDLSystem : WorldSystem
 	
 	//------------------------------------------------------------------------------------------------
 	//! Distribute current shape data to all networked players.
-	//! Called by ApiManager when shapes change (syncHash differs from previous poll).
 	void DistributeShapesToClients()
 	{
 		if (!Replication.IsServer()) return;
@@ -1319,7 +1494,6 @@ class AG0_TDLSystem : WorldSystem
 		PlayerManager playerMgr = GetGame().GetPlayerManager();
 		if (!playerMgr) return;
 		
-		// Collect unique players across all networks
 		set<int> pushedPlayers = new set<int>();
 		
 		foreach (AG0_TDLNetwork network : m_aNetworks)
@@ -1365,7 +1539,6 @@ class AG0_TDLSystem : WorldSystem
         {
             NotifyNetworkJoined(device, network.GetNetworkID(), network.GetDeviceData());
 			
-			// Push aggregated shapes per unique player
 			if (playerMgr)
 			{
 				IEntity player = GetPlayerFromDevice(device);
@@ -1412,34 +1585,25 @@ class AG0_TDLSystem : WorldSystem
 	        controller.NotifyClearNetwork(networkId);
 	    }
 		
-		// Re-push shapes aggregated from remaining networks (empty if player has none left)
 		PushPlayerShapes(controller, playerId);
     }
 
     protected void NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
 	{
-	    // Build array of connected device IDs for the connectivity update
 	    array<RplId> deviceIDs = new array<RplId>();
 	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers) 
 	    { 
 	        deviceIDs.Insert(rplId); 
 	    }
 	    
-	    // Always notify the network device about connectivity (existing behavior)
 	    device.OnNetworkConnectivityUpdated(deviceIDs);
 	    
-	    // Convert map to array once (used for both paths)
 	    array<ref AG0_TDLNetworkMember> membersArray = {};
 	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
 	    {
 	        membersArray.Insert(member);
 	    }
 	    
-	    // ========================================================================
-	    // Direct device notification for INFORMATION capability devices
-	    // This enables shared displays (vehicles, fixed installations) to work
-	    // by giving them their own copy of network data that any player can access
-	    // ========================================================================
 	    if (device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
 	    {
 	        device.SetLocalNetworkMembers(membersArray);
@@ -1447,10 +1611,6 @@ class AG0_TDLSystem : WorldSystem
 	            membersArray.Count(), device.GetOwner()), LogLevel.DEBUG);
 	    }
 	    
-	    // ========================================================================
-	    // Player controller path for player-held devices
-	    // This maintains the efficient aggregation for personal devices
-	    // ========================================================================
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player) return;
 	    
@@ -1467,7 +1627,6 @@ class AG0_TDLSystem : WorldSystem
             return;
         }
 	    
-	    // Get the network ID from the device
 	    int networkId = device.GetCurrentNetworkID();
 	    if (networkId <= 0) return;
 	    
@@ -1488,15 +1647,12 @@ class AG0_TDLSystem : WorldSystem
 	//------------------------------------------------------------------------------------------------
 	// Video Broadcasting Coordination
 	//------------------------------------------------------------------------------------------------
-	// Add broadcasting tracking per network
     protected void NotifyNetworkBroadcastingChange(AG0_TDLNetwork network)
     {
-        // Collect all broadcasting devices in this network
         array<RplId> broadcastingDevices = {};
         
         foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
         {
-            // Check all devices owned by this player
             IEntity player = GetPlayerFromDevice(device);
             if (!player) continue;
             
@@ -1513,7 +1669,6 @@ class AG0_TDLSystem : WorldSystem
         }
 		PrintFormat("TDL_SYSTEM: Broadcasting devices count for network %1 is %2", network.GetNetworkID(), broadcastingDevices.Count(), LogLevel.DEBUG);
         
-        // Notify all players in network
         PlayerManager playerMgr = GetGame().GetPlayerManager();
         set<int> notifiedPlayers = new set<int>();
         
@@ -1558,12 +1713,10 @@ class AG0_TDLSystem : WorldSystem
 	        return;
 	    }
 	    
-	    // Get the broadcasting device's RplId (or Invalid if stopping)
 	    RplId videoSourceRplId = RplId.Invalid();
 	    if (device.IsCameraBroadcasting())
 	        videoSourceRplId = device.GetDeviceRplId();
 	    
-	    // Find which network this player is in and update their member entry
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(player);
@@ -1572,7 +1725,6 @@ class AG0_TDLSystem : WorldSystem
 	        {
 	            if (network.GetNetworkDevices().Contains(playerDevice))
 	            {
-	                // Found the network - update the member data for this player's network device
 	                RplId memberRplId = playerDevice.GetDeviceRplId();
 	                AG0_TDLNetworkMember memberData = network.GetDeviceData().Get(memberRplId);
 	                
@@ -1583,10 +1735,7 @@ class AG0_TDLSystem : WorldSystem
 	                        videoSourceRplId, memberData.GetPlayerName()), LogLevel.DEBUG);
 	                }
 	                
-	                // Notify network of change (existing logic)
 	                NotifyNetworkBroadcastingChange(network);
-	                
-	                // Also trigger member data replication
 	                NotifyNetworkMembersUpdated(network);
 	                return;
 	            }
@@ -1600,7 +1749,6 @@ class AG0_TDLSystem : WorldSystem
 	{
 	    if (!Replication.IsServer()) return;
 	    
-	    // Same logic, just collect first then apply atomically
 	    foreach (AG0_TDLDeviceComponent networkDevice : m_aRegisteredNetworkDevices)
 	    {
 	        if (!networkDevice.IsInNetwork()) continue;
@@ -1632,8 +1780,6 @@ class AG0_TDLSystem : WorldSystem
 	}
 	
 	//------------------------------------------------------------------------------------------------
-	// Handle callsign changes and propagate to network
-	//------------------------------------------------------------------------------------------------
 	void OnDeviceCallsignChanged(AG0_TDLDeviceComponent device)
 	{
 	    if (!Replication.IsServer()) return;
@@ -1644,12 +1790,10 @@ class AG0_TDLSystem : WorldSystem
 	    Print(string.Format("TDL_SYSTEM_CALLSIGN: Processing callsign change for device %1", 
 	        device.GetOwner()), LogLevel.DEBUG);
 	    
-	    // Find the network this device belongs to
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        if (network.GetNetworkDevices().Contains(device))
 	        {
-	            // Update the member data with new display name
 	            AG0_TDLNetworkMember memberData = network.GetDeviceData().Get(deviceRplId);
 	            if (memberData)
 	            {
@@ -1659,7 +1803,6 @@ class AG0_TDLSystem : WorldSystem
 	                Print(string.Format("TDL_SYSTEM_CALLSIGN: Updated member data for %1 to '%2'", 
 	                    deviceRplId, newDisplayName), LogLevel.DEBUG);
 	                
-	                // Trigger update to all network members
 	                NotifyNetworkMembersUpdated(network);
 	            }
 	            break;
@@ -1669,21 +1812,18 @@ class AG0_TDLSystem : WorldSystem
 	
 	//------------------------------------------------------------------------------------------------
     // MAIN ENTRY POINT: Send a message from a device
-    // Called via RPC from player controller
     //------------------------------------------------------------------------------------------------
     static void SendMessage(AG0_TDLSystem system, RplId senderDeviceRplId, string content,
                            ETDLMessageType messageType, RplId recipientRplId = RplId.Invalid())
     {
         if (!Replication.IsServer()) return;
         
-        // Validate content
         if (content.IsEmpty())
         {
             Print("TDL_MESSAGE_SYSTEM: Empty message content, ignoring", LogLevel.DEBUG);
             return;
         }
         
-        // Find the sender device
         AG0_TDLDeviceComponent senderDevice = system.GetDeviceByRplId(senderDeviceRplId);
         if (!senderDevice)
         {
@@ -1691,7 +1831,6 @@ class AG0_TDLSystem : WorldSystem
             return;
         }
         
-        // Find which network the sender is in
         AG0_TDLNetwork network = FindNetworkForDevice(system, senderDevice);
         if (!network)
         {
@@ -1701,7 +1840,6 @@ class AG0_TDLSystem : WorldSystem
         
         string senderCallsign = senderDevice.GetDisplayName();
         
-        // Create the message based on type
         int messageId;
         if (messageType == ETDLMessageType.NETWORK_BROADCAST)
         {
@@ -1710,7 +1848,6 @@ class AG0_TDLSystem : WorldSystem
         }
         else if (messageType == ETDLMessageType.DIRECT)
         {
-            // Get recipient callsign
             string recipientCallsign = "Unknown";
             AG0_TDLNetworkMember recipientMember = network.GetDeviceData().Get(recipientRplId);
             if (recipientMember)
@@ -1721,12 +1858,9 @@ class AG0_TDLSystem : WorldSystem
 			system.ApiNotifyMessageSent(network, senderCallsign, "direct");
         }
         
-        // Immediately propagate to connected devices
         PropagateMessagesInNetwork(system, network);
     }
     
-    //------------------------------------------------------------------------------------------------
-    // Mark a message as read
     //------------------------------------------------------------------------------------------------
     static void MarkMessageRead(AG0_TDLSystem system, RplId readerDeviceRplId, int messageId)
     {
@@ -1742,15 +1876,10 @@ class AG0_TDLSystem : WorldSystem
         if (msg)
         {
             msg.MarkReadBy(readerDeviceRplId);
-            
-            // Notify the sender that their message was read
             NotifySenderOfReadReceipt(system, network, msg, readerDeviceRplId);
         }
     }
     
-    //------------------------------------------------------------------------------------------------
-    // Called during connectivity updates to propagate messages to newly reachable devices
-    // This is the key to mesh network message behavior
     //------------------------------------------------------------------------------------------------
     static void PropagateMessagesForDevice(AG0_TDLSystem system, AG0_TDLNetwork network,
                                           AG0_TDLDeviceComponent device,
@@ -1762,14 +1891,12 @@ class AG0_TDLSystem : WorldSystem
         RplId deviceRplId = device.GetDeviceRplId();
         if (deviceRplId == RplId.Invalid()) return;
         
-        // Build set of connected device RplIds
         set<RplId> connectedRplIds = new set<RplId>();
         foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
         {
             connectedRplIds.Insert(rplId);
         }
         
-        // Find messages that can now be delivered to this device
         array<ref AG0_TDLMessage> deliverable = GetDeliverableMessages(network, deviceRplId, connectedRplIds);
         
         if (deliverable.Count() > 0)
@@ -1777,29 +1904,24 @@ class AG0_TDLSystem : WorldSystem
             Print(string.Format("TDL_MESSAGE_PROPAGATION: %1 new messages can be delivered to %2",
                 deliverable.Count(), device.GetDisplayName()), LogLevel.DEBUG);
             
-            // Mark messages as delivered and notify client
             foreach (AG0_TDLMessage msg : deliverable)
             {
                 msg.MarkDeliveredTo(deviceRplId);
             }
             
-            // Send all relevant messages to client
             SendMessagesToClient(system, network, device);
         }
     }
     
-    //------------------------------------------------------------------------------------------------
-    // Propagate messages across entire network (called after new message or connectivity change)
     //------------------------------------------------------------------------------------------------
     static void PropagateMessagesInNetwork(AG0_TDLSystem system, AG0_TDLNetwork network)
     {
         if (!Replication.IsServer()) return;
         if (!network) return;
         
-        // Iterate until no more propagation happens
         bool anyDelivered = true;
         int iterations = 0;
-        const int MAX_ITERATIONS = 10; // Prevent infinite loops
+        const int MAX_ITERATIONS = 10;
         
         while (anyDelivered && iterations < MAX_ITERATIONS)
         {
@@ -1813,12 +1935,8 @@ class AG0_TDLSystem : WorldSystem
                 RplId deviceRplId = device.GetDeviceRplId();
                 if (deviceRplId == RplId.Invalid()) continue;
                 
-                // Get this device's current connectivity
-                // We need to get the connected members for this specific device
-                // This requires accessing the system's connectivity data
                 set<RplId> connectedRplIds = GetDeviceConnectedRplIds(system, device, network);
                 
-                // Check each message
                 array<ref AG0_TDLMessage> messages = GetNetworkMessages(network);
                 foreach (AG0_TDLMessage msg : messages)
                 {
@@ -1834,7 +1952,6 @@ class AG0_TDLSystem : WorldSystem
             }
         }
         
-        // After propagation, notify all devices of their current message state
         foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
         {
             SendMessagesToClient(system, network, device);
@@ -1842,25 +1959,20 @@ class AG0_TDLSystem : WorldSystem
     }
     
     //------------------------------------------------------------------------------------------------
-    // Get a device's connected RplIds by running connectivity check
-    //------------------------------------------------------------------------------------------------
     static set<RplId> GetDeviceConnectedRplIds(AG0_TDLSystem system, AG0_TDLDeviceComponent device, 
                                                AG0_TDLNetwork network)
     {
         set<RplId> result = new set<RplId>();
         
-        // Always include self
         RplId selfRplId = device.GetDeviceRplId();
         if (selfRplId != RplId.Invalid())
             result.Insert(selfRplId);
         
-        // Check direct connectivity to other devices
         foreach (AG0_TDLDeviceComponent otherDevice : network.GetNetworkDevices())
         {
             if (otherDevice == device) continue;
             if (!otherDevice.CanAccessNetwork()) continue;
             
-            // Use the system's connectivity check (simplified - direct range check)
             if (system.AreDevicesConnected(device, otherDevice))
             {
                 RplId otherRplId = otherDevice.GetDeviceRplId();
@@ -1873,8 +1985,6 @@ class AG0_TDLSystem : WorldSystem
     }
     
     //------------------------------------------------------------------------------------------------
-    // Send current message state to a client
-    //------------------------------------------------------------------------------------------------
     static void SendMessagesToClient(AG0_TDLSystem system, AG0_TDLNetwork network, 
                                     AG0_TDLDeviceComponent device)
     {
@@ -1882,7 +1992,6 @@ class AG0_TDLSystem : WorldSystem
         
         RplId deviceRplId = device.GetDeviceRplId();
         
-        // Get player controller for this device
         IEntity player = system.GetPlayerFromDevice(device);
         if (!player) return;
         
@@ -1895,26 +2004,20 @@ class AG0_TDLSystem : WorldSystem
         );
         if (!controller) return;
         
-        // Build client message array
         array<ref AG0_TDLMessageClient> clientMessages = BuildClientMessages(network, deviceRplId);
         
-        // Send via RPC
         controller.ReceiveTDLMessages(network.GetNetworkID(), clientMessages);
     }
     
-    //------------------------------------------------------------------------------------------------
-    // Notify sender that their message was read
     //------------------------------------------------------------------------------------------------
     static void NotifySenderOfReadReceipt(AG0_TDLSystem system, AG0_TDLNetwork network,
                                          AG0_TDLMessage msg, RplId readerRplId)
     {
         RplId senderRplId = msg.GetSenderRplId();
         
-        // Find sender's device
         AG0_TDLDeviceComponent senderDevice = system.GetDeviceByRplId(senderRplId);
         if (!senderDevice) return;
         
-        // Get sender's player controller
         IEntity senderPlayer = system.GetPlayerFromDevice(senderDevice);
         if (!senderPlayer) return;
         
@@ -1927,21 +2030,13 @@ class AG0_TDLSystem : WorldSystem
         );
         if (!controller) return;
         
-        // Check if sender is currently connected to reader (can receive the receipt)
         set<RplId> senderConnected = GetDeviceConnectedRplIds(system, senderDevice, network);
         if (!senderConnected.Contains(readerRplId))
-        {
-            // Sender not connected to reader - receipt will be delivered later
-            // (The status update will come with the next message sync)
             return;
-        }
         
-        // Send read receipt update
         controller.ReceiveTDLReadReceipt(network.GetNetworkID(), msg.GetMessageId(), readerRplId);
     }
     
-    //------------------------------------------------------------------------------------------------
-    // HELPER: Find network containing a device
     //------------------------------------------------------------------------------------------------
     static AG0_TDLNetwork FindNetworkForDevice(AG0_TDLSystem system, AG0_TDLDeviceComponent device)
     {
@@ -1955,12 +2050,9 @@ class AG0_TDLSystem : WorldSystem
     }
     
     //------------------------------------------------------------------------------------------------
-    // HELPER: Add broadcast message to network storage
-    //------------------------------------------------------------------------------------------------
     static int AddBroadcastToNetwork(AG0_TDLNetwork network, RplId senderRplId, 
                                     string senderCallsign, string content)
     {
-        // Access network's message storage (assuming these are added to AG0_TDLNetwork)
         array<ref AG0_TDLMessage> messages = network.GetMessages();
         int nextId = network.GetNextMessageId();
         
@@ -1969,8 +2061,6 @@ class AG0_TDLSystem : WorldSystem
         );
     }
     
-    //------------------------------------------------------------------------------------------------
-    // HELPER: Add direct message to network storage
     //------------------------------------------------------------------------------------------------
     static int AddDirectToNetwork(AG0_TDLNetwork network, RplId senderRplId, string senderCallsign,
                                  string content, RplId recipientRplId, string recipientCallsign)
@@ -1985,23 +2075,17 @@ class AG0_TDLSystem : WorldSystem
     }
     
     //------------------------------------------------------------------------------------------------
-    // HELPER: Get message from network
-    //------------------------------------------------------------------------------------------------
     static AG0_TDLMessage GetNetworkMessage(AG0_TDLNetwork network, int messageId)
     {
         return network.GetMessageById(network.GetMessages(), messageId);
     }
     
     //------------------------------------------------------------------------------------------------
-    // HELPER: Get all network messages
-    //------------------------------------------------------------------------------------------------
     static array<ref AG0_TDLMessage> GetNetworkMessages(AG0_TDLNetwork network)
     {
         return network.GetMessages();
     }
     
-    //------------------------------------------------------------------------------------------------
-    // HELPER: Get deliverable messages
     //------------------------------------------------------------------------------------------------
     static array<ref AG0_TDLMessage> GetDeliverableMessages(AG0_TDLNetwork network, RplId targetRplId,
                                                            set<RplId> connectedDevices)
@@ -2012,15 +2096,13 @@ class AG0_TDLSystem : WorldSystem
     }
     
     //------------------------------------------------------------------------------------------------
-    // HELPER: Build client messages
-    //------------------------------------------------------------------------------------------------
     static array<ref AG0_TDLMessageClient> BuildClientMessages(AG0_TDLNetwork network, RplId viewerRplId)
     {
         return network.BuildClientMessages(network.GetMessages(), viewerRplId);
     }
 	
 	//------------------------------------------------------------------------------------------------
-	//! Get shape manager for rendering (used by AG0_TDLDisplayController / AG0_TDLMapView)
+	//! Get shape manager for rendering
 	AG0_TDLMapShapeManager GetShapeManager()
 	{
 		if (!m_ApiManager)
@@ -2032,8 +2114,6 @@ class AG0_TDLSystem : WorldSystem
 	// API INTEGRATION METHODS
 	//------------------------------------------------------------------------------------------------
 	
-	//------------------------------------------------------------------------------------------------
-	//! Send server heartbeat to API
 	protected void ApiSendHeartbeat()
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
@@ -2049,8 +2129,6 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Sync full server state to API
 	protected void ApiSyncFullState()
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
@@ -2060,7 +2138,6 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("type", "state_sync");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    
-	    // Build networks array
 	    array<ref AG0_TDLNetworkState> networkStates = {};
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
@@ -2070,7 +2147,6 @@ class AG0_TDLSystem : WorldSystem
 	        netState.deviceCount = network.GetNetworkDevices().Count();
 	        netState.messageCount = network.GetMessages().Count();
 	        
-	        // Build device list for this network
 	        array<ref AG0_TDLDeviceState> deviceStates = {};
 	        foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
 	        {
@@ -2092,7 +2168,6 @@ class AG0_TDLSystem : WorldSystem
 	                devState.posZ = pos[2];
 	            }
 				
-				// Add player identity if device is player-associated
 			    IEntity player = GetPlayerFromDevice(device);
 			    if (player)
 			    {
@@ -2127,8 +2202,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("networks", networkStates);
 	    json.WriteValue("totalDevices", m_aRegisteredNetworkDevices.Count());
 	    
-		// === TDL Map Markers (player-placed) ===
-	    array<ref AG0_TDLMapMarkerState> markerStates = {};
+		array<ref AG0_TDLMapMarkerState> markerStates = {};
 	    
 	    SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
 	    if (markerMgr)
@@ -2147,7 +2221,6 @@ class AG0_TDLSystem : WorldSystem
 	            
 	            AG0_TDLMapMarkerState ms = new AG0_TDLMapMarkerState();
 	            ms.markerType = quad;
-				
 				ms.markerId = marker.GetMarkerID();
 	            
 	            int worldPos[2];
@@ -2170,13 +2243,9 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    json.WriteValue("markers", markerStates);
 		
-		//PrintFormat(json.ExportToString(), LogLevel.DEBUG);
-		
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Notify API of network creation
 	protected void ApiNotifyNetworkCreated(AG0_TDLNetwork network, string creatorName)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
@@ -2193,8 +2262,6 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Notify API of network deletion
 	protected void ApiNotifyNetworkDeleted(int networkId, string networkName)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
@@ -2210,8 +2277,6 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Notify API of device joining network
 	protected void ApiNotifyDeviceJoined(AG0_TDLNetwork network, AG0_TDLDeviceComponent device)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
@@ -2226,7 +2291,6 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("deviceCallsign", device.GetDisplayName());
 	    json.WriteValue("deviceCapabilities", device.GetActiveCapabilities());
 	    
-	    // Include player info if available
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (player)
 	    {
@@ -2248,8 +2312,6 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Notify API of device leaving network
 	protected void ApiNotifyDeviceLeft(int networkId, string networkName, string deviceCallsign)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
@@ -2266,8 +2328,6 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Notify API of TDL message sent
 	protected void ApiNotifyMessageSent(AG0_TDLNetwork network, string senderCallsign, 
 	                                     string messageType, string recipientCallsign = "")
 	{
@@ -2286,12 +2346,9 @@ class AG0_TDLSystem : WorldSystem
 	    if (!recipientCallsign.IsEmpty())
 	        json.WriteValue("recipientCallsign", recipientCallsign);
 	    
-	    // Note: We intentionally do NOT send message content for privacy
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Helper: Get connected player count
 	protected int GetConnectedPlayerCount()
 	{
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
@@ -2303,15 +2360,11 @@ class AG0_TDLSystem : WorldSystem
 	    return playerIds.Count();
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Public getter for API manager (for external systems)
 	AG0_TDLApiManager GetApiManager()
 	{
 	    return m_ApiManager;
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	//! Check if API is connected and ready
 	bool IsApiConnected()
 	{
 	    return m_ApiManager && m_ApiManager.CanCommunicate();
@@ -2324,10 +2377,11 @@ class AG0_TDLSystem : WorldSystem
 	    Print(string.Format("  Total Networks: %1", m_aNetworks.Count()), LogLevel.DEBUG);
 	    Print(string.Format("  Registered Devices: %1", m_aRegisteredNetworkDevices.Count()), LogLevel.DEBUG);
 	    Print(string.Format("  Server Mode: %1", Replication.IsServer()), LogLevel.DEBUG);
+	    Print(string.Format("  Active Bridge Links: %1", m_aBridgeLinks.Count()), LogLevel.DEBUG);
 	    
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
-	        Print(string.Format("  Network: %1 (ID: %2)", network.GetNetworkName(), network.GetNetworkID()), LogLevel.DEBUG);
+	        Print(string.Format("  Network: %1 (ID: %2, Waveform: %3)", network.GetNetworkName(), network.GetNetworkID(), network.GetWaveform()), LogLevel.DEBUG);
 	        Print(string.Format("    Password: %1", network.GetNetworkPassword()), LogLevel.DEBUG);
 	        Print(string.Format("    Devices: %1", network.GetNetworkDevices().Count()), LogLevel.DEBUG);
 	        
@@ -2337,15 +2391,20 @@ class AG0_TDLSystem : WorldSystem
 	            if (device.GetOwner())
 	                deviceName = device.GetOwner().ToString();
 	            
-	            Print(string.Format("      Device: %1 (Player: %2)", deviceName, device.GetOwnerPlayerName()), LogLevel.DEBUG);
+	            Print(string.Format("      Device: %1 (Player: %2, Waveform: %3)", deviceName, device.GetOwnerPlayerName(), device.GetWaveform()), LogLevel.DEBUG);
 	        }
 	        
 	        Print(string.Format("    Device Data Entries: %1", network.GetDeviceData().Count()), LogLevel.DEBUG);
 	        foreach (RplId rplId, AG0_TDLNetworkMember member : network.GetDeviceData())
 	        {
-	            Print(string.Format("      Data: %1 -> %2 (IP: %3, Caps: %4)", 
-	                rplId, member.GetPlayerName(), member.GetNetworkIP(), member.GetCapabilities()), LogLevel.DEBUG);
+	            Print(string.Format("      Data: %1 -> %2 (IP: %3, Caps: %4, Bridged: %5)", 
+	                rplId, member.GetPlayerName(), member.GetNetworkIP(), member.GetCapabilities(), member.IsBridged()), LogLevel.DEBUG);
 	        }
+	    }
+	    
+	    foreach (AG0_TDLBridgeLink link : m_aBridgeLinks)
+	    {
+	        Print(string.Format("  Bridge: Network %1 <-> Network %2", link.m_iNetworkA, link.m_iNetworkB), LogLevel.DEBUG);
 	    }
 	}
 	
@@ -2362,11 +2421,11 @@ class AG0_TDLSystem : WorldSystem
 	    Print(string.Format("TDL_DEVICE_%1: %2 (Player: %3)", action, ownerName, device.GetOwnerPlayerName()), LogLevel.DEBUG);
 	    Print(string.Format("  RplId: %1", device.GetDeviceRplId()), LogLevel.DEBUG);
 	    Print(string.Format("  Capabilities: %1", device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS)), LogLevel.DEBUG);
+	    Print(string.Format("  Waveform: %1", device.GetWaveform()), LogLevel.DEBUG);
 	    Print(string.Format("  Network Range: %1m", device.GetEffectiveNetworkRange()), LogLevel.DEBUG);
 	    Print(string.Format("  Total Registered Devices: %1", m_aRegisteredNetworkDevices.Count()), LogLevel.DEBUG);
 	}
 	
-	// Debug logging for connectivity checks
 	void LogConnectivityCheck(AG0_TDLDeviceComponent deviceA, AG0_TDLDeviceComponent deviceB, bool connected, float distance, float maxRange)
 	{
 	    string nameA = "UNKNOWN_A";
@@ -2383,7 +2442,6 @@ class AG0_TDLSystem : WorldSystem
 	        deviceA.GetEffectiveNetworkRange(), deviceB.GetEffectiveNetworkRange()), LogLevel.DEBUG);
 	}
 	
-	// Debug logging for player capabilities
 	void LogPlayerCapabilities(IEntity player, int aggregatedCaps)
 	{
 	    string playerName = "UNKNOWN_PLAYER";
@@ -2403,6 +2461,7 @@ class AG0_TDLSystem : WorldSystem
 	    Print(string.Format("    - DISPLAY_OUTPUT: %1", (aggregatedCaps & AG0_ETDLDeviceCapability.DISPLAY_OUTPUT) != 0), LogLevel.DEBUG);
 	    Print(string.Format("    - VIDEO_SOURCE: %1", (aggregatedCaps & AG0_ETDLDeviceCapability.VIDEO_SOURCE) != 0), LogLevel.DEBUG);
 	    Print(string.Format("    - POWER_PROVIDER: %1", (aggregatedCaps & AG0_ETDLDeviceCapability.POWER_PROVIDER) != 0), LogLevel.DEBUG);
+	    Print(string.Format("    - BRIDGE: %1", (aggregatedCaps & AG0_ETDLDeviceCapability.BRIDGE) != 0), LogLevel.DEBUG);
 	    
 	    array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(player);
 	    Print(string.Format("  Player TDL Devices: %1", playerDevices.Count()), LogLevel.DEBUG);
@@ -2413,8 +2472,8 @@ class AG0_TDLSystem : WorldSystem
 	        if (device.GetOwner())
 	            deviceName = device.GetOwner().ToString();
 	        
-	        Print(string.Format("    Device: %1 (Caps: %2, Powered: %3, In Network: %4)", 
-	            deviceName, device.GetActiveCapabilities(), device.IsPowered(), device.IsInNetwork()), LogLevel.DEBUG);
+	        Print(string.Format("    Device: %1 (Caps: %2, Waveform: %3, Powered: %4, In Network: %5)", 
+	            deviceName, device.GetActiveCapabilities(), device.GetWaveform(), device.IsPowered(), device.IsInNetwork()), LogLevel.DEBUG);
 	    }
 	}
 }

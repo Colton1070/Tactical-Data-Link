@@ -1258,6 +1258,7 @@ class AG0_TDLNetworkState
 {
     int networkId;
     string networkName;
+    int waveform;       // AG0_ETDLWaveform cast to int — identifies the RF technology of this network
     int deviceCount;
     int messageCount;
     ref array<ref AG0_TDLDeviceState> devices;

@@ -11,6 +11,14 @@ class AG0_PostProcessEffect
     ResourceName m_sMaterialPath;
 }
 
+enum AG0_ETDLWaveform
+{
+    NONE        = 0,    // No waveform assigned — device cannot form links
+    LEGACY      = 1,    // Generic/untyped RF — interops only with other LEGACY devices
+    MPU5        = 2,    // Silvus MPU5 / StreamScape MANET waveform
+    TRELLISWARE = 4,    // TrellisWare TWave / TW-950 waveform
+    // Use bits 8, 16, 32 … for future or third-party waveforms
+}
 
 enum AG0_ETDLDeviceCapability
 {
@@ -20,7 +28,8 @@ enum AG0_ETDLDeviceCapability
     VIDEO_SOURCE = 8,
     POWER_PROVIDER = 16,
 	INFORMATION = 32,
-	ATAK_DEVICE = 64
+	ATAK_DEVICE = 64,
+	BRIDGE = 128
 }
 
 [EntityEditorProps(category: "GameScripted/Gadgets", description: "TDL radio gadget", color: "0 0 255 255")]
@@ -77,6 +86,15 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
         defvalue: AG0_ETDLDeviceCapability.NETWORK_ACCESS.ToString()
     )]
 	protected AG0_ETDLDeviceCapability m_eCapabilities;
+	
+	[Attribute(
+		category: "TDL Device Config",
+		desc: "Waveform(s) this device supports. Two devices connect only if their masks share at least one bit.",
+		uiwidget: UIWidgets.Flags,
+		enums: ParamEnumArray.FromEnum(AG0_ETDLWaveform),
+		defvalue: AG0_ETDLWaveform.LEGACY.ToString()
+	)]
+	protected AG0_ETDLWaveform m_eWaveform;
 	
 	[Attribute("", UIWidgets.Auto, category: "ATAK Plugin Support")]
 	protected ref array<string> m_aSupportedATAKPlugins;
@@ -757,6 +775,16 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 //------------------------------------------------------------------------------------------------
 	
 	bool HasCapability(AG0_ETDLDeviceCapability cap) { return (m_eCapabilities & cap) != 0; }
+	
+	AG0_ETDLWaveform GetWaveform() { return m_eWaveform; }
+	
+	// Returns true if this device shares at least one waveform bit with 'other'.
+	// Used by AreDevicesConnected in AG0_TDLSystem.
+	bool IsWaveformCompatible(AG0_TDLDeviceComponent other)
+	{
+	    if (!other) return false;
+	    return (m_eWaveform & other.GetWaveform()) != 0;
+	}
 	
 	float GetEffectiveNetworkRange()
     {
