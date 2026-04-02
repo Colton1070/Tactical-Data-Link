@@ -776,7 +776,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	bool HasCapability(AG0_ETDLDeviceCapability cap) { return (m_eCapabilities & cap) != 0; }
 	
-	AG0_ETDLWaveform GetWaveform() { return m_eWaveform; }
+	int GetWaveform() { return m_eWaveform; }
 	
 	// Returns true if this device shares at least one waveform bit with 'other'.
 	// Used by AreDevicesConnected in AG0_TDLSystem.

@@ -36,7 +36,7 @@ class AG0_TDLNetwork
     protected int m_iNetworkID;
     protected string m_sNetworkName;
     protected string m_sNetworkPassword;
-    protected AG0_ETDLWaveform m_eWaveform;
+    protected int m_eWaveform;
     protected ref array<AG0_TDLDeviceComponent> m_aNetworkDevices = {};
     protected ref map<RplId, ref AG0_TDLNetworkMember> m_mDeviceData = new map<RplId, ref AG0_TDLNetworkMember>();
     protected int m_iNextNetworkIP = 1;
@@ -51,7 +51,7 @@ class AG0_TDLNetwork
     protected const int MESSAGE_EXPIRY_SECONDS = 3600;
 	
     
-    void AG0_TDLNetwork(int networkID, string name, string password, AG0_ETDLWaveform waveform = AG0_ETDLWaveform.LEGACY)
+    void AG0_TDLNetwork(int networkID, string name, string password, int waveform = AG0_ETDLWaveform.LEGACY)
     {
         m_iNetworkID = networkID;
         m_sNetworkName = name;
@@ -62,7 +62,7 @@ class AG0_TDLNetwork
     int GetNetworkID() { return m_iNetworkID; }
     string GetNetworkName() { return m_sNetworkName; }
     string GetNetworkPassword() { return m_sNetworkPassword; }
-    AG0_ETDLWaveform GetWaveform() { return m_eWaveform; }
+    int GetWaveform() { return m_eWaveform; }
     array<AG0_TDLDeviceComponent> GetNetworkDevices() { return m_aNetworkDevices; }
     map<RplId, ref AG0_TDLNetworkMember> GetDeviceData() { return m_mDeviceData; }
 	array<ref AG0_TDLMessage> GetMessages() { return m_aMessages; }
@@ -2144,6 +2144,7 @@ class AG0_TDLSystem : WorldSystem
 	        AG0_TDLNetworkState netState = new AG0_TDLNetworkState();
 	        netState.networkId = network.GetNetworkID();
 	        netState.networkName = network.GetNetworkName();
+			netState.waveform = network.GetWaveform();
 	        netState.deviceCount = network.GetNetworkDevices().Count();
 	        netState.messageCount = network.GetMessages().Count();
 	        
