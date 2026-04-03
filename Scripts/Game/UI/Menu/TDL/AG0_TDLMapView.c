@@ -54,6 +54,14 @@ class AG0_TDLMapView
     protected int m_iMarkerOutlineColor = 0xFF000000;   // Black outline
     protected int m_iBuildingColor = 0xFF4A4A4A;        // Dark gray for buildings
     
+    // Shape label styling
+    protected static const float SHAPE_LABEL_SIZE = 10;          // Font size in pixels
+    protected static const float SHAPE_LABEL_CHAR_WIDTH = 5.5;   // Approx px per character at label size
+    protected static const float SHAPE_LABEL_HEIGHT = 12;        // Approx line height at label size
+    protected static const float SHAPE_LABEL_PAD = 3;            // Background padding
+    protected static const int SHAPE_LABEL_BG_COLOR = 0xCC000000; // Semi-transparent black background
+    protected static const int SHAPE_LABEL_TEXT_COLOR = 0xFFFFFFFF; // White text
+    
     //------------------------------------------------------------------------------------------------
     void AG0_TDLMapView()
     {
@@ -992,6 +1000,9 @@ class AG0_TDLMapView
 		
 		// Stroke
 		DrawClosedStroke(verts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
+		
+		// Label
+		DrawShapeLabel(shape, cx, cy);
 	}
 	
 	// -----------------------------------------------------------------------
@@ -1074,6 +1085,16 @@ class AG0_TDLMapView
 		radial2.m_fWidth = shape.m_fStrokeWidth;
 		radial2.m_Vertices = {verts[vertCount - 2], verts[vertCount - 1], cx, cy};
 		m_aDrawCommands.Insert(radial2);
+		
+		// Label — positioned at visual center of the fan (half-radius along bisector)
+		if (!shape.m_sLabel.IsEmpty())
+		{
+			float midAngle = startRad + sweep * 0.5;
+			float labelDist = screenRadius * 0.5;
+			float labelX = cx + Math.Cos(midAngle) * labelDist;
+			float labelY = cy + Math.Sin(midAngle) * labelDist;
+			DrawShapeLabel(shape, labelX, labelY);
+		}
 	}
 	
 	// -----------------------------------------------------------------------
@@ -1112,6 +1133,27 @@ class AG0_TDLMapView
 		vLine.m_fWidth = 1;
 		vLine.m_Vertices = {cx, cy - crossSize, cx, cy + crossSize};
 		m_aDrawCommands.Insert(vLine);
+		
+		// Distance labels at north cardinal of each ring
+		foreach (float ringRadius : shape.m_aRings)
+		{
+			float screenR = ringRadius * ppu;
+			if (screenR < 20)
+				continue; // Too small for a label
+			
+			// Format distance: show meters or km
+			string distLabel;
+			if (ringRadius >= 1000)
+				distLabel = string.Format("%1km", Math.Round(ringRadius / 100) * 0.1);
+			else
+				distLabel = string.Format("%1m", Math.Round(ringRadius));
+			
+			// North cardinal point (screen Y-up is negative)
+			DrawTextLabel(distLabel, cx, cy - screenR, 9, SHAPE_LABEL_TEXT_COLOR);
+		}
+		
+		// Main shape label at center
+		DrawShapeLabel(shape, cx, cy);
 	}
 	
 	// -----------------------------------------------------------------------
@@ -1146,6 +1188,11 @@ class AG0_TDLMapView
 		
 		// Stroke — closed perimeter
 		DrawClosedStroke(screenVerts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
+		
+		// Label at centroid
+		float centroidX, centroidY;
+		WorldToScreen(shape.m_vCenter, centroidX, centroidY);
+		DrawShapeLabel(shape, centroidX, centroidY);
 	}
 	
 	// -----------------------------------------------------------------------
@@ -1173,6 +1220,7 @@ class AG0_TDLMapView
 		DrawOpenStroke(screenVerts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
 		
 		// Waypoint dots at each vertex
+		int waypointIdx = 0;
 		for (int i = 0; i + 1 < screenVerts.Count(); i += 2)
 		{
 			float wpX = screenVerts[i];
@@ -1195,6 +1243,15 @@ class AG0_TDLMapView
 			wpFill.m_iColor = shape.m_iStrokeColor;
 			wpFill.m_Vertices = wpVerts;
 			m_aDrawCommands.Insert(wpFill);
+			
+			// Per-waypoint label (from m_aWaypointLabels, offset above the dot)
+			if (waypointIdx < shape.m_aWaypointLabels.Count())
+			{
+				string wpLabel = shape.m_aWaypointLabels[waypointIdx];
+				if (!wpLabel.IsEmpty())
+					DrawTextLabel(wpLabel, wpX, wpY - 10, 9, SHAPE_LABEL_TEXT_COLOR);
+			}
+			waypointIdx++;
 		}
 		
 		// Direction arrows along route segments
@@ -1248,6 +1305,64 @@ class AG0_TDLMapView
 			arrow.m_Vertices = arrowVerts;
 			m_aDrawCommands.Insert(arrow);
 		}
+		
+		// Main shape label at route midpoint
+		if (!shape.m_sLabel.IsEmpty() && screenVerts.Count() >= 4)
+		{
+			int midIdx = (screenVerts.Count() / 2) & ~1; // Snap to even index (x,y pair)
+			if (midIdx + 1 < screenVerts.Count())
+				DrawShapeLabel(shape, screenVerts[midIdx], screenVerts[midIdx + 1]);
+		}
+	}
+	
+	// -----------------------------------------------------------------------
+	// SHAPE LABEL HELPERS
+	// -----------------------------------------------------------------------
+	
+	//------------------------------------------------------------------------------------------------
+	//! Draw a text label centered over a shape's screen position.
+	//! Renders a semi-transparent background pill behind the text for readability.
+	//! Skips drawing if the shape has no label.
+	protected void DrawShapeLabel(AG0_TDLMapShape shape, float screenX, float screenY)
+	{
+		if (shape.m_sLabel.IsEmpty())
+			return;
+		
+		DrawTextLabel(shape.m_sLabel, screenX, screenY, SHAPE_LABEL_SIZE, SHAPE_LABEL_TEXT_COLOR);
+	}
+	
+	//------------------------------------------------------------------------------------------------
+	//! Draw a text label at an arbitrary screen position with a background pill.
+	//! Used for shape labels and route waypoint labels.
+	protected void DrawTextLabel(string text, float screenX, float screenY, float fontSize, int textColor)
+	{
+		if (text.IsEmpty())
+			return;
+		
+		float textWidth = text.Length() * SHAPE_LABEL_CHAR_WIDTH;
+		float halfW = textWidth * 0.5;
+		float halfH = SHAPE_LABEL_HEIGHT * 0.5;
+		
+		// Background pill centered on (screenX, screenY)
+		PolygonDrawCommand bg = new PolygonDrawCommand();
+		bg.m_iColor = SHAPE_LABEL_BG_COLOR;
+		bg.m_Vertices = {
+			screenX - halfW - SHAPE_LABEL_PAD, screenY - halfH - SHAPE_LABEL_PAD,
+			screenX + halfW + SHAPE_LABEL_PAD, screenY - halfH - SHAPE_LABEL_PAD,
+			screenX + halfW + SHAPE_LABEL_PAD, screenY + halfH + SHAPE_LABEL_PAD,
+			screenX - halfW - SHAPE_LABEL_PAD, screenY + halfH + SHAPE_LABEL_PAD
+		};
+		m_aDrawCommands.Insert(bg);
+		
+		// Text — position at top-left corner of where text should sit
+		// TextDrawCommand renders from its position as the top-left origin
+		TextDrawCommand cmd = new TextDrawCommand();
+		cmd.m_sText = text;
+		cmd.m_Position = Vector(screenX - halfW, screenY - halfH, 0);
+		cmd.m_Pivot = Vector(0, 0, 0);
+		cmd.m_iColor = textColor;
+		cmd.m_fSize = fontSize;
+		m_aDrawCommands.Insert(cmd);
 	}
 	
 	// -----------------------------------------------------------------------
