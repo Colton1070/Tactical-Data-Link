@@ -56,7 +56,7 @@ class AG0_TDLMapView
     
     // Shape label styling
     protected static const float SHAPE_LABEL_SIZE = 10;          // Font size in pixels
-    protected static const float SHAPE_LABEL_CHAR_WIDTH = 5.5;   // Approx px per character at label size
+    protected static const float SHAPE_LABEL_CHAR_WIDTH = 6.5;   // Approx px per character at label size
     protected static const float SHAPE_LABEL_HEIGHT = 12;        // Approx line height at label size
     protected static const float SHAPE_LABEL_PAD = 3;            // Background padding
     protected static const int SHAPE_LABEL_BG_COLOR = 0xCC000000; // Semi-transparent black background

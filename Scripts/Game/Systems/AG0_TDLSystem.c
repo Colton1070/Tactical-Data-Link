@@ -1021,8 +1021,8 @@ class AG0_TDLSystem : WorldSystem
    	protected void UpdateNetworks()
 	{
 	    if (!Replication.IsServer()) return;
-		
-		UpdateMaxDeviceRange();
+	    
+	    UpdateMaxDeviceRange();
 	    
 	    m_fTimeSinceGridRebuild += GetWorld().GetFixedTimeSlice();
 	    if (m_fTimeSinceGridRebuild >= m_fGridRebuildInterval)
@@ -1032,13 +1032,52 @@ class AG0_TDLSystem : WorldSystem
 	    }
 	    
 	    CheckNetworkMerges();
-	    
-	    // Rebuild bridge links after merges so AppendBridgedMembers has fresh data
 	    UpdateBridgeLinks();
+	    
+	    // Track which networks each player is actually in this cycle
+	    map<int, ref set<int>> playerActiveNetworks = new map<int, ref set<int>>();
 	    
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        UpdateNetworkConnectivity(network);
+	        
+	        // Record which players have devices in this network
+	        PlayerManager playerMgr = GetGame().GetPlayerManager();
+	        foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
+	        {
+	            IEntity player = GetPlayerFromDevice(device);
+	            if (!player) continue;
+	            
+	            int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+	            if (playerId < 0) continue;
+	            
+	            if (!playerActiveNetworks.Contains(playerId))
+	                playerActiveNetworks.Set(playerId, new set<int>());
+	            
+	            playerActiveNetworks.Get(playerId).Insert(network.GetNetworkID());
+	        }
+	    }
+	    
+	    // Clear stale network caches from controllers
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    array<int> allPlayers = {};
+	    playerMgr.GetPlayers(allPlayers);
+	    
+	    foreach (int playerId : allPlayers)
+	    {
+	        SCR_PlayerController controller = SCR_PlayerController.Cast(
+	            playerMgr.GetPlayerController(playerId)
+	        );
+	        if (!controller) continue;
+	        
+	        array<int> activeNetsArray = {};
+			if (playerActiveNetworks.Contains(playerId))
+			{
+			    foreach (int netId : playerActiveNetworks.Get(playerId))
+			        activeNetsArray.Insert(netId);
+			}
+			
+			controller.ClearStaleNetworks(activeNetsArray);
 	    }
 	    
 	    UpdateVideoStreaming();
@@ -1561,11 +1600,11 @@ class AG0_TDLSystem : WorldSystem
     }
     
     protected void NotifyNetworkLeft(AG0_TDLDeviceComponent device)
-    {
-		int networkId = device.GetCurrentNetworkID();
-        device.OnNetworkLeft();
-		
-		IEntity player = GetPlayerFromDevice(device);
+	{
+	    int networkId = device.GetCurrentNetworkID();
+	    device.OnNetworkLeft();
+	    
+	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player) return;
 	    
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
@@ -1575,18 +1614,15 @@ class AG0_TDLSystem : WorldSystem
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
 	        GetGame().GetPlayerManager().GetPlayerController(playerId)
 	    );
-        if (!controller) 
-        {
-            Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.DEBUG);
-            return;
-        }
-	    if (controller && networkId > 0)
+	    if (!controller) return;
+	    
+	    if (networkId > 0)
 	    {
 	        controller.NotifyClearNetwork(networkId);
 	    }
-		
-		PushPlayerShapes(controller, playerId);
-    }
+	    
+	    PushPlayerShapes(controller, playerId);
+	}
 
     protected void NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
 	{
