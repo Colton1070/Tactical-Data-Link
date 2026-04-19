@@ -427,8 +427,13 @@ class AG0_TDLApiManager
         
         // Send minimal validation payload
         // POST(callback, request_path, data)
-        string payload = "{\"type\":\"validate\",\"serverName\":\"" + m_Config.serverName + "\"}";
-        
+        SCR_JsonSaveContext validateJson = new SCR_JsonSaveContext();
+        validateJson.WriteValue("type", "validate");
+        validateJson.WriteValue("serverName", m_Config.serverName);
+        validateJson.WriteValue("worldFile", GetGame().GetWorldFile());
+        validateJson.WriteValue("worldId", AG0_MapSatelliteConfigHelper.GetCurrentWorldIdentifier());
+        string payload = validateJson.ExportToString();
+
         ctx.POST(m_ValidateCallback, "/submit", payload);
     }
     
@@ -1026,6 +1031,8 @@ class AG0_TDLApiManager
 	    json.WriteValue("playerId", playerId);
 	    json.WriteValue("platform", platform);
 	    json.WriteValue("serverName", m_Config.serverName);
+	    json.WriteValue("worldFile", GetGame().GetWorldFile());
+	    json.WriteValue("worldId", AG0_MapSatelliteConfigHelper.GetCurrentWorldIdentifier());
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    
 	    string payload = json.ExportToString();

@@ -2158,10 +2158,12 @@ class AG0_TDLSystem : WorldSystem
 	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
 	    json.WriteValue("type", "heartbeat");
 	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("worldFile", GetGame().GetWorldFile());
+	    json.WriteValue("worldId", AG0_MapSatelliteConfigHelper.GetCurrentWorldIdentifier());
 	    json.WriteValue("networkCount", m_aNetworks.Count());
 	    json.WriteValue("deviceCount", m_aRegisteredNetworkDevices.Count());
 	    json.WriteValue("playerCount", GetConnectedPlayerCount());
-	    
+
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
@@ -2173,7 +2175,9 @@ class AG0_TDLSystem : WorldSystem
 	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
 	    json.WriteValue("type", "state_sync");
 	    json.WriteValue("timestamp", System.GetUnixTime());
-	    
+	    json.WriteValue("worldFile", GetGame().GetWorldFile());
+	    json.WriteValue("worldId", AG0_MapSatelliteConfigHelper.GetCurrentWorldIdentifier());
+
 	    array<ref AG0_TDLNetworkState> networkStates = {};
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {

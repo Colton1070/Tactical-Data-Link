@@ -175,11 +175,25 @@ class AG0_MapSatelliteConfigHelper
         AG0_MapSatelliteConfig config = GetConfig(configPath);
         if (!config)
             return null;
-        
+
         string worldFile = GetGame().GetWorldFile();
         return config.GetMapEntry(worldFile);
     }
-    
+
+    //------------------------------------------------------------------------------------------------
+    //! Get the short world identifier for the current world (e.g. "Cain", "Fallujah")
+    //! Uses the same matching logic as the TDL map satellite config so the web API
+    //! can resolve its own map config the same way.
+    //! @return matched identifier, or empty string if no config entry matches
+    static string GetCurrentWorldIdentifier(ResourceName configPath = "")
+    {
+        AG0_MapSatelliteEntry entry = GetMapEntryForCurrentWorld(configPath);
+        if (!entry)
+            return string.Empty;
+
+        return entry.m_sWorldIdentifier;
+    }
+
     //------------------------------------------------------------------------------------------------
     //! Force reload of config
     static void ReloadConfig()
