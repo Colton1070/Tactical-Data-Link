@@ -657,7 +657,16 @@ class AG0_TDLMapView
         
         // Draw overlay layers (structures, roads, water, contours)
         DrawOverlays();
-        
+
+        // Mask the 8 ghost tiles produced by the texture sampler's Repeat mode
+        // when the view extends past the map's world extent. Runs AFTER the
+        // satellite + overlay draws (both use the same unclamped UV math and
+        // therefore both tile), and BEFORE buildings/shapes/markers so on-map
+        // content is not occluded. No-op when we have no satellite loaded
+        // (DrawFallbackBackground already fills the whole canvas in that case).
+        if (m_bTextureLoaded && m_pMapTexture)
+            DrawMapEdgeMask();
+
         // Draw buildings via runtime query ONLY if no structure overlay is available
         // (overlay textures are much cheaper than per-building polygon rendering)
         if (!m_bHasStructureOverlay)
@@ -805,6 +814,77 @@ class AG0_TDLMapView
         }
     }
     
+    //------------------------------------------------------------------------------------------------
+    //! Draws 8 opaque map-sized polygons tiled in the world positions immediately
+    //! N, NE, E, SE, S, SW, W, NW of the real map. These cover the ghost satellite
+    //! and overlay tiles produced by the texture sampler's default Repeat wrap mode
+    //! when the diagonal-sized sample rect in DrawMapTexture/DrawOverlay extends
+    //! past the map's world extent (particularly visible on small display surfaces
+    //! like the wrist tablet and Garmin GPS mods).
+    //!
+    //! Every corner is transformed individually through WorldToScreen so the mask
+    //! inherits the exact rotation/zoom/Y-flip pipeline as the underlying view.
+    //! This sidesteps the sign mismatches that arise from rotating screen-space
+    //! corners around a tile center (tiles appeared to "drift" with rotation when
+    //! we did that, because screen-space rotation direction doesn't match the
+    //! combined WorldToScreen rotation + Y-flip). With this approach the mask's
+    //! inner edge lands on the real map's outer edge at any rotation.
+    protected void DrawMapEdgeMask()
+    {
+        // World-space geometry of the real map.
+        float mapCenterX = m_fMapOffsetX + m_fMapSizeX * 0.5;
+        float mapCenterZ = m_fMapOffsetY + m_fMapSizeY * 0.5;
+        float halfSizeX = m_fMapSizeX * 0.5;
+        float halfSizeZ = m_fMapSizeY * 0.5;
+
+        // Unrotated corner offsets from a tile's world-space center, in world units.
+        // Order: SW, SE, NE, NW — counter-clockwise in world coords. (Screen winding
+        // after the Y-flip inside WorldToScreen ends up clockwise, matching the
+        // convention used by every other PolygonDrawCommand in this class.)
+        array<float> cornerOffsetX = {-halfSizeX,  halfSizeX, halfSizeX, -halfSizeX};
+        array<float> cornerOffsetZ = {-halfSizeZ, -halfSizeZ, halfSizeZ,  halfSizeZ};
+
+        // Color matches DrawFallbackBackground so the off-map region reads the same
+        // whether the satellite loaded or not.
+        const int MASK_COLOR = 0xFF1A1A1A;
+
+        // Iterate the 3x3 neighborhood, skipping the center (the real map).
+        // Zoom is clamped to [m_fMinZoom, m_fMaxZoom=1.0] and the sampler's
+        // diagonal sample rect is at most sqrt(2)*mapSize, so only first-ring
+        // ghosts are ever visible — 8 tiles is sufficient.
+        for (int j = -1; j <= 1; j++)
+        {
+            for (int k = -1; k <= 1; k++)
+            {
+                if (k == 0 && j == 0)
+                    continue; // Center tile is the real map; do not occlude it.
+
+                float tileCenterX = mapCenterX + k * m_fMapSizeX;
+                float tileCenterZ = mapCenterZ + j * m_fMapSizeY;
+
+                array<float> verts = {};
+                for (int i = 0; i < 4; i++)
+                {
+                    vector worldCorner = Vector(
+                        tileCenterX + cornerOffsetX[i],
+                        0,
+                        tileCenterZ + cornerOffsetZ[i]
+                    );
+
+                    float sx, sy;
+                    WorldToScreen(worldCorner, sx, sy);
+                    verts.Insert(sx);
+                    verts.Insert(sy);
+                }
+
+                PolygonDrawCommand mask = new PolygonDrawCommand();
+                mask.m_iColor = MASK_COLOR;
+                mask.m_Vertices = verts;
+                m_aDrawCommands.Insert(mask);
+            }
+        }
+    }
+
     //------------------------------------------------------------------------------------------------
     protected void DrawFallbackBackground()
     {
