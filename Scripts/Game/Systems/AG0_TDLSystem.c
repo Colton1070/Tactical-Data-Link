@@ -800,22 +800,22 @@ class AG0_TDLSystem : WorldSystem
     int CreateNetwork(AG0_TDLDeviceComponent creator, string networkName, string password)
 	{
 	    if (!Replication.IsServer()) return -1;
-	    if (!creator || !creator.CanAccessNetwork()) 
+	    if (!creator || !creator.CanAccessNetwork())
 	    {
 	        Print("TDL_NETWORK_CREATE: Invalid creator device", LogLevel.DEBUG);
 	        return -1;
 	    }
-	    
+
 	    RplId deviceRplId = creator.GetDeviceRplId();
 	    string playerName = creator.GetOwnerPlayerName();
 	    vector position = creator.GetOwner().GetOrigin();
-	    
+
 	    if (deviceRplId == RplId.Invalid())
 	    {
 	        Print("TDL_NETWORK_CREATE: Invalid device RplId", LogLevel.DEBUG);
 	        return -1;
 	    }
-	    
+
 	    Print(string.Format("TDL_NETWORK_CREATE: Attempting to create network '%1' by %2", networkName, playerName), LogLevel.DEBUG);
 	    
 	    // Check for existing network with same credentials AND compatible waveform.
@@ -854,11 +854,11 @@ class AG0_TDLSystem : WorldSystem
 	        Print("TDL_NETWORK_JOIN: Invalid device", LogLevel.DEBUG);
 	        return false;
 	    }
-	    
+
 	    RplId deviceRplId = device.GetDeviceRplId();
 	    string playerName = device.GetOwnerPlayerName();
 	    vector position = device.GetOwner().GetOrigin();
-	    
+
 	    if (deviceRplId == RplId.Invalid())
 	    {
 	        Print("TDL_NETWORK_JOIN: Invalid device RplId", LogLevel.DEBUG);
@@ -912,15 +912,20 @@ class AG0_TDLSystem : WorldSystem
     void LeaveNetwork(AG0_TDLDeviceComponent device)
     {
         if (!Replication.IsServer()) return;
-        
+
         foreach (AG0_TDLNetwork network : m_aNetworks)
         {
             if (network.GetNetworkDevices().Contains(device))
             {
+                // Capture the id from the network — never from device.GetCurrentNetworkID(),
+                // which may have been pre-cleared to -1 by the user action's server-side run.
+                int leftNetworkId = network.GetNetworkID();
+                string leftNetworkName = network.GetNetworkName();
+
                 network.RemoveDevice(device);
-                NotifyNetworkLeft(device);
-				ApiNotifyDeviceLeft(network.GetNetworkID(), network.GetNetworkName(), device.GetDisplayName());
-                
+                NotifyNetworkLeft(device, leftNetworkId);
+				ApiNotifyDeviceLeft(leftNetworkId, leftNetworkName, device.GetDisplayName());
+
                 if (network.HasDevices())
                 {
                     NotifyNetworkMembersUpdated(network);
@@ -929,7 +934,7 @@ class AG0_TDLSystem : WorldSystem
                 {
                     m_aNetworks.RemoveItem(network);
                 }
-                
+
                 break;
             }
         }
@@ -1398,8 +1403,9 @@ class AG0_TDLSystem : WorldSystem
 	        
 	        // Append SA from any networks bridged to this one
 	        AppendBridgedMembers(network, device, connectedMembers);
-	        
-	        NotifyNetworkConnectivity(device, connectedMembers);
+
+	        // Pass network.GetNetworkID() explicitly — see NotifyNetworkConnectivity doc.
+	        NotifyNetworkConnectivity(device, network.GetNetworkID(), connectedMembers);
 			PropagateMessagesForDevice(this, network, device, connectedMembers);
 	    }
 		// After all devices processed, derive player connectivity
@@ -1599,71 +1605,85 @@ class AG0_TDLSystem : WorldSystem
 		NotifyNetworkBroadcastingChange(network);
     }
     
-    protected void NotifyNetworkLeft(AG0_TDLDeviceComponent device)
+    //! Notify the owning player's controller that a device left a specific network.
+    //! The caller MUST pass the actual networkId because device.GetCurrentNetworkID() may
+    //! have been pre-cleared to -1 on the server side (e.g. the user action's
+    //! LeaveNetworkTDL() runs on both client and server, and optimistically resets
+    //! m_iCurrentNetworkID before this path runs). Relying on the device's ID causes the
+    //! NotifyClearNetwork RPC to silently skip, which leaves ghost members in the
+    //! player's client-side m_mTDLNetworkMembersMap until the next stale-sweep tick.
+    protected void NotifyNetworkLeft(AG0_TDLDeviceComponent device, int networkId)
 	{
-	    int networkId = device.GetCurrentNetworkID();
 	    device.OnNetworkLeft();
-	    
+
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player) return;
-	    
+
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
 	    if (playerId < 0) return;
-	    
+
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
 	        GetGame().GetPlayerManager().GetPlayerController(playerId)
 	    );
 	    if (!controller) return;
-	    
+
 	    if (networkId > 0)
 	    {
 	        controller.NotifyClearNetwork(networkId);
 	    }
-	    
+
 	    PushPlayerShapes(controller, playerId);
 	}
 
-    protected void NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
+    //! Push connectivity snapshot to the owning player's controller.
+    //! networkId MUST be passed from the caller (the network being iterated in
+    //! UpdateNetworkConnectivity) — never read from device.GetCurrentNetworkID(),
+    //! which may be pre-cleared to -1 on the server side when the user action's
+    //! LeaveNetworkTDL() runs server-side optimistically. If that read returned -1
+    //! the early-return below would silently skip controller.NotifyNetworkMembers,
+    //! killing tick-based callsign/position updates for that player until something
+    //! resets the id — which is exactly the "stale icons / callsign doesn't update
+    //! on next tick" symptom.
+    protected void NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, int networkId, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
 	{
 	    array<RplId> deviceIDs = new array<RplId>();
-	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers) 
-	    { 
-	        deviceIDs.Insert(rplId); 
+	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
+	    {
+	        deviceIDs.Insert(rplId);
 	    }
-	    
+
 	    device.OnNetworkConnectivityUpdated(deviceIDs);
-	    
+
 	    array<ref AG0_TDLNetworkMember> membersArray = {};
 	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
 	    {
 	        membersArray.Insert(member);
 	    }
-	    
+
 	    if (device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
 	    {
 	        device.SetLocalNetworkMembers(membersArray);
-	        Print(string.Format("TDL_SYSTEM: Sent %1 members directly to INFORMATION device %2", 
+	        Print(string.Format("TDL_SYSTEM: Sent %1 members directly to INFORMATION device %2",
 	            membersArray.Count(), device.GetOwner()), LogLevel.DEBUG);
 	    }
-	    
+
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player) return;
-	    
+
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
 	    if (playerId < 0) return;
-	    
+
 	   	SCR_PlayerController controller = SCR_PlayerController.Cast(
 	        GetGame().GetPlayerManager().GetPlayerController(playerId)
 	    );
-        if (!controller) 
+        if (!controller)
         {
             Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.DEBUG);
             return;
         }
-	    
-	    int networkId = device.GetCurrentNetworkID();
+
 	    if (networkId <= 0) return;
 	    
 	    controller.NotifyNetworkMembers(networkId, membersArray);
@@ -1819,13 +1839,13 @@ class AG0_TDLSystem : WorldSystem
 	void OnDeviceCallsignChanged(AG0_TDLDeviceComponent device)
 	{
 	    if (!Replication.IsServer()) return;
-	    
+
 	    RplId deviceRplId = device.GetDeviceRplId();
 	    if (deviceRplId == RplId.Invalid()) return;
-	    
-	    Print(string.Format("TDL_SYSTEM_CALLSIGN: Processing callsign change for device %1", 
+
+	    Print(string.Format("TDL_SYSTEM_CALLSIGN: Processing callsign change for device %1",
 	        device.GetOwner()), LogLevel.DEBUG);
-	    
+
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        if (network.GetNetworkDevices().Contains(device))
@@ -1835,11 +1855,17 @@ class AG0_TDLSystem : WorldSystem
 	            {
 	                string newDisplayName = device.GetDisplayName();
 	                memberData.SetPlayerName(newDisplayName);
-	                
-	                Print(string.Format("TDL_SYSTEM_CALLSIGN: Updated member data for %1 to '%2'", 
+
+	                Print(string.Format("TDL_SYSTEM_CALLSIGN: Updated member data for %1 to '%2'",
 	                    deviceRplId, newDisplayName), LogLevel.DEBUG);
-	                
+
+	                // NotifyNetworkMembersUpdated only re-broadcasts RplIds to devices — it does
+	                // NOT push fresh member data (with the new callsign) through the primary
+	                // PlayerController snapshot channel. Force an immediate connectivity rebuild
+	                // so the updated GetDisplayName() flows to every member's
+	                // m_mTDLNetworkMembersMap this frame, not on the next UpdateNetworks tick.
 	                NotifyNetworkMembersUpdated(network);
+	                UpdateNetworkConnectivity(network);
 	            }
 	            break;
 	        }

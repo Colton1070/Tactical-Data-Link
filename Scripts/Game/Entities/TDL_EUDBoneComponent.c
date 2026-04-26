@@ -15,15 +15,14 @@ class TDL_EUDBoneComponent : ScriptComponent
     [Attribute("0", UIWidgets.ComboBox, "Rotation axis", "", ParamEnumArray.FromEnum(ETDL_EUDAxis))]
     protected ETDL_EUDAxis m_eRotationAxis;
     
-    [Attribute("0.5", UIWidgets.Slider, "Initial position (0-1)", "0 1 0.01")]
+    [Attribute("0.5", UIWidgets.Slider, "Initial position (0-1)", "0 1 0.01"), RplProp()]
     protected float m_fTargetPosition;
-    
+
     [Attribute("5.0", UIWidgets.Slider, "Lerp speed (higher = faster)", "0.5 20 0.5")]
     protected float m_fLerpSpeed;
-    
-	[RplProp()]
+
     protected float m_fCurrentPosition;
-    
+
 	protected const float POSITION_EPSILON = 0.001;
     protected int m_iBoneIdx = -1;
     protected bool m_bInitialized;
@@ -45,14 +44,17 @@ class TDL_EUDBoneComponent : ScriptComponent
         // Double-check world (in case of race)
         if (owner.GetWorld() != GetGame().GetWorld())
             return;
-        
+
 //        if (!m_bInitialized)
 //        {
 //            InitBone(owner);
 //            if (!m_bInitialized)
 //                return;
 //        }
-        
+
+        // Target is the replicated value; every client lerps its own local m_fCurrentPosition
+        // toward it. This avoids the manipulator stuttering from per-frame replicated snaps
+        // of an authoritative current value.
         UpdateLerp(timeSlice);
         UpdateBone(owner);
     }

@@ -571,12 +571,20 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	bool LeaveNetworkTDL()
 	{
-        // Optimistically update local state for responsive UI
-        m_iCurrentNetworkID = -1;
-        m_mConnectedMembers.Clear();
-        if (m_LocalNetworkMembers)
-            m_LocalNetworkMembers.Clear();
-        
+		// The user action that fires this runs on both client and server (it's not
+		// LocalEffectOnly). Do NOT touch server-authoritative device state here —
+		// server-side this function would otherwise pre-clear m_iCurrentNetworkID to -1,
+		// which breaks NotifyNetworkLeft's ability to tell the owning client which
+		// network to purge from its cache (producing ghost members in the old network).
+		if (!Replication.IsServer())
+		{
+			// Client-only optimistic UI update
+			m_iCurrentNetworkID = -1;
+			m_mConnectedMembers.Clear();
+			if (m_LocalNetworkMembers)
+				m_LocalNetworkMembers.Clear();
+		}
+
 		if(!System.IsConsoleApp()) {
 			 // Route through player controller - we don't own this device
 	        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
@@ -589,11 +597,11 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 			AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
 		    if (!system)
 		        return false;
-		    
+
 		    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(GetDeviceRplId());
 		    if (!device)
 		        return false;
-		    
+
 		    system.LeaveNetwork(device);
 		}
         return true;
@@ -699,25 +707,27 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	}
 	
 	void OnNetworkLeft()
-	{   
-		m_bLeavingNetwork = true;
+	{
 	    // Debug logging
 	    string ownerName = "UNKNOWN";
 	    if (GetOwner())
 	        ownerName = GetOwner().ToString();
-	    
-	    Print(string.Format("TDL_NETWORK_LEAVE: %1 (%2) left network %3", 
+
+	    Print(string.Format("TDL_NETWORK_LEAVE: %1 (%2) left network %3",
 	        ownerName, GetOwnerPlayerName(), m_iCurrentNetworkID), LogLevel.DEBUG);
-	    
+
 	    // Clear local network members storage
 	    if (m_LocalNetworkMembers)
 	        m_LocalNetworkMembers.Clear();
-	    
-	    // RPC to client if needed
-	    if (!m_bLeavingNetwork)
-        	Rpc(RpcDo_NotifyNetworkLeft, m_iCurrentNetworkID);
+
+	    // Broadcast to every client so proxies sync their device.m_iCurrentNetworkID.
+	    // The prior `m_bLeavingNetwork = true; if (!m_bLeavingNetwork)` guard made this
+	    // RPC dead code — the condition was always false, so other clients never learned
+	    // the device had left its network. Send the id BEFORE clearing it locally.
+	    if (m_iCurrentNetworkID > 0)
+	        Rpc(RpcDo_NotifyNetworkLeft, m_iCurrentNetworkID);
+
 	    m_iCurrentNetworkID = -1;
-		m_bLeavingNetwork = false;
 	}
 	
 	
