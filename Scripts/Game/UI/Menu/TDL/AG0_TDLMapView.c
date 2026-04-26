@@ -41,6 +41,12 @@ class AG0_TDLMapView
     protected ref array<ref AG0_TDLMapMarker> m_aMarkers = {};
 	// Shape overlay (populated externally via SetShapes)
     protected ref array<ref AG0_TDLMapShape> m_aShapes;
+	// Streamed terrain structures (populated externally via SetTerrainStructures).
+	// When non-empty, replaces the runtime entity-query DrawBuildings() pass —
+	// API data is authoritative and broader (includes structures the runtime
+	// MapDescriptorComponent query may not enumerate). Mirrors the m_aShapes
+	// pattern: ref to keep the manager-owned array alive while we hold it.
+	protected ref array<ref AG0_TDLTerrainStructureRecord> m_aTerrainStructures;
     
     // Building cache - progressive grid-based
     protected ref array<ref AG0_TDLBuildingData> m_aCachedBuildings = {};
@@ -488,6 +494,15 @@ class AG0_TDLMapView
 	{
 		m_aShapes = shapes;
 	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Set terrain structure records to render. Pass null or an empty array to
+	//! fall back to the runtime entity-query DrawBuildings() path.
+	//! The array is read during Draw(); call each frame from the controller.
+	void SetTerrainStructures(array<ref AG0_TDLTerrainStructureRecord> structures)
+	{
+		m_aTerrainStructures = structures;
+	}
     
     //------------------------------------------------------------------------------------------------
     void AddSelfMarker(vector worldPos, float heading)
@@ -667,10 +682,17 @@ class AG0_TDLMapView
         if (m_bTextureLoaded && m_pMapTexture)
             DrawMapEdgeMask();
 
-        // Draw buildings via runtime query ONLY if no structure overlay is available
-        // (overlay textures are much cheaper than per-building polygon rendering)
+        // Building draw priority:
+        //   1. Baked structure overlay texture (set in MapSatelliteConfig) — already drawn above
+        //   2. API-streamed terrain structures (from /api/mod/terrain/structures)
+        //   3. Runtime MapDescriptorComponent query (fallback for maps with neither)
         if (!m_bHasStructureOverlay)
-            DrawBuildings();
+        {
+            if (m_aTerrainStructures && !m_aTerrainStructures.IsEmpty())
+                DrawApiTerrainStructures();
+            else
+                DrawBuildings();
+        }
         
 		//Draw grid (over buildings)
 		DrawGrid();
@@ -974,7 +996,96 @@ class AG0_TDLMapView
 	        m_aDrawCommands.Insert(fill);
 	    }
 	}
-	
+
+	//------------------------------------------------------------------------------------------------
+	//! Draw building footprints sourced from /api/mod/terrain/structures (rect mode).
+	//!
+	//! Each AG0_TDLTerrainStructureRecord describes an oriented rectangle:
+	//!   center (m_fCenterX, m_fCenterZ), size (m_fWidth, m_fDepth), rotation (m_fRotation, radians).
+	//!
+	//! Rotation convention: the API delivers radians directly. The renderer combines
+	//! the building's rotation with the map view's rotation to produce on-screen verts.
+	//! Y is flipped to match screen-space conventions, matching DrawBuildings().
+	//!
+	//! Cull aggressively in screen-space — Everon-scale datasets can be many thousands
+	//! of buildings and we redraw every frame.
+	protected void DrawApiTerrainStructures()
+	{
+	    if (!m_aTerrainStructures || m_aTerrainStructures.IsEmpty())
+	        return;
+
+	    float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
+	    float mapRotRad = m_fRotation * Math.DEG2RAD;
+
+	    foreach (AG0_TDLTerrainStructureRecord rec : m_aTerrainStructures)
+	    {
+	        if (!rec)
+	            continue;
+
+	        // World center → screen
+	        vector worldCenter = Vector(rec.m_fCenterX, 0, rec.m_fCenterZ);
+	        float centerX, centerY;
+	        WorldToScreen(worldCenter, centerX, centerY);
+
+	        // Half-extents in screen pixels (API delivers full width/depth).
+	        float halfW = rec.m_fWidth * 0.5 * pixelsPerWorldUnit;
+	        float halfL = rec.m_fDepth * 0.5 * pixelsPerWorldUnit;
+
+	        // Skip sub-pixel buildings — keeps the canvas readable when zoomed out.
+	        if (halfW < 1 && halfL < 1)
+	            continue;
+
+	        // Skip if center is outside the canvas + a margin sized to the diagonal.
+	        float margin = Math.Max(halfW, halfL) + 20;
+	        if (centerX < -margin || centerX > m_fCanvasWidth + margin ||
+	            centerY < -margin || centerY > m_fCanvasHeight + margin)
+	            continue;
+
+	        // Total rotation = building yaw (rad) + map rotation (rad)
+	        float totalRot = rec.m_fRotation + mapRotRad;
+	        float cosR = Math.Cos(totalRot);
+	        float sinR = Math.Sin(totalRot);
+
+	        // Local corners (unrotated, screen-space sized)
+	        array<float> localX = {-halfW,  halfW, halfW, -halfW};
+	        array<float> localY = {-halfL, -halfL, halfL,  halfL};
+
+	        // Rotated fill verts
+	        array<float> verts = {};
+	        for (int i = 0; i < 4; i = i + 1)
+	        {
+	            float rotX = localX[i] * cosR - localY[i] * sinR;
+	            float rotY = localX[i] * sinR + localY[i] * cosR;
+	            verts.Insert(centerX + rotX);
+	            verts.Insert(centerY - rotY); // Flip Y for screen coords
+	        }
+
+	        // Outline polygon (slightly expanded)
+	        float outlineOffset = 1.5;
+	        array<float> outLocalX = {-halfW - outlineOffset,  halfW + outlineOffset, halfW + outlineOffset, -halfW - outlineOffset};
+	        array<float> outLocalY = {-halfL - outlineOffset, -halfL - outlineOffset, halfL + outlineOffset,  halfL + outlineOffset};
+
+	        array<float> outlineVerts = {};
+	        for (int j = 0; j < 4; j = j + 1)
+	        {
+	            float rotX = outLocalX[j] * cosR - outLocalY[j] * sinR;
+	            float rotY = outLocalX[j] * sinR + outLocalY[j] * cosR;
+	            outlineVerts.Insert(centerX + rotX);
+	            outlineVerts.Insert(centerY - rotY);
+	        }
+
+	        PolygonDrawCommand outline = new PolygonDrawCommand();
+	        outline.m_iColor = 0xFF000000;
+	        outline.m_Vertices = outlineVerts;
+	        m_aDrawCommands.Insert(outline);
+
+	        PolygonDrawCommand fill = new PolygonDrawCommand();
+	        fill.m_iColor = m_iBuildingColor;
+	        fill.m_Vertices = verts;
+	        m_aDrawCommands.Insert(fill);
+	    }
+	}
+
 	// -----------------------------------------------------------------------
 	// ADAPTIVE SEGMENT COUNT
 	// -----------------------------------------------------------------------

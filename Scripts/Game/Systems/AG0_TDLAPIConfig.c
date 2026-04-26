@@ -173,6 +173,49 @@ class AG0_TDLApiShapesCallback : RestCallback
 }
 
 //------------------------------------------------------------------------------------------------
+// REST Callback for Terrain Structures polling endpoint
+// Notes:
+//   * 200 → success path; body is the columnar JSON dataset.
+//   * 304 → arrives via OnError (any non-2xx is routed there); treated as "no change".
+//   * Per the API contract, the mod must use ?since=<hash>, NOT If-None-Match.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiTerrainStructuresCallback : RestCallback
+{
+    protected AG0_TDLApiManager m_Manager;
+
+    //------------------------------------------------------------------------------------------------
+    void AG0_TDLApiTerrainStructuresCallback(AG0_TDLApiManager manager)
+    {
+        m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void OnSuccessHandler(RestCallback cb)
+    {
+        string data = cb.GetData();
+        if (m_Manager)
+            m_Manager.OnTerrainStructuresPollSuccess(data);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void OnErrorHandler(RestCallback cb)
+    {
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            if (m_Manager)
+                m_Manager.OnTerrainStructuresPollTimeout();
+            return;
+        }
+
+        int errorCode = cb.GetHttpCode();
+        if (m_Manager)
+            m_Manager.OnTerrainStructuresPollError(errorCode);
+    }
+}
+
+//------------------------------------------------------------------------------------------------
 // REST Callback for API Key Validation
 //------------------------------------------------------------------------------------------------
 class AG0_TDLApiValidateCallback : RestCallback
@@ -253,7 +296,17 @@ class AG0_TDLApiManager
     protected bool m_bShapesPollInProgress = false;
     protected int m_iSuccessfulShapePolls = 0;
     protected int m_iFailedShapePolls = 0;
-	
+
+    // Terrain structures (building footprints, streamed from /api/mod/terrain/structures)
+    // Populated once after key-validation and on terrain_structures_refresh queue commands.
+    // The manager retains the raw JSON so AG0_TDLSystem can forward it to clients verbatim.
+    protected ref AG0_TDLApiTerrainStructuresCallback m_TerrainStructuresCallback;
+    protected ref AG0_TDLTerrainStructureManager m_TerrainStructureManager;
+    protected bool m_bTerrainStructuresPollInProgress = false;
+    protected bool m_bTerrainStructuresInitialFetchDone = false;
+    protected int m_iSuccessfulTerrainStructuresPolls = 0;
+    protected int m_iFailedTerrainStructuresPolls = 0;
+
     // Statistics
     protected int m_iSuccessfulSubmits = 0;
     protected int m_iFailedSubmits = 0;
@@ -268,6 +321,8 @@ class AG0_TDLApiManager
         m_ValidateCallback = new AG0_TDLApiValidateCallback(this);
 		m_ShapesCallback = new AG0_TDLApiShapesCallback(this);
 		m_ShapeManager = new AG0_TDLMapShapeManager();
+		m_TerrainStructuresCallback = new AG0_TDLApiTerrainStructuresCallback(this);
+		m_TerrainStructureManager = new AG0_TDLTerrainStructureManager();
     }
     
     //------------------------------------------------------------------------------------------------
@@ -447,6 +502,15 @@ class AG0_TDLApiManager
         if (valid)
         {
             Print("[TDL_API] API key is valid - API communication enabled", LogLevel.DEBUG);
+
+            // Kick off the one-shot terrain structures fetch now that we know the key works.
+            // After this initial pull, refreshes are driven by terrain_structures_refresh
+            // queue commands from the web app — there is no periodic poll for this dataset.
+            if (!m_bTerrainStructuresInitialFetchDone)
+            {
+                m_bTerrainStructuresInitialFetchDone = true;
+                PollTerrainStructures();
+            }
         }
         else
         {
@@ -714,7 +778,11 @@ class AG0_TDLApiManager
 			case "shapes_refresh":
                 HandleShapesRefreshCommand();
                 break;
-			
+
+			case "terrain_structures_refresh":
+                HandleTerrainStructuresRefreshCommand();
+                break;
+
             default:
                 Print(string.Format("[TDL_API] Unknown command type: %1", cmdType), LogLevel.WARNING);
                 break;
@@ -1244,6 +1312,146 @@ class AG0_TDLApiManager
 	AG0_TDLMapShapeManager GetShapeManager()
 	{
 		return m_ShapeManager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Terrain structures (building footprints)
+	//------------------------------------------------------------------------------------------------
+
+	//------------------------------------------------------------------------------------------------
+	//! Server-side: GET /api/mod/terrain/structures (with ?since=<lastHash> when known).
+	//! Triggered once after key validation, and again on terrain_structures_refresh
+	//! queue commands from the web app. There is no periodic timer for this dataset
+	//! because building data is effectively static per world.
+	void PollTerrainStructures()
+	{
+		if (!CanCommunicate())
+			return;
+
+		if (m_bTerrainStructuresPollInProgress)
+			return;
+
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+		{
+			Print("[TDL_API] Failed to get REST context for terrain structures poll", LogLevel.ERROR);
+			return;
+		}
+
+		// Auth + Accept-Encoding for gzip. The Enfusion REST stack typically
+		// transparently decompresses, but we still advertise support.
+		string headers = string.Format(
+			"Authorization,Bearer %1,Accept-Encoding,gzip",
+			m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		m_bTerrainStructuresPollInProgress = true;
+
+		// Build path. Server short-circuits to 304 when ?since= matches the
+		// current content hash; we treat that as "keep current dataset".
+		string path = "/terrain/structures";
+		if (m_TerrainStructureManager)
+		{
+			string lastHash = m_TerrainStructureManager.GetLastSyncHash();
+			if (!lastHash.IsEmpty())
+				path = string.Format("/terrain/structures?since=%1", lastHash);
+		}
+
+		Print(string.Format("[TDL_API] Fetching terrain structures: GET %1", path), LogLevel.DEBUG);
+		ctx.GET(m_TerrainStructuresCallback, path);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Called when /terrain/structures returns 200 with a body.
+	void OnTerrainStructuresPollSuccess(string data)
+	{
+		m_bTerrainStructuresPollInProgress = false;
+		m_iSuccessfulTerrainStructuresPolls++;
+
+		if (data.IsEmpty())
+		{
+			Print("[TDL_API] Terrain structures: 200 with empty body — ignoring", LogLevel.DEBUG);
+			return;
+		}
+
+		string prevHash;
+		if (m_TerrainStructureManager)
+			prevHash = m_TerrainStructureManager.GetLastSyncHash();
+
+		int parsed = m_TerrainStructureManager.ParseColumnarPayload(data);
+		string newHash = m_TerrainStructureManager.GetLastSyncHash();
+
+		// Only fan out to clients when the dataset actually changed.
+		if (newHash != prevHash)
+		{
+			AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+			if (tdlSystem)
+				tdlSystem.DistributeTerrainStructuresToClients();
+		}
+
+		Print(string.Format("[TDL_API] Terrain structures poll: %1 buildings, hash=%2",
+			parsed, newHash), LogLevel.DEBUG);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Called when /terrain/structures returns a non-2xx HTTP status.
+	//! 304 is the "no change" short-circuit and is expected when ?since= matches.
+	void OnTerrainStructuresPollError(int errorCode)
+	{
+		m_bTerrainStructuresPollInProgress = false;
+
+		if (errorCode == 304)
+		{
+			// Expected when our cached hash matches server-side. Not an error.
+			Print("[TDL_API] Terrain structures: 304 Not Modified", LogLevel.DEBUG);
+			m_iSuccessfulTerrainStructuresPolls++;
+			return;
+		}
+
+		m_iFailedTerrainStructuresPolls++;
+
+		if (errorCode == 401)
+		{
+			Print("[TDL_API] Terrain structures: 401 — API key may have been revoked", LogLevel.WARNING);
+			m_bApiKeyValid = false;
+		}
+		else if (errorCode == 404)
+		{
+			// Either no map matched, no structures layer in R2, or all features
+			// were filtered out. Ship-safe — log once at DEBUG and move on.
+			Print("[TDL_API] Terrain structures: 404 — no dataset for this world", LogLevel.DEBUG);
+		}
+		else
+		{
+			Print(string.Format("[TDL_API] Terrain structures poll failed: HTTP %1", errorCode),
+				LogLevel.WARNING);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void OnTerrainStructuresPollTimeout()
+	{
+		m_bTerrainStructuresPollInProgress = false;
+		m_iFailedTerrainStructuresPolls++;
+		Print("[TDL_API] Terrain structures poll timed out", LogLevel.DEBUG);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Handle terrain_structures_refresh queue command from the web API.
+	//! Triggers an immediate refetch so the in-game dataset stays in sync after
+	//! a web-side map upload / import.
+	protected void HandleTerrainStructuresRefreshCommand()
+	{
+		Print("[TDL_API] terrain_structures_refresh command received, triggering immediate fetch",
+			LogLevel.DEBUG);
+		PollTerrainStructures();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Get the terrain structure manager (used by AG0_TDLSystem for client distribution).
+	AG0_TDLTerrainStructureManager GetTerrainStructureManager()
+	{
+		return m_TerrainStructureManager;
 	}
 }
 

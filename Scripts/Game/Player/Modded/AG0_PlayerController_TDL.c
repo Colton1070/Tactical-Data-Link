@@ -37,6 +37,19 @@ modded class SCR_PlayerController
 	// TDL Map View
 	protected ref AG0_TDLMapShapeManager m_TDLShapeManager = new AG0_TDLMapShapeManager();
 	protected string m_sShapeSyncHash;
+
+	// TDL terrain structures (building footprints streamed from /api/mod/terrain/structures)
+	// Manager holds the parsed dataset; RPC reassembly buffer holds in-flight chunks.
+	// Server delivers as a sequence of <14 KB Reliable RPCs to avoid Reforger's
+	// forced fragmented-RPC path above ~14 KB. We buffer keyed on syncHash and only
+	// commit to the manager after all chunks arrive.
+	protected ref AG0_TDLTerrainStructureManager m_TDLTerrainStructureManager = new AG0_TDLTerrainStructureManager();
+	protected string m_sTerrainStructureSyncHash;        // Last fully-applied hash
+	protected string m_sTerrainStructureBufferedHash;    // Hash of in-flight chunks
+	protected int m_iTerrainStructureExpectedChunks;     // 0 = no transfer in progress
+	protected int m_iTerrainStructureReceivedChunks;
+	protected ref array<string> m_aTerrainStructureChunkBuffer;
+	protected ref array<bool> m_aTerrainStructureChunkReceived;
 	
 	// ============================================
 	// EUD SCREEN ADJUSTMENT
@@ -1146,13 +1159,115 @@ modded class SCR_PlayerController
 	{
 		return m_TDLShapeManager;
 	}
-	
+
 	//------------------------------------------------------------------------------------------------
 	//! Server → Client: Send shape overlay data
 	//! Called when shapes change or when player joins a network
 	void ReceiveTDLShapes(string packedShapes, string syncHash)
 	{
 		Rpc(RpcDo_ReceiveTDLShapes, packedShapes, syncHash);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Client RPC handler for one chunk of a terrain structures dataset.
+	//!
+	//! Reassembly contract:
+	//!   - All chunks of one dataset share a syncHash. A new syncHash invalidates
+	//!     any partially-received transfer (server is authoritative — it will
+	//!     re-send from chunk 0 if a delivery is interrupted).
+	//!   - We buffer per-index until iReceivedChunks == iExpectedChunks, then
+	//!     concatenate in order and parse once. The manager only sees a fully-
+	//!     assembled payload, so renderers reading mid-flight see consistent state.
+	//!   - Already-applied hash short-circuits (cheap fan-out repeats).
+	//!   - Empty assembled payload is a valid "clear local dataset" signal.
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_ReceiveTDLTerrainStructuresChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
+	{
+		// Already applied this version → ignore. Empty hash is the bootstrap /
+		// "no data" case, which we always process so initial state can be set.
+		if (!syncHash.IsEmpty() && syncHash == m_sTerrainStructureSyncHash)
+			return;
+
+		// Defensive guards on the chunk count itself.
+		if (totalChunks <= 0)
+			return;
+
+		// Start of a new transfer (different hash, or first ever chunk).
+		bool startNewTransfer = (m_iTerrainStructureExpectedChunks == 0)
+			|| (syncHash != m_sTerrainStructureBufferedHash);
+
+		if (startNewTransfer)
+		{
+			m_sTerrainStructureBufferedHash = syncHash;
+			m_iTerrainStructureExpectedChunks = totalChunks;
+			m_iTerrainStructureReceivedChunks = 0;
+			m_aTerrainStructureChunkBuffer = new array<string>();
+			m_aTerrainStructureChunkBuffer.Resize(totalChunks);
+			m_aTerrainStructureChunkReceived = new array<bool>();
+			m_aTerrainStructureChunkReceived.Resize(totalChunks);
+		}
+
+		// Out-of-range chunk → server / client desync; safer to drop.
+		if (chunkIndex < 0 || chunkIndex >= m_iTerrainStructureExpectedChunks)
+			return;
+
+		// First time we see this index → bump received counter.
+		if (!m_aTerrainStructureChunkReceived[chunkIndex])
+		{
+			m_aTerrainStructureChunkReceived[chunkIndex] = true;
+			m_iTerrainStructureReceivedChunks = m_iTerrainStructureReceivedChunks + 1;
+		}
+		m_aTerrainStructureChunkBuffer[chunkIndex] = chunkData;
+
+		// All chunks accounted for → reassemble and commit.
+		if (m_iTerrainStructureReceivedChunks == m_iTerrainStructureExpectedChunks)
+		{
+			string fullPayload = string.Empty;
+			for (int i = 0; i < m_iTerrainStructureExpectedChunks; i = i + 1)
+			{
+				fullPayload = fullPayload + m_aTerrainStructureChunkBuffer[i];
+			}
+
+			// Commit the new hash before parse so any error path still updates state.
+			m_sTerrainStructureSyncHash = syncHash;
+
+			if (!m_TDLTerrainStructureManager)
+				m_TDLTerrainStructureManager = new AG0_TDLTerrainStructureManager();
+
+			if (fullPayload.IsEmpty())
+			{
+				m_TDLTerrainStructureManager.Clear();
+				Print("[TDL_STRUCTURES_CLIENT] Cleared (empty payload)", LogLevel.DEBUG);
+			}
+			else
+			{
+				int count = m_TDLTerrainStructureManager.ParseColumnarPayload(fullPayload);
+				Print(string.Format("[TDL_STRUCTURES_CLIENT] Reassembled %1 chunks → %2 structures (hash: %3)",
+					m_iTerrainStructureExpectedChunks, count, syncHash), LogLevel.DEBUG);
+			}
+
+			// Free reassembly buffer; ready for the next transfer.
+			m_aTerrainStructureChunkBuffer = null;
+			m_aTerrainStructureChunkReceived = null;
+			m_sTerrainStructureBufferedHash = string.Empty;
+			m_iTerrainStructureExpectedChunks = 0;
+			m_iTerrainStructureReceivedChunks = 0;
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Get terrain structure manager for map rendering
+	AG0_TDLTerrainStructureManager GetTDLTerrainStructureManager()
+	{
+		return m_TDLTerrainStructureManager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Server → Client: Send one chunk of the terrain structures dataset.
+	//! Called by AG0_TDLSystem.PushPlayerTerrainStructures, once per chunk.
+	void ReceiveTDLTerrainStructuresChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
+	{
+		Rpc(RpcDo_ReceiveTDLTerrainStructuresChunk, syncHash, totalChunks, chunkIndex, chunkData);
 	}
     
     //------------------------------------------------------------------------------------------------

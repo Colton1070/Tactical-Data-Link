@@ -320,7 +320,7 @@ class AG0_TDLDisplayController
         if (headingImg)
             headingImg.SetRotation(m_MapView.GetRotation());
         
-		// Feed shapes into map view from player controller
+		// Feed shapes + terrain structures into map view from player controller
 		SCR_PlayerController controller = SCR_PlayerController.Cast(
 			GetGame().GetPlayerController()
 		);
@@ -331,10 +331,17 @@ class AG0_TDLDisplayController
 				m_MapView.SetShapes(shapeMgr.GetShapes());
 			else
 				m_MapView.SetShapes(null);
+
+			AG0_TDLTerrainStructureManager structMgr = controller.GetTDLTerrainStructureManager();
+			if (structMgr)
+				m_MapView.SetTerrainStructures(structMgr.GetStructures());
+			else
+				m_MapView.SetTerrainStructures(null);
 		}
 		else
 		{
 			m_MapView.SetShapes(null);
+			m_MapView.SetTerrainStructures(null);
 		}
 		
         // Draw map

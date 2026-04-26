@@ -300,6 +300,11 @@ class AG0_TDLSystem : WorldSystem
 	protected float m_fTimeSinceApiStateSync = 0;
 	protected const float API_SHAPES_POLL_INTERVAL = 5.0;
     protected float m_fTimeSinceShapesPoll = 0;
+
+	// Lazy-registered handler for SCR_BaseGameMode.GetOnPlayerAuditSuccess.
+	// Used to deliver the terrain structures dataset to every player on session join,
+	// independent of TDL network membership — so the data is always there/available.
+	protected bool m_bPlayerAuditHandlerRegistered = false;
 	
 
 
@@ -456,7 +461,13 @@ class AG0_TDLSystem : WorldSystem
     override protected void OnUpdatePoint(WorldUpdatePointArgs args)
     {
         if (!Replication.IsServer()) return;
-        
+
+        // The game mode is not necessarily live during our OnInit (system-init
+        // ordering is not guaranteed). Register lazily on the first tick where
+        // it's available. Cheap once-only check after the flag flips.
+        if (!m_bPlayerAuditHandlerRegistered)
+            EnsurePlayerAuditHandlerRegistered();
+
         float timeSlice = GetWorld().GetFixedTimeSlice();
         m_fTimeSinceLastUpdate += timeSlice;
         
@@ -1535,24 +1546,24 @@ class AG0_TDLSystem : WorldSystem
 	void DistributeShapesToClients()
 	{
 		if (!Replication.IsServer()) return;
-		
+
 		PlayerManager playerMgr = GetGame().GetPlayerManager();
 		if (!playerMgr) return;
-		
+
 		set<int> pushedPlayers = new set<int>();
-		
+
 		foreach (AG0_TDLNetwork network : m_aNetworks)
 		{
 			foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
 			{
 				IEntity player = GetPlayerFromDevice(device);
 				if (!player) continue;
-				
+
 				int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
 				if (playerId < 0 || pushedPlayers.Contains(playerId))
 					continue;
 				pushedPlayers.Insert(playerId);
-				
+
 				SCR_PlayerController controller = SCR_PlayerController.Cast(
 					playerMgr.GetPlayerController(playerId)
 				);
@@ -1560,6 +1571,133 @@ class AG0_TDLSystem : WorldSystem
 					PushPlayerShapes(controller, playerId);
 			}
 		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Per-chunk wire-data budget for terrain structure delivery.
+	//! Reforger Reliable RPCs forced into fragmented mode above ~14 KB per packet,
+	//! which Colton wants to avoid — keep individual chunks well below that with
+	//! headroom for the syncHash / index / totalChunks params and RPC envelope.
+	protected static const int TERRAIN_STRUCTURES_CHUNK_BYTES = 12000;
+
+	//------------------------------------------------------------------------------------------------
+	//! Push the current terrain structures dataset to a single player as a sequence
+	//! of <14 KB Reliable RPCs. Clients buffer keyed on syncHash and parse only after
+	//! all `totalChunks` arrive — see RpcDo_ReceiveTDLTerrainStructuresChunk.
+	//!
+	//! Empty payload + any (including empty) hash is a valid "clear local state"
+	//! signal, sent as one zero-length chunk so the client's reassembly bookkeeping
+	//! stays consistent.
+	protected void PushPlayerTerrainStructures(SCR_PlayerController controller, int playerId)
+	{
+		if (!m_ApiManager || !controller) return;
+
+		AG0_TDLTerrainStructureManager mgr = m_ApiManager.GetTerrainStructureManager();
+		if (!mgr)
+		{
+			// No manager → tell client we have nothing.
+			controller.ReceiveTDLTerrainStructuresChunk(string.Empty, 1, 0, string.Empty);
+			return;
+		}
+
+		string raw = mgr.GetLastRawJson();
+		string hash = mgr.GetLastSyncHash();
+
+		int totalLen = raw.Length();
+		if (totalLen == 0)
+		{
+			// Empty dataset — single empty chunk so the client transitions cleanly.
+			controller.ReceiveTDLTerrainStructuresChunk(hash, 1, 0, string.Empty);
+			return;
+		}
+
+		int chunkBytes = TERRAIN_STRUCTURES_CHUNK_BYTES;
+		int totalChunks = (totalLen + chunkBytes - 1) / chunkBytes;
+
+		for (int i = 0; i < totalChunks; i = i + 1)
+		{
+			int start = i * chunkBytes;
+			int len = Math.Min(chunkBytes, totalLen - start);
+			string chunk = raw.Substring(start, len);
+			controller.ReceiveTDLTerrainStructuresChunk(hash, totalChunks, i, chunk);
+		}
+
+		Print(string.Format("[TDL_STRUCTURES] Sent %1 chunks (%2 bytes) to player %3, hash=%4",
+			totalChunks, totalLen, playerId, hash), LogLevel.DEBUG);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Distribute the current terrain structures dataset to all connected players.
+	//! Unlike shapes, structures are global to the world — not network-scoped — so
+	//! we iterate every player the PlayerManager knows about. The client RPC handler
+	//! short-circuits when its local hash already matches, so unchanged repeats are cheap.
+	void DistributeTerrainStructuresToClients()
+	{
+		if (!Replication.IsServer()) return;
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr) return;
+
+		array<int> playerIds = {};
+		playerMgr.GetPlayers(playerIds);
+
+		foreach (int playerId : playerIds)
+		{
+			if (playerId <= 0) continue;
+
+			SCR_PlayerController controller = SCR_PlayerController.Cast(
+				playerMgr.GetPlayerController(playerId)
+			);
+			if (!controller) continue;
+
+			PushPlayerTerrainStructures(controller, playerId);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Register the OnPlayerAuditSuccess handler with SCR_BaseGameMode if not yet.
+	//! Idempotent — safe to call every tick.
+	protected void EnsurePlayerAuditHandlerRegistered()
+	{
+		if (m_bPlayerAuditHandlerRegistered)
+			return;
+
+		SCR_BaseGameMode gameMode = SCR_BaseGameMode.Cast(GetGame().GetGameMode());
+		if (!gameMode)
+			return;
+
+		ScriptInvokerBase<SCR_BaseGameMode_PlayerId> invoker = gameMode.GetOnPlayerAuditSuccess();
+		if (!invoker)
+			return;
+
+		invoker.Insert(OnPlayerAuditSuccessHandler);
+		m_bPlayerAuditHandlerRegistered = true;
+		Print("[TDL_STRUCTURES] Registered OnPlayerAuditSuccess handler", LogLevel.DEBUG);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Fires once per session-joining player AFTER the audit succeeds — by which
+	//! point the player's controller is RPC-addressable. Push the current terrain
+	//! structures dataset so the player has it cached locally before they ever
+	//! open the TDL map. Independent of TDL network membership.
+	//!
+	//! If the API hasn't completed its initial fetch yet, the manager's raw JSON
+	//! is empty and we send (empty, empty) — perfectly fine. When the fetch
+	//! eventually lands, DistributeTerrainStructuresToClients() pushes again to
+	//! every connected player and this one will get the real data then.
+	protected void OnPlayerAuditSuccessHandler(int playerId)
+	{
+		if (playerId <= 0) return;
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr) return;
+
+		SCR_PlayerController controller = SCR_PlayerController.Cast(
+			playerMgr.GetPlayerController(playerId)
+		);
+		if (!controller) return;
+
+		PushPlayerTerrainStructures(controller, playerId);
 	}
 	
     //------------------------------------------------------------------------------------------------
@@ -1579,11 +1717,11 @@ class AG0_TDLSystem : WorldSystem
     {
 		PlayerManager playerMgr = GetGame().GetPlayerManager();
 		set<int> shapePushedPlayers = new set<int>();
-		
+
         foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
         {
             NotifyNetworkJoined(device, network.GetNetworkID(), network.GetDeviceData());
-			
+
 			if (playerMgr)
 			{
 				IEntity player = GetPlayerFromDevice(device);
