@@ -96,7 +96,19 @@ class AG0_TDLTerrainStructureManager
         SCR_JsonLoadContext json = new SCR_JsonLoadContext();
         if (!json.ImportFromString(jsonBody))
         {
-            Print("[TDL_STRUCTURES] ParseColumnarPayload: invalid JSON", LogLevel.WARNING);
+            // Dump size + a head/tail sample so it's obvious whether we got
+            // gzip bytes (no leading '{'), an HTML error page, or truncated JSON.
+            int bodyLen = jsonBody.Length();
+            string head = jsonBody.Substring(0, Math.Min(64, bodyLen));
+            string tail;
+            if (bodyLen > 64)
+                tail = jsonBody.Substring(Math.Max(0, bodyLen - 64), Math.Min(64, bodyLen));
+            else
+                tail = string.Empty;
+
+            Print(string.Format(
+                "[TDL_STRUCTURES] ParseColumnarPayload: invalid JSON (len=%1)\n  head: %2\n  tail: %3",
+                bodyLen, head, tail), LogLevel.WARNING);
             return 0;
         }
 

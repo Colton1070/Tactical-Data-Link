@@ -50,6 +50,16 @@ modded class SCR_PlayerController
 	protected int m_iTerrainStructureReceivedChunks;
 	protected ref array<string> m_aTerrainStructureChunkBuffer;
 	protected ref array<bool> m_aTerrainStructureChunkReceived;
+
+	// TDL terrain roads (road network streamed from /api/mod/terrain/roads)
+	// Same chunked-RPC reassembly pattern as structures.
+	protected ref AG0_TDLTerrainRoadManager m_TDLTerrainRoadManager = new AG0_TDLTerrainRoadManager();
+	protected string m_sTerrainRoadSyncHash;
+	protected string m_sTerrainRoadBufferedHash;
+	protected int m_iTerrainRoadExpectedChunks;
+	protected int m_iTerrainRoadReceivedChunks;
+	protected ref array<string> m_aTerrainRoadChunkBuffer;
+	protected ref array<bool> m_aTerrainRoadChunkReceived;
 	
 	// ============================================
 	// EUD SCREEN ADJUSTMENT
@@ -1268,6 +1278,85 @@ modded class SCR_PlayerController
 	void ReceiveTDLTerrainStructuresChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
 	{
 		Rpc(RpcDo_ReceiveTDLTerrainStructuresChunk, syncHash, totalChunks, chunkIndex, chunkData);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Roads chunk RPC. Same reassembly contract as terrain structures —
+	//! see RpcDo_ReceiveTDLTerrainStructuresChunk for the rationale comments.
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_ReceiveTDLTerrainRoadsChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
+	{
+		if (!syncHash.IsEmpty() && syncHash == m_sTerrainRoadSyncHash)
+			return;
+
+		if (totalChunks <= 0)
+			return;
+
+		bool startNewTransfer = (m_iTerrainRoadExpectedChunks == 0)
+			|| (syncHash != m_sTerrainRoadBufferedHash);
+
+		if (startNewTransfer)
+		{
+			m_sTerrainRoadBufferedHash = syncHash;
+			m_iTerrainRoadExpectedChunks = totalChunks;
+			m_iTerrainRoadReceivedChunks = 0;
+			m_aTerrainRoadChunkBuffer = new array<string>();
+			m_aTerrainRoadChunkBuffer.Resize(totalChunks);
+			m_aTerrainRoadChunkReceived = new array<bool>();
+			m_aTerrainRoadChunkReceived.Resize(totalChunks);
+		}
+
+		if (chunkIndex < 0 || chunkIndex >= m_iTerrainRoadExpectedChunks)
+			return;
+
+		if (!m_aTerrainRoadChunkReceived[chunkIndex])
+		{
+			m_aTerrainRoadChunkReceived[chunkIndex] = true;
+			m_iTerrainRoadReceivedChunks = m_iTerrainRoadReceivedChunks + 1;
+		}
+		m_aTerrainRoadChunkBuffer[chunkIndex] = chunkData;
+
+		if (m_iTerrainRoadReceivedChunks == m_iTerrainRoadExpectedChunks)
+		{
+			string fullPayload = string.Empty;
+			for (int i = 0; i < m_iTerrainRoadExpectedChunks; i = i + 1)
+			{
+				fullPayload = fullPayload + m_aTerrainRoadChunkBuffer[i];
+			}
+
+			m_sTerrainRoadSyncHash = syncHash;
+
+			if (!m_TDLTerrainRoadManager)
+				m_TDLTerrainRoadManager = new AG0_TDLTerrainRoadManager();
+
+			if (fullPayload.IsEmpty())
+			{
+				m_TDLTerrainRoadManager.Clear();
+				Print("[TDL_ROADS_CLIENT] Cleared (empty payload)", LogLevel.DEBUG);
+			}
+			else
+			{
+				int count = m_TDLTerrainRoadManager.ParseColumnarPayload(fullPayload);
+				Print(string.Format("[TDL_ROADS_CLIENT] Reassembled %1 chunks → %2 features (hash: %3)",
+					m_iTerrainRoadExpectedChunks, count, syncHash), LogLevel.DEBUG);
+			}
+
+			m_aTerrainRoadChunkBuffer = null;
+			m_aTerrainRoadChunkReceived = null;
+			m_sTerrainRoadBufferedHash = string.Empty;
+			m_iTerrainRoadExpectedChunks = 0;
+			m_iTerrainRoadReceivedChunks = 0;
+		}
+	}
+
+	AG0_TDLTerrainRoadManager GetTDLTerrainRoadManager()
+	{
+		return m_TDLTerrainRoadManager;
+	}
+
+	void ReceiveTDLTerrainRoadsChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
+	{
+		Rpc(RpcDo_ReceiveTDLTerrainRoadsChunk, syncHash, totalChunks, chunkIndex, chunkData);
 	}
     
     //------------------------------------------------------------------------------------------------

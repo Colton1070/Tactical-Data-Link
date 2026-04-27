@@ -216,6 +216,43 @@ class AG0_TDLApiTerrainStructuresCallback : RestCallback
 }
 
 //------------------------------------------------------------------------------------------------
+// REST Callback for Terrain Roads polling endpoint. Same 200/304/error split
+// as the structures callback — 304 arrives via OnError per Reforger's REST stack.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiTerrainRoadsCallback : RestCallback
+{
+    protected AG0_TDLApiManager m_Manager;
+
+    void AG0_TDLApiTerrainRoadsCallback(AG0_TDLApiManager manager)
+    {
+        m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
+    }
+
+    void OnSuccessHandler(RestCallback cb)
+    {
+        string data = cb.GetData();
+        if (m_Manager)
+            m_Manager.OnTerrainRoadsPollSuccess(data);
+    }
+
+    void OnErrorHandler(RestCallback cb)
+    {
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            if (m_Manager)
+                m_Manager.OnTerrainRoadsPollTimeout();
+            return;
+        }
+
+        int errorCode = cb.GetHttpCode();
+        if (m_Manager)
+            m_Manager.OnTerrainRoadsPollError(errorCode);
+    }
+}
+
+//------------------------------------------------------------------------------------------------
 // REST Callback for API Key Validation
 //------------------------------------------------------------------------------------------------
 class AG0_TDLApiValidateCallback : RestCallback
@@ -307,6 +344,15 @@ class AG0_TDLApiManager
     protected int m_iSuccessfulTerrainStructuresPolls = 0;
     protected int m_iFailedTerrainStructuresPolls = 0;
 
+    // Terrain roads (road network, streamed from /api/mod/terrain/roads)
+    // Same lifecycle as structures: one fetch on key validation + on terrain_roads_refresh.
+    protected ref AG0_TDLApiTerrainRoadsCallback m_TerrainRoadsCallback;
+    protected ref AG0_TDLTerrainRoadManager m_TerrainRoadManager;
+    protected bool m_bTerrainRoadsPollInProgress = false;
+    protected bool m_bTerrainRoadsInitialFetchDone = false;
+    protected int m_iSuccessfulTerrainRoadsPolls = 0;
+    protected int m_iFailedTerrainRoadsPolls = 0;
+
     // Statistics
     protected int m_iSuccessfulSubmits = 0;
     protected int m_iFailedSubmits = 0;
@@ -323,6 +369,8 @@ class AG0_TDLApiManager
 		m_ShapeManager = new AG0_TDLMapShapeManager();
 		m_TerrainStructuresCallback = new AG0_TDLApiTerrainStructuresCallback(this);
 		m_TerrainStructureManager = new AG0_TDLTerrainStructureManager();
+		m_TerrainRoadsCallback = new AG0_TDLApiTerrainRoadsCallback(this);
+		m_TerrainRoadManager = new AG0_TDLTerrainRoadManager();
     }
     
     //------------------------------------------------------------------------------------------------
@@ -510,6 +558,13 @@ class AG0_TDLApiManager
             {
                 m_bTerrainStructuresInitialFetchDone = true;
                 PollTerrainStructures();
+            }
+
+            // Same one-shot pattern for the road network.
+            if (!m_bTerrainRoadsInitialFetchDone)
+            {
+                m_bTerrainRoadsInitialFetchDone = true;
+                PollTerrainRoads();
             }
         }
         else
@@ -781,6 +836,10 @@ class AG0_TDLApiManager
 
 			case "terrain_structures_refresh":
                 HandleTerrainStructuresRefreshCommand();
+                break;
+
+			case "terrain_roads_refresh":
+                HandleTerrainRoadsRefreshCommand();
                 break;
 
             default:
@@ -1338,11 +1397,13 @@ class AG0_TDLApiManager
 			return;
 		}
 
-		// Auth + Accept-Encoding for gzip. The Enfusion REST stack typically
-		// transparently decompresses, but we still advertise support.
-		string headers = string.Format(
-			"Authorization,Bearer %1,Accept-Encoding,gzip",
-			m_Config.apiKey);
+		// Auth only — do NOT send Accept-Encoding: gzip here.
+		// The Reforger REST stack does not transparently decompress for this
+		// endpoint, so requesting gzip causes ImportFromString to fail with
+		// "invalid JSON" on the (still-compressed) bytes. The dataset is small
+		// enough uncompressed that this isn't a problem in practice; if/when
+		// payloads grow we can add a manual gunzip step using AG0_TDLGzip.
+		string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
 		ctx.SetHeaders(headers);
 
 		m_bTerrainStructuresPollInProgress = true;
@@ -1452,6 +1513,121 @@ class AG0_TDLApiManager
 	AG0_TDLTerrainStructureManager GetTerrainStructureManager()
 	{
 		return m_TerrainStructureManager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Terrain roads (road network)
+	// Mirrors the terrain structures lifecycle exactly — see those methods for rationale.
+	//------------------------------------------------------------------------------------------------
+
+	void PollTerrainRoads()
+	{
+		if (!CanCommunicate())
+			return;
+		if (m_bTerrainRoadsPollInProgress)
+			return;
+
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+		{
+			Print("[TDL_API] Failed to get REST context for terrain roads poll", LogLevel.ERROR);
+			return;
+		}
+
+		// Auth only — no Accept-Encoding (REST stack does not transparently
+		// decompress; matches structures path).
+		string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		m_bTerrainRoadsPollInProgress = true;
+
+		string path = "/terrain/roads";
+		if (m_TerrainRoadManager)
+		{
+			string lastHash = m_TerrainRoadManager.GetLastSyncHash();
+			if (!lastHash.IsEmpty())
+				path = string.Format("/terrain/roads?since=%1", lastHash);
+		}
+
+		Print(string.Format("[TDL_API] Fetching terrain roads: GET %1", path), LogLevel.DEBUG);
+		ctx.GET(m_TerrainRoadsCallback, path);
+	}
+
+	void OnTerrainRoadsPollSuccess(string data)
+	{
+		m_bTerrainRoadsPollInProgress = false;
+		m_iSuccessfulTerrainRoadsPolls++;
+
+		if (data.IsEmpty())
+		{
+			Print("[TDL_API] Terrain roads: 200 with empty body — ignoring", LogLevel.DEBUG);
+			return;
+		}
+
+		string prevHash;
+		if (m_TerrainRoadManager)
+			prevHash = m_TerrainRoadManager.GetLastSyncHash();
+
+		int parsed = m_TerrainRoadManager.ParseColumnarPayload(data);
+		string newHash = m_TerrainRoadManager.GetLastSyncHash();
+
+		if (newHash != prevHash)
+		{
+			AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+			if (tdlSystem)
+				tdlSystem.DistributeTerrainRoadsToClients();
+		}
+
+		Print(string.Format("[TDL_API] Terrain roads poll: %1 features, hash=%2",
+			parsed, newHash), LogLevel.DEBUG);
+	}
+
+	void OnTerrainRoadsPollError(int errorCode)
+	{
+		m_bTerrainRoadsPollInProgress = false;
+
+		if (errorCode == 304)
+		{
+			Print("[TDL_API] Terrain roads: 304 Not Modified", LogLevel.DEBUG);
+			m_iSuccessfulTerrainRoadsPolls++;
+			return;
+		}
+
+		m_iFailedTerrainRoadsPolls++;
+
+		if (errorCode == 401)
+		{
+			Print("[TDL_API] Terrain roads: 401 — API key may have been revoked", LogLevel.WARNING);
+			m_bApiKeyValid = false;
+		}
+		else if (errorCode == 404)
+		{
+			Print("[TDL_API] Terrain roads: 404 — no dataset for this world", LogLevel.DEBUG);
+		}
+		else
+		{
+			Print(string.Format("[TDL_API] Terrain roads poll failed: HTTP %1", errorCode),
+				LogLevel.WARNING);
+		}
+	}
+
+	void OnTerrainRoadsPollTimeout()
+	{
+		m_bTerrainRoadsPollInProgress = false;
+		m_iFailedTerrainRoadsPolls++;
+		Print("[TDL_API] Terrain roads poll timed out", LogLevel.DEBUG);
+	}
+
+	protected void HandleTerrainRoadsRefreshCommand()
+	{
+		Print("[TDL_API] terrain_roads_refresh command received, triggering immediate fetch",
+			LogLevel.DEBUG);
+		PollTerrainRoads();
+	}
+
+	AG0_TDLTerrainRoadManager GetTerrainRoadManager()
+	{
+		return m_TerrainRoadManager;
 	}
 }
 

@@ -24,7 +24,7 @@ class AG0_TDLMapView
     protected ref array<float> m_aOverlayOpacities = {};
     protected ref array<string> m_aOverlayNames = {};
     protected ref array<bool> m_aOverlayEnabled = {};
-    protected bool m_bHasStructureOverlay;  // When true, skip runtime DrawBuildings()
+    protected bool m_bHasStructureOverlay;  // When true, skip API-streamed structure render (baked overlay covers it)
     
     // View state
     protected vector m_vCenterWorld;      // World position we're centered on
@@ -42,17 +42,15 @@ class AG0_TDLMapView
 	// Shape overlay (populated externally via SetShapes)
     protected ref array<ref AG0_TDLMapShape> m_aShapes;
 	// Streamed terrain structures (populated externally via SetTerrainStructures).
-	// When non-empty, replaces the runtime entity-query DrawBuildings() pass —
-	// API data is authoritative and broader (includes structures the runtime
-	// MapDescriptorComponent query may not enumerate). Mirrors the m_aShapes
-	// pattern: ref to keep the manager-owned array alive while we hold it.
+	// Authoritative source for building footprints on the map view; API data is
+	// broader and more accurate than the legacy runtime MapDescriptorComponent
+	// query that previously sat here. Mirrors the m_aShapes pattern: ref to keep
+	// the manager-owned array alive while we hold it.
 	protected ref array<ref AG0_TDLTerrainStructureRecord> m_aTerrainStructures;
-    
-    // Building cache - progressive grid-based
-    protected ref array<ref AG0_TDLBuildingData> m_aCachedBuildings = {};
-    protected ref set<int> m_QuerydCells = new set<int>();
-    protected const float CELL_SIZE = 500.0;
-    protected const float CACHE_BUFFER_MULT = 1.5;
+
+	// Streamed terrain roads (populated externally via SetTerrainRoads).
+	// Drawn before structures so buildings render on top of road overlays.
+	protected ref array<ref AG0_TDLTerrainRoadFeature> m_aTerrainRoads;
     
     // Colors
     protected int m_iSelfMarkerColor = 0xFF00FF00;      // Green for self
@@ -496,12 +494,20 @@ class AG0_TDLMapView
 	}
 
 	//------------------------------------------------------------------------------------------------
-	//! Set terrain structure records to render. Pass null or an empty array to
-	//! fall back to the runtime entity-query DrawBuildings() path.
+	//! Set terrain structure records to render. Pass null or an empty array
+	//! when no API dataset is available (no buildings will draw on the map view).
 	//! The array is read during Draw(); call each frame from the controller.
 	void SetTerrainStructures(array<ref AG0_TDLTerrainStructureRecord> structures)
 	{
 		m_aTerrainStructures = structures;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Set terrain road features to render. Pass null/empty for no roads.
+	//! Read during Draw(); refreshed each frame from the controller.
+	void SetTerrainRoads(array<ref AG0_TDLTerrainRoadFeature> roads)
+	{
+		m_aTerrainRoads = roads;
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -529,121 +535,6 @@ class AG0_TDLMapView
     }
     
     //------------------------------------------------------------------------------------------------
-    // BUILDING CACHE - Progressive Grid-Based
-    //------------------------------------------------------------------------------------------------
-    protected int GetCellIndex(int cellX, int cellZ)
-    {
-        int gridWidth = Math.Ceil(m_fMapSizeX / CELL_SIZE) + 1;
-        return cellZ * gridWidth + cellX;
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void UpdateBuildingCache()
-    {
-        if (m_fCanvasHeight <= 0 || m_fCanvasWidth <= 0)
-            return;
-        
-        // Calculate visible cell range with buffer
-        float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
-        float viewWorldSizeX = m_fMapSizeX * m_fZoom * CACHE_BUFFER_MULT;
-        float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
-        
-        int minCellX = Math.Floor((m_vCenterWorld[0] - viewWorldSizeX * 0.5) / CELL_SIZE);
-        int maxCellX = Math.Floor((m_vCenterWorld[0] + viewWorldSizeX * 0.5) / CELL_SIZE);
-        int minCellZ = Math.Floor((m_vCenterWorld[2] - viewWorldSizeZ * 0.5) / CELL_SIZE);
-        int maxCellZ = Math.Floor((m_vCenterWorld[2] + viewWorldSizeZ * 0.5) / CELL_SIZE);
-        
-        BaseWorld world = GetGame().GetWorld();
-        if (!world)
-            return;
-        
-        // Only query cells we haven't seen before
-        for (int cz = minCellZ; cz <= maxCellZ; cz++)
-        {
-            for (int cx = minCellX; cx <= maxCellX; cx++)
-            {
-                int cellIndex = GetCellIndex(cx, cz);
-                if (m_QuerydCells.Contains(cellIndex))
-                    continue;
-                
-                m_QuerydCells.Insert(cellIndex);
-                
-                vector cellMin = Vector(cx * CELL_SIZE, -1000, cz * CELL_SIZE);
-                vector cellMax = Vector((cx + 1) * CELL_SIZE, 1000, (cz + 1) * CELL_SIZE);
-                
-                world.QueryEntitiesByAABB(cellMin, cellMax, QueryBuildingCallback, null, EQueryEntitiesFlags.STATIC);
-            }
-        }
-    }
-	
-	//------------------------------------------------------------------------------------------------
-	protected bool QueryBuildingCallback(IEntity entity)
-	{
-	    // Check if entity has a map descriptor indicating it's a building
-	    MapDescriptorComponent descriptor = MapDescriptorComponent.Cast(entity.FindComponent(MapDescriptorComponent));
-	    if (!descriptor)
-	        return true; // Continue query
-	    
-	    int descType = descriptor.GetBaseType();
-	    if (!IsBuildingType(descType))
-	        return true;
-	    
-	    // Get entity transform and bounds
-	    vector transform[4];
-	    entity.GetTransform(transform);
-	    
-	    vector mins, maxs;
-	    entity.GetBounds(mins, maxs);
-	    
-	    // Calculate OBB data
-	    AG0_TDLBuildingData data = new AG0_TDLBuildingData();
-	    
-	    // Center in local space, then transform to world
-	    vector localCenter = (mins + maxs) * 0.5;
-	    data.m_vCenter = entity.CoordToParent(localCenter);
-	    
-	    // Half extents
-	    data.m_fHalfWidth = (maxs[0] - mins[0]) * 0.5;
-	    data.m_fHalfLength = (maxs[2] - mins[2]) * 0.5;
-	    
-	    // Extract yaw from transform matrix
-	    data.m_fYaw = Math.Atan2(transform[2][0], transform[2][2]) * Math.RAD2DEG;
-	    
-	    m_aCachedBuildings.Insert(data);
-	    
-	    return true; // Continue query
-	}
-    
-    //------------------------------------------------------------------------------------------------
-    protected bool IsBuildingType(int descriptorType)
-    {
-        switch (descriptorType)
-        {
-            case EMapDescriptorType.MDT_BUILDING:
-            case EMapDescriptorType.MDT_HOUSE:
-            case EMapDescriptorType.MDT_FORTRESS:
-            case EMapDescriptorType.MDT_BUNKER:
-            case EMapDescriptorType.MDT_FUELSTATION:
-            case EMapDescriptorType.MDT_HOSPITAL:
-            case EMapDescriptorType.MDT_CHURCH:
-            case EMapDescriptorType.MDT_TRANSMITTER:
-            case EMapDescriptorType.MDT_STACK:
-            case EMapDescriptorType.MDT_RUIN:
-            case EMapDescriptorType.MDT_WATERTOWER:
-            case EMapDescriptorType.MDT_LIGHTHOUSE:
-                return true;
-        }
-        return false;
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    void ClearBuildingCache()
-    {
-        m_aCachedBuildings.Clear();
-        m_QuerydCells.Clear();
-    }
-    
-    //------------------------------------------------------------------------------------------------
     // RENDERING
     //------------------------------------------------------------------------------------------------
     void Draw()
@@ -657,10 +548,7 @@ class AG0_TDLMapView
 	    // Guard against zero dimensions (widget not yet laid out)
 	    if (m_fCanvasHeight <= 0 || m_fCanvasWidth <= 0)
 	        return;
-        
-        // Update building cache - only queries new cells
-        UpdateBuildingCache();
-        
+
         // Clear previous commands
         m_aDrawCommands.Clear();
         
@@ -682,17 +570,17 @@ class AG0_TDLMapView
         if (m_bTextureLoaded && m_pMapTexture)
             DrawMapEdgeMask();
 
+        // Roads first so they sit under buildings (real-world layering).
+        DrawApiTerrainRoads();
+
         // Building draw priority:
-        //   1. Baked structure overlay texture (set in MapSatelliteConfig) — already drawn above
+        //   1. Baked structure overlay texture (set in MapSatelliteConfig) — drawn above
         //   2. API-streamed terrain structures (from /api/mod/terrain/structures)
-        //   3. Runtime MapDescriptorComponent query (fallback for maps with neither)
+        // The legacy runtime MapDescriptorComponent query has been removed; the
+        // API path is authoritative and the per-frame entity query was both more
+        // expensive and less accurate (and shared the rotation bug fixed below).
         if (!m_bHasStructureOverlay)
-        {
-            if (m_aTerrainStructures && !m_aTerrainStructures.IsEmpty())
-                DrawApiTerrainStructures();
-            else
-                DrawBuildings();
-        }
+            DrawApiTerrainStructures();
         
 		//Draw grid (over buildings)
 		DrawGrid();
@@ -923,77 +811,142 @@ class AG0_TDLMapView
     }
 	
 	//------------------------------------------------------------------------------------------------
-	protected void DrawBuildings()
+	//! Draw road network from /api/mod/terrain/roads.
+	//!
+	//! Each AG0_TDLTerrainRoadFeature is a polyline rendered as a sequence of
+	//! LineDrawCommand segments. At each interior vertex we drop a small filled
+	//! circle ("round join") so consecutive segments meeting at an angle share
+	//! a continuous outline instead of leaving a gap on the outside of the bend.
+	//!
+	//! Performance:
+	//!   1. Per-frame: compute a world-space viewport AABB once.
+	//!   2. Per-feature: skip the entire road if its precomputed AABB doesn't
+	//!      intersect the viewport — no WorldToScreen calls at all for off-screen
+	//!      features. Cheap test, high payoff for Eden-scale datasets.
+	//!   3. Per-segment: keep a screen-space reject for partially-on-screen roads
+	//!      so off-screen segments of long polylines still cost nothing.
+	protected void DrawApiTerrainRoads()
 	{
-	    if (m_aCachedBuildings.IsEmpty())
+	    if (!m_aTerrainRoads || m_aTerrainRoads.IsEmpty())
 	        return;
-	    
+
 	    float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
-	    
-	    foreach (AG0_TDLBuildingData bldg : m_aCachedBuildings)
+
+	    // World-space viewport AABB (rotation-safe via the diagonal-sized square,
+	    // same trick DrawMapTexture uses for satellite UV sampling). Off-screen
+	    // by less than ROAD_CULL_MARGIN world meters still draws so wide roads
+	    // crossing the edge don't pop in.
+	    float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
+	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+	    float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
+	    float diagonal = Math.Sqrt(viewWorldSizeX * viewWorldSizeX + viewWorldSizeZ * viewWorldSizeZ);
+	    const float ROAD_CULL_MARGIN = 50.0;
+	    float viewMinX = m_vCenterWorld[0] - diagonal * 0.5 - ROAD_CULL_MARGIN;
+	    float viewMaxX = m_vCenterWorld[0] + diagonal * 0.5 + ROAD_CULL_MARGIN;
+	    float viewMinZ = m_vCenterWorld[2] - diagonal * 0.5 - ROAD_CULL_MARGIN;
+	    float viewMaxZ = m_vCenterWorld[2] + diagonal * 0.5 + ROAD_CULL_MARGIN;
+
+	    foreach (AG0_TDLTerrainRoadFeature road : m_aTerrainRoads)
 	    {
-	        // Get screen center (screen pixels)
-	        float centerX, centerY;
-	        WorldToScreen(bldg.m_vCenter, centerX, centerY);
-	        
-	        // Calculate screen-space half-dimensions
-	        float halfW = bldg.m_fHalfWidth * pixelsPerWorldUnit;
-	        float halfL = bldg.m_fHalfLength * pixelsPerWorldUnit;
-	        
-	        // Skip tiny buildings (less than 2 pixels)
-	        if (halfW < 1 && halfL < 1)
+	        if (!road)
 	            continue;
-	        
-	        // Skip if center is way off screen
-	        float margin = Math.Max(halfW, halfL) + 20;
-	        if (centerX < -margin || centerX > m_fCanvasWidth + margin ||
-	            centerY < -margin || centerY > m_fCanvasHeight + margin)
+
+	        int rawCount = road.m_aPoints.Count();
+	        if (rawCount < 4)
+	            continue; // need at least 2 points (4 floats)
+
+	        // World-space AABB-vs-viewport reject. Skips the whole feature
+	        // before any per-vertex work.
+	        if (road.m_fMaxX < viewMinX || road.m_fMinX > viewMaxX ||
+	            road.m_fMaxZ < viewMinZ || road.m_fMinZ > viewMaxZ)
 	            continue;
-	        
-	        // Calculate rotated corners
-	        // Total rotation = building yaw + map rotation
-	        float totalRot = (bldg.m_fYaw + m_fRotation) * Math.DEG2RAD;
-	        float cosR = Math.Cos(totalRot);
-	        float sinR = Math.Sin(totalRot);
-	        
-	        // Local corners (unrotated)
-	        array<float> localX = {-halfW, halfW, halfW, -halfW};
-	        array<float> localY = {-halfL, -halfL, halfL, halfL};
-	        
-	        // Build vertex array for polygon (rotated corners)
-	        array<float> verts = {};
-	        for (int i = 0; i < 4; i++)
+
+	        // Style by priority: 3=highway thickest/lightest, 1=trail thinnest/dimmest.
+	        // Stroke is the road's actual width in world meters scaled to screen,
+	        // floored so it stays readable when zoomed out.
+	        float baseWidthPx = road.m_fWidth * pixelsPerWorldUnit;
+	        float minStroke;
+	        int color;
+	        switch (road.m_iPriority)
 	        {
-	            float rotX = localX[i] * cosR - localY[i] * sinR;
-	            float rotY = localX[i] * sinR + localY[i] * cosR;
-	            verts.Insert(centerX + rotX);
-	            verts.Insert(centerY - rotY); // Flip Y for screen coords
+	            case 3:
+	                minStroke = 2.5;
+	                color = 0xFFE8C57A; // warm tan — highways
+	                break;
+	            case 2:
+	                minStroke = 1.8;
+	                color = 0xFFC9B98A; // muted sand — paved/road
+	                break;
+	            default:
+	                minStroke = 1.2;
+	                color = 0xFF9C8964; // dim olive — trails
+	                break;
 	        }
-	        
-	        // Draw outline - expand corners outward
-	        PolygonDrawCommand outline = new PolygonDrawCommand();
-	        outline.m_iColor = 0xFF000000;
-	        
-	        float outlineOffset = 1.5;
-	        array<float> outlineVerts = {};
-	        array<float> outLocalX = {-halfW - outlineOffset, halfW + outlineOffset, halfW + outlineOffset, -halfW - outlineOffset};
-	        array<float> outLocalY = {-halfL - outlineOffset, -halfL - outlineOffset, halfL + outlineOffset, halfL + outlineOffset};
-	        
-	        for (int j = 0; j < 4; j++)
+	        float stroke = Math.Max(baseWidthPx, minStroke);
+
+	        // Round-join radius — half the stroke width covers the gap on the
+	        // outside of the bend exactly. Skip drawing joins below 1 px since
+	        // they'd add nothing visible at high-zoom-out levels.
+	        float joinRadius = stroke * 0.5;
+	        bool drawJoins = (joinRadius >= 1.0);
+	        // Adaptive segment count — small circles get fewer triangles.
+	        int joinSegments = 6;
+	        if (joinRadius >= 4.0) joinSegments = 10;
+	        if (joinRadius >= 8.0) joinSegments = 14;
+
+	        // Walk the polyline. Skip segments fully off-canvas, and emit a join
+	        // circle at each interior vertex whose surrounding segments were
+	        // actually drawn.
+	        float prevSX, prevSY;
+	        bool havePrev = false;
+	        bool prevSegmentDrawn = false;
+
+	        for (int i = 0; i + 1 < rawCount; i += 2)
 	        {
-	            float rotX = outLocalX[j] * cosR - outLocalY[j] * sinR;
-	            float rotY = outLocalX[j] * sinR + outLocalY[j] * cosR;
-	            outlineVerts.Insert(centerX + rotX);
-	            outlineVerts.Insert(centerY - rotY);
+	            float sx, sy;
+	            WorldToScreen(Vector(road.m_aPoints[i], 0, road.m_aPoints[i + 1]), sx, sy);
+
+	            if (havePrev)
+	            {
+	                // Per-segment screen-space reject (handles long polylines
+	                // partially on-screen).
+	                bool offLeft   = (prevSX < -20 && sx < -20);
+	                bool offRight  = (prevSX > m_fCanvasWidth + 20 && sx > m_fCanvasWidth + 20);
+	                bool offTop    = (prevSY < -20 && sy < -20);
+	                bool offBottom = (prevSY > m_fCanvasHeight + 20 && sy > m_fCanvasHeight + 20);
+
+	                bool segVisible = !(offLeft || offRight || offTop || offBottom);
+
+	                if (segVisible)
+	                {
+	                    LineDrawCommand line = new LineDrawCommand();
+	                    line.m_iColor = color;
+	                    line.m_fWidth = stroke;
+	                    line.m_Vertices = {prevSX, prevSY, sx, sy};
+	                    m_aDrawCommands.Insert(line);
+
+	                    // Round-join at the SHARED vertex between this segment
+	                    // and the previous one (i.e. at prevSX/prevSY), but only
+	                    // if there actually was a previous segment drawn — no
+	                    // join at the very first endpoint of the polyline.
+	                    if (drawJoins && prevSegmentDrawn)
+	                    {
+	                        array<float> joinVerts = {};
+	                        TessellateCircle(prevSX, prevSY, joinRadius, joinSegments, joinVerts);
+	                        PolygonDrawCommand join = new PolygonDrawCommand();
+	                        join.m_iColor = color;
+	                        join.m_Vertices = joinVerts;
+	                        m_aDrawCommands.Insert(join);
+	                    }
+	                }
+
+	                prevSegmentDrawn = segVisible;
+	            }
+
+	            prevSX = sx;
+	            prevSY = sy;
+	            havePrev = true;
 	        }
-	        outline.m_Vertices = outlineVerts;
-	        m_aDrawCommands.Insert(outline);
-	        
-	        // Draw filled building
-	        PolygonDrawCommand fill = new PolygonDrawCommand();
-	        fill.m_iColor = m_iBuildingColor;
-	        fill.m_Vertices = verts;
-	        m_aDrawCommands.Insert(fill);
 	    }
 	}
 
@@ -1003,12 +956,18 @@ class AG0_TDLMapView
 	//! Each AG0_TDLTerrainStructureRecord describes an oriented rectangle:
 	//!   center (m_fCenterX, m_fCenterZ), size (m_fWidth, m_fDepth), rotation (m_fRotation, radians).
 	//!
-	//! Rotation convention: the API delivers radians directly. The renderer combines
-	//! the building's rotation with the map view's rotation to produce on-screen verts.
-	//! Y is flipped to match screen-space conventions, matching DrawBuildings().
+	//! Rotation convention: the API delivers radians using compass-CCW-from-north
+	//! (same as Math.Atan2(forward.X, forward.Z)). Screen space here is Y-down,
+	//! so a math-CCW rotation in screen coords visually reads as CW after the
+	//! per-vertex Y flip below. We compensate by negating the world rotation when
+	//! computing the rotation matrix — equivalent to rotating in the flipped
+	//! coordinate space directly. This is the fix for the "rotations look right
+	//! at certain headings, wrong at others" symptom in track mode that the
+	//! legacy runtime building path also suffered from.
 	//!
-	//! Cull aggressively in screen-space — Everon-scale datasets can be many thousands
-	//! of buildings and we redraw every frame.
+	//! Cull aggressively — Everon-scale datasets can be many thousands of buildings
+	//! and we redraw every frame. World-space AABB reject before WorldToScreen
+	//! avoids the sin/cos for any building outside the viewport.
 	protected void DrawApiTerrainStructures()
 	{
 	    if (!m_aTerrainStructures || m_aTerrainStructures.IsEmpty())
@@ -1017,12 +976,36 @@ class AG0_TDLMapView
 	    float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
 	    float mapRotRad = m_fRotation * Math.DEG2RAD;
 
+	    // Per-frame world-space viewport AABB for cheap per-building rejection
+	    // (saves the WorldToScreen sin/cos for off-screen features). Diagonal-
+	    // sized to be rotation-safe, same trick as DrawApiTerrainRoads and
+	    // DrawMapTexture's UV sampling.
+	    float canvasAspect = m_fCanvasWidth / m_fCanvasHeight;
+	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+	    float viewWorldSizeZ = viewWorldSizeX / canvasAspect;
+	    float diagonal = Math.Sqrt(viewWorldSizeX * viewWorldSizeX + viewWorldSizeZ * viewWorldSizeZ);
+	    const float STRUCT_CULL_MARGIN = 50.0;
+	    float viewMinX = m_vCenterWorld[0] - diagonal * 0.5 - STRUCT_CULL_MARGIN;
+	    float viewMaxX = m_vCenterWorld[0] + diagonal * 0.5 + STRUCT_CULL_MARGIN;
+	    float viewMinZ = m_vCenterWorld[2] - diagonal * 0.5 - STRUCT_CULL_MARGIN;
+	    float viewMaxZ = m_vCenterWorld[2] + diagonal * 0.5 + STRUCT_CULL_MARGIN;
+
 	    foreach (AG0_TDLTerrainStructureRecord rec : m_aTerrainStructures)
 	    {
 	        if (!rec)
 	            continue;
 
-	        // World center → screen
+	        // World-space cull. Half-extent bound = (w + d) * 0.5 is a tiny bit
+	        // larger than the true half-diagonal sqrt(w² + d²)/2 (since
+	        // (w+d)² >= w² + d²) and avoids a per-feature sqrt.
+	        float halfBound = (rec.m_fWidth + rec.m_fDepth) * 0.5;
+	        if (rec.m_fCenterX + halfBound < viewMinX ||
+	            rec.m_fCenterX - halfBound > viewMaxX ||
+	            rec.m_fCenterZ + halfBound < viewMinZ ||
+	            rec.m_fCenterZ - halfBound > viewMaxZ)
+	            continue;
+
+	        // World center → screen (handles map rotation, zoom, and Y-flip for position)
 	        vector worldCenter = Vector(rec.m_fCenterX, 0, rec.m_fCenterZ);
 	        float centerX, centerY;
 	        WorldToScreen(worldCenter, centerX, centerY);
@@ -1035,14 +1018,11 @@ class AG0_TDLMapView
 	        if (halfW < 1 && halfL < 1)
 	            continue;
 
-	        // Skip if center is outside the canvas + a margin sized to the diagonal.
-	        float margin = Math.Max(halfW, halfL) + 20;
-	        if (centerX < -margin || centerX > m_fCanvasWidth + margin ||
-	            centerY < -margin || centerY > m_fCanvasHeight + margin)
-	            continue;
-
-	        // Total rotation = building yaw (rad) + map rotation (rad)
-	        float totalRot = rec.m_fRotation + mapRotRad;
+	        // Total rotation: see comment above for the negation rationale.
+	        // Building rotation is world-CCW; map rotation is also world-CCW (track
+	        // mode rotates the world frame). Combine then negate to take both into
+	        // the Y-flipped screen frame in one step.
+	        float totalRot = -(rec.m_fRotation + mapRotRad);
 	        float cosR = Math.Cos(totalRot);
 	        float sinR = Math.Sin(totalRot);
 
@@ -1050,14 +1030,14 @@ class AG0_TDLMapView
 	        array<float> localX = {-halfW,  halfW, halfW, -halfW};
 	        array<float> localY = {-halfL, -halfL, halfL,  halfL};
 
-	        // Rotated fill verts
+	        // Rotated fill verts. Y-flip at output to match screen coords.
 	        array<float> verts = {};
 	        for (int i = 0; i < 4; i = i + 1)
 	        {
 	            float rotX = localX[i] * cosR - localY[i] * sinR;
 	            float rotY = localX[i] * sinR + localY[i] * cosR;
 	            verts.Insert(centerX + rotX);
-	            verts.Insert(centerY - rotY); // Flip Y for screen coords
+	            verts.Insert(centerY - rotY);
 	        }
 
 	        // Outline polygon (slightly expanded)
@@ -1826,13 +1806,3 @@ class AG0_TDLMapMarker
     string m_sLabel;
 }
 
-//------------------------------------------------------------------------------------------------
-// Building data structure - stores OBB info
-//------------------------------------------------------------------------------------------------
-class AG0_TDLBuildingData
-{
-    vector m_vCenter;           // World center position
-    float m_fHalfWidth;         // Half-width (local X)
-    float m_fHalfLength;        // Half-length (local Z)
-    float m_fYaw;               // Rotation in degrees
-}

@@ -1575,10 +1575,16 @@ class AG0_TDLSystem : WorldSystem
 
 	//------------------------------------------------------------------------------------------------
 	//! Per-chunk wire-data budget for terrain structure delivery.
-	//! Reforger Reliable RPCs forced into fragmented mode above ~14 KB per packet,
-	//! which Colton wants to avoid — keep individual chunks well below that with
-	//! headroom for the syncHash / index / totalChunks params and RPC envelope.
-	protected static const int TERRAIN_STRUCTURES_CHUNK_BYTES = 12000;
+	//!
+	//! Two distinct Reforger RPC constraints to respect:
+	//!   * Overall Reliable packet ceiling ~14 KB before forced fragmentation.
+	//!   * Per-string-parameter cap of 8191 bytes (8 KB − 1). Strings longer than
+	//!     this are silently truncated on the wire — observed empirically as
+	//!     5 chunks of 12000 each arriving as 5 chunks of 8191 each.
+	//!
+	//! 6000 keeps us well clear of the per-param cap with comfortable headroom
+	//! for the syncHash / index / totalChunks params and RPC envelope.
+	protected static const int TERRAIN_STRUCTURES_CHUNK_BYTES = 6000;
 
 	//------------------------------------------------------------------------------------------------
 	//! Push the current terrain structures dataset to a single player as a sequence
@@ -1655,6 +1661,71 @@ class AG0_TDLSystem : WorldSystem
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Push the current terrain roads dataset to a single player as a sequence of
+	//! <14 KB Reliable RPCs (chunked at TERRAIN_STRUCTURES_CHUNK_BYTES, same budget).
+	//! See PushPlayerTerrainStructures for the rationale; the road network can be
+	//! larger than structures so chunking matters even more here.
+	protected void PushPlayerTerrainRoads(SCR_PlayerController controller, int playerId)
+	{
+		if (!m_ApiManager || !controller) return;
+
+		AG0_TDLTerrainRoadManager mgr = m_ApiManager.GetTerrainRoadManager();
+		if (!mgr)
+		{
+			controller.ReceiveTDLTerrainRoadsChunk(string.Empty, 1, 0, string.Empty);
+			return;
+		}
+
+		string raw = mgr.GetLastRawJson();
+		string hash = mgr.GetLastSyncHash();
+
+		int totalLen = raw.Length();
+		if (totalLen == 0)
+		{
+			controller.ReceiveTDLTerrainRoadsChunk(hash, 1, 0, string.Empty);
+			return;
+		}
+
+		int chunkBytes = TERRAIN_STRUCTURES_CHUNK_BYTES;
+		int totalChunks = (totalLen + chunkBytes - 1) / chunkBytes;
+
+		for (int i = 0; i < totalChunks; i = i + 1)
+		{
+			int start = i * chunkBytes;
+			int len = Math.Min(chunkBytes, totalLen - start);
+			string chunk = raw.Substring(start, len);
+			controller.ReceiveTDLTerrainRoadsChunk(hash, totalChunks, i, chunk);
+		}
+
+		Print(string.Format("[TDL_ROADS] Sent %1 chunks (%2 bytes) to player %3, hash=%4",
+			totalChunks, totalLen, playerId, hash), LogLevel.DEBUG);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Distribute the current terrain roads dataset to all connected players.
+	//! Same fan-out semantics as DistributeTerrainStructuresToClients.
+	void DistributeTerrainRoadsToClients()
+	{
+		if (!Replication.IsServer()) return;
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr) return;
+
+		array<int> playerIds = {};
+		playerMgr.GetPlayers(playerIds);
+
+		foreach (int playerId : playerIds)
+		{
+			if (playerId <= 0) continue;
+			SCR_PlayerController controller = SCR_PlayerController.Cast(
+				playerMgr.GetPlayerController(playerId)
+			);
+			if (!controller) continue;
+			PushPlayerTerrainRoads(controller, playerId);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
 	//! Register the OnPlayerAuditSuccess handler with SCR_BaseGameMode if not yet.
 	//! Idempotent — safe to call every tick.
 	protected void EnsurePlayerAuditHandlerRegistered()
@@ -1698,6 +1769,7 @@ class AG0_TDLSystem : WorldSystem
 		if (!controller) return;
 
 		PushPlayerTerrainStructures(controller, playerId);
+		PushPlayerTerrainRoads(controller, playerId);
 	}
 	
     //------------------------------------------------------------------------------------------------
