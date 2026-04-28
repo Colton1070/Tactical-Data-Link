@@ -464,12 +464,7 @@ modded class SCR_PlayerController
     {
         Rpc(RPC_ClearTDLNetwork, networkId);
     }
-    
-	void ClearStaleNetworks(array<int> activeNetworkIds)
-	{
-	    Rpc(RPC_ClearStaleNetworks, activeNetworkIds);
-	}
-	
+
     //------------------------------------------------------------------------------------------------
     void NotifyBroadcastingSources(array<RplId> broadcastingSources)
     {
@@ -778,22 +773,7 @@ modded class SCR_PlayerController
         m_mTDLNetworkMembersMap.Remove(networkId);
         //Print(string.Format("TDL_PLAYERCONTROLLER: Cleared network %1 data", networkId), LogLevel.DEBUG);
     }
-	
-	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
-	protected void RPC_ClearStaleNetworks(array<int> activeNetworkIds)
-	{
-	    array<int> toRemove = {};
-	    foreach (int cachedNetId, AG0_TDLNetworkMembers data : m_mTDLNetworkMembersMap)
-	    {
-	        if (!activeNetworkIds || activeNetworkIds.Find(cachedNetId) == -1)
-	            toRemove.Insert(cachedNetId);
-	    }
-	    foreach (int staleId : toRemove)
-	    {
-	        m_mTDLNetworkMembersMap.Remove(staleId);
-	    }
-	}
-    
+
     //------------------------------------------------------------------------------------------------
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
     protected void RPC_SetNetworkBroadcastingSources(array<RplId> broadcastingSources)

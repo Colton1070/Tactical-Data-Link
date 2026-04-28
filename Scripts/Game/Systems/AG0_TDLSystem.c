@@ -34,32 +34,54 @@ class AG0_TDLBridgeLink
 class AG0_TDLNetwork
 {
     protected int m_iNetworkID;
+    // Stable, globally-unique identifier for this network instance. Generated once
+    // at construction, never reused, never persisted across server restarts.
+    //
+    // Why this exists: m_iNetworkID is a session-local auto-increment that resets
+    // on every dedicated server restart. After a restart, the first network minted
+    // gets ID 1 again, its first message gets messageId 1 again — the API's
+    // (serverId, networkId, messageId) composite key would collide with historical
+    // rows. Worse, even without an upsert collision, an "all messages on network 1"
+    // query on the API silently unions every "network 1" the server ever had into
+    // one frankenstein timeline.
+    //
+    // m_sStableId is included on every API emission alongside m_iNetworkID so the
+    // API can key persistence rows by stableId (which never collides) while UI and
+    // logs continue to show the human-friendly numeric ID. Format is
+    // `net-{unixTime}-{rand32}-{rand32}` — collision probability across all TDL
+    // servers in human history is effectively zero with two 32-bit randoms.
+    protected string m_sStableId;
     protected string m_sNetworkName;
     protected string m_sNetworkPassword;
     protected int m_eWaveform;
     protected ref array<AG0_TDLDeviceComponent> m_aNetworkDevices = {};
     protected ref map<RplId, ref AG0_TDLNetworkMember> m_mDeviceData = new map<RplId, ref AG0_TDLNetworkMember>();
     protected int m_iNextNetworkIP = 1;
-	
-	
+
+
 	// Message storage
     protected ref array<ref AG0_TDLMessage> m_aMessages = {};
     protected int m_iNextMessageId = 1;
-    
+
     // Message retention settings
     protected const int MAX_MESSAGES = 100;
     protected const int MESSAGE_EXPIRY_SECONDS = 3600;
-	
-    
+
+
     void AG0_TDLNetwork(int networkID, string name, string password, int waveform = AG0_ETDLWaveform.LEGACY)
     {
         m_iNetworkID = networkID;
+        m_sStableId = string.Format("net-%1-%2-%3",
+            System.GetUnixTime(),
+            Math.RandomInt(0, 2147483647),
+            Math.RandomInt(0, 2147483647));
         m_sNetworkName = name;
         m_sNetworkPassword = password;
         m_eWaveform = waveform;
     }
-    
+
     int GetNetworkID() { return m_iNetworkID; }
+    string GetStableId() { return m_sStableId; }
     string GetNetworkName() { return m_sNetworkName; }
     string GetNetworkPassword() { return m_sNetworkPassword; }
     int GetWaveform() { return m_eWaveform; }
@@ -373,7 +395,43 @@ class AG0_TDLSystem : WorldSystem
     // Public helper methods for PlayerController and other systems
     //------------------------------------------------------------------------------------------------
 	array<ref AG0_TDLNetwork> GetNetworks() { return m_aNetworks; }
-	
+
+	//------------------------------------------------------------------------------------------------
+	//! Look up a network by its session-local numeric ID. Returns null if no match.
+	//! Used by the message_send queue handler as a fallback when an inbound command
+	//! lacks the newer networkStableId field (older queued rows from before the
+	//! stableId rollout).
+	AG0_TDLNetwork GetNetworkById(int networkId)
+	{
+	    foreach (AG0_TDLNetwork n : m_aNetworks)
+	    {
+	        if (n.GetNetworkID() == networkId)
+	            return n;
+	    }
+	    return null;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Look up a network by its globally-unique stableId. Returns null if no live
+	//! network has that stableId (network was destroyed, server restarted, etc.).
+	//!
+	//! This is the preferred lookup path for any inbound queue command (and any
+	//! other persistence-driven flow) because it survives session restarts and
+	//! never collides across networks. The numeric ID is fine for in-game RPC
+	//! parameters (cheap, transient) but every cross-restart boundary should pass
+	//! stableId.
+	AG0_TDLNetwork GetNetworkByStableId(string stableId)
+	{
+	    if (stableId.IsEmpty())
+	        return null;
+	    foreach (AG0_TDLNetwork n : m_aNetworks)
+	    {
+	        if (n.GetStableId() == stableId)
+	            return n;
+	    }
+	    return null;
+	}
+
 	//------------------------------------------------------------------------------------------------
 	//! Get persistent player identity UUID from session player ID
 	string GetPlayerIdentityId(int playerId)
@@ -553,9 +611,11 @@ class AG0_TDLSystem : WorldSystem
 	//! Public wrapper around the protected ApiNotifyMessageSendFailed event so the
 	//! AG0_TDLApiManager queue handlers (different class scope) can surface compose
 	//! failures back to the web user. Kept thin to avoid leaking the protected internal.
-	void ApiNotifyMessageSendFailedPublic(string correlationId, string reason, int networkId)
+	//! networkStableId is passed through if known; empty string when the queue command
+	//! failed before we could resolve the network at all.
+	void ApiNotifyMessageSendFailedPublic(string correlationId, string reason, int networkId, string networkStableId)
 	{
-	    ApiNotifyMessageSendFailed(correlationId, reason, networkId);
+	    ApiNotifyMessageSendFailed(correlationId, reason, networkId, networkStableId);
 	}
 
 	void MarkTDLMessageRead(RplId readerDeviceRplId, int messageId)
@@ -960,7 +1020,7 @@ class AG0_TDLSystem : WorldSystem
 	        if (!m_aNetworks[i].HasDevices())
 	        {
 	            Print(string.Format("TDL_NETWORK_CLEANUP: Removing empty network %1", m_aNetworks[i].GetNetworkName()), LogLevel.DEBUG);
-	            ApiNotifyNetworkDeleted(m_aNetworks[i].GetNetworkID(), m_aNetworks[i].GetNetworkName());
+	            ApiNotifyNetworkDeleted(m_aNetworks[i].GetNetworkID(), m_aNetworks[i].GetStableId(), m_aNetworks[i].GetNetworkName());
 				m_aNetworks.Remove(i);
 	            networksRemoved++;
 	        }
@@ -1100,12 +1160,15 @@ class AG0_TDLSystem : WorldSystem
             {
                 // Capture the id from the network — never from device.GetCurrentNetworkID(),
                 // which may have been pre-cleared to -1 by the user action's server-side run.
+                // Capture stableId here too so the API can correctly key the deletion
+                // event after the network ref is gone.
                 int leftNetworkId = network.GetNetworkID();
+                string leftNetworkStableId = network.GetStableId();
                 string leftNetworkName = network.GetNetworkName();
 
                 network.RemoveDevice(device);
                 NotifyNetworkLeft(device, leftNetworkId);
-				ApiNotifyDeviceLeft(leftNetworkId, leftNetworkName, device.GetDisplayName());
+				ApiNotifyDeviceLeft(leftNetworkId, leftNetworkStableId, leftNetworkName, device.GetDisplayName());
 
                 if (network.HasDevices())
                 {
@@ -1125,7 +1188,7 @@ class AG0_TDLSystem : WorldSystem
                     //
                     // Mirrors the symmetric call in the empty-network cleanup loop
                     // (~line 793) which already does this for the periodic-tick path.
-                    ApiNotifyNetworkDeleted(leftNetworkId, leftNetworkName);
+                    ApiNotifyNetworkDeleted(leftNetworkId, leftNetworkStableId, leftNetworkName);
                     m_aNetworks.RemoveItem(network);
                 }
 
@@ -1232,53 +1295,39 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    CheckNetworkMerges();
 	    UpdateBridgeLinks();
-	    
-	    // Track which networks each player is actually in this cycle
-	    map<int, ref set<int>> playerActiveNetworks = new map<int, ref set<int>>();
-	    
+
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        UpdateNetworkConnectivity(network);
-	        
-	        // Record which players have devices in this network
-	        PlayerManager playerMgr = GetGame().GetPlayerManager();
-	        foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
-	        {
-	            IEntity player = GetPlayerFromDevice(device);
-	            if (!player) continue;
-	            
-	            int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
-	            if (playerId < 0) continue;
-	            
-	            if (!playerActiveNetworks.Contains(playerId))
-	                playerActiveNetworks.Set(playerId, new set<int>());
-	            
-	            playerActiveNetworks.Get(playerId).Insert(network.GetNetworkID());
-	        }
 	    }
-	    
-	    // Clear stale network caches from controllers
-	    PlayerManager playerMgr = GetGame().GetPlayerManager();
-	    array<int> allPlayers = {};
-	    playerMgr.GetPlayers(allPlayers);
-	    
-	    foreach (int playerId : allPlayers)
-	    {
-	        SCR_PlayerController controller = SCR_PlayerController.Cast(
-	            playerMgr.GetPlayerController(playerId)
-	        );
-	        if (!controller) continue;
-	        
-	        array<int> activeNetsArray = {};
-			if (playerActiveNetworks.Contains(playerId))
-			{
-			    foreach (int netId : playerActiveNetworks.Get(playerId))
-			        activeNetsArray.Insert(netId);
-			}
-			
-			controller.ClearStaleNetworks(activeNetsArray);
-	    }
-	    
+
+	    // NOTE: the per-tick stale-network cleanup loop that used to live here was
+	    // removed deliberately. It walked every device in every network, derived
+	    // playerId via GetPlayerFromDevice → GetPlayerIdFromControlledEntity, then
+	    // for every connected player issued ClearStaleNetworks(activeNetsArray) to
+	    // their controller — and the controller-side handler removed any cached
+	    // network NOT in activeNetsArray. On a real dedicated server, transient
+	    // lookup misses (mid-respawn, controlled-entity replication lag, brief
+	    // GetPlayerFromDevice nulls) happen often enough that the active list was
+	    // routinely incomplete or empty for a tick, which translated into wiping
+	    // the controller's m_mTDLNetworkMembersMap. Symptoms: contact lists going
+	    // empty, callsign updates flickering or reverting a tick after they
+	    // landed, and incoming messages failing to render because the menu UI
+	    // gates on the network being present in the cache. A safety-gate version
+	    // (skip cleanup for players not seen this tick) helped the empty-active
+	    // case but didn't eliminate the partial-active case (player on networks
+	    // 1+2 but only network 1 recorded for one tick → cache for network 2 gets
+	    // wiped → callsign on network 2 flickers).
+	    //
+	    // We accept that cache entries for networks a player has truly left may
+	    // linger across a session if the explicit NotifyNetworkLeft path misses
+	    // them. The explicit path covers normal leaves; this safety net was net
+	    // negative. If a stale-cleanup safety net is reintroduced later, it must
+	    // (a) compare against the SET OF NETWORKS THAT EXIST SERVER-SIDE, not
+	    // per-player active sets, (b) require multiple consecutive ticks of
+	    // confirmation before acting, and (c) be tested on a real dedicated
+	    // server — listen-server reproduces none of the relevant races.
+
 	    UpdateVideoStreaming();
 	}
     
@@ -1314,9 +1363,12 @@ class AG0_TDLSystem : WorldSystem
                 
                 if (canMerge)
                 {
-                    // Capture id/name before we tear networkB down — needed for
-                    // the ApiNotifyNetworkDeleted call below.
+                    // Capture id/stableId/name before we tear networkB down — needed for
+                    // the ApiNotifyNetworkDeleted call below. stableId is the field the
+                    // API actually keys on; the others are for human-readable logs and
+                    // backward compat with pre-stableId rows.
                     int mergedAwayId = networkB.GetNetworkID();
+                    string mergedAwayStableId = networkB.GetStableId();
                     string mergedAwayName = networkB.GetNetworkName();
 
                     array<AG0_TDLDeviceComponent> devicesToMove = {};
@@ -1339,7 +1391,7 @@ class AG0_TDLSystem : WorldSystem
                     // Web API needs to know networkB is gone, otherwise it stays as
                     // a zombie entry on the map. Same root cause as the leave-and-
                     // recreate "device appears in two networks" bug.
-                    ApiNotifyNetworkDeleted(mergedAwayId, mergedAwayName);
+                    ApiNotifyNetworkDeleted(mergedAwayId, mergedAwayStableId, mergedAwayName);
 
                     m_aNetworks.Remove(j);
                     j--;
@@ -2326,7 +2378,31 @@ class AG0_TDLSystem : WorldSystem
         // routing so the API doesn't need a parallel switch on messageType.
         AG0_TDLMessage canonical = GetNetworkMessage(network, messageId);
         if (canonical)
+        {
             system.ApiNotifyMessageSent(network, canonical);
+
+            // Sender auto-delivery: CreateBroadcast/CreateDirect both insert the
+            // sender into m_DeliveredTo at construction (AG0_TDLMessage.c:76, :100),
+            // which means PropagateMessagesInNetwork's CanDeliverTo short-circuits
+            // for the sender on every subsequent pass — MarkDeliveredTo is never
+            // called for them. The hop logic considers this correct (sender always
+            // has the message), but my ApiNotifyMessageDelivered hook only fires
+            // from MarkDeliveredTo callsites, so the API never learns the sender is
+            // delivered. Result: direct self-messages stay PENDING forever in the
+            // web UI, and the sender's own broadcast inbox row never gets a
+            // recipient record. Mirror the implicit delivery here so the API state
+            // matches the mod state at send-time.
+            int senderPlayerId = system.GetPlayerIdFromDeviceRplId(senderDeviceRplId);
+            if (senderPlayerId > 0)
+            {
+                string senderIdentity = system.GetPlayerIdentityId(senderPlayerId);
+                if (!senderIdentity.IsEmpty())
+                {
+                    system.ApiNotifyMessageDelivered(network, canonical.GetMessageId(),
+                        senderDeviceRplId, senderCallsign, senderIdentity, senderPlayerId);
+                }
+            }
+        }
 
         PropagateMessagesInNetwork(system, network);
     }
@@ -2649,6 +2725,7 @@ class AG0_TDLSystem : WorldSystem
 	    {
 	        AG0_TDLNetworkState netState = new AG0_TDLNetworkState();
 	        netState.networkId = network.GetNetworkID();
+	        netState.networkStableId = network.GetStableId();
 	        netState.networkName = network.GetNetworkName();
 			netState.waveform = network.GetWaveform();
 	        netState.deviceCount = network.GetNetworkDevices().Count();
@@ -2765,43 +2842,49 @@ class AG0_TDLSystem : WorldSystem
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
-	    
+
 	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "network_created");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkStableId", network.GetStableId());
 	    json.WriteValue("networkName", network.GetNetworkName());
 	    json.WriteValue("creatorName", creatorName);
-	    
+
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
-	
-	protected void ApiNotifyNetworkDeleted(int networkId, string networkName)
+
+	//! Signature carries stableId because the API needs it to delete the right
+	//! persistence row even when the network instance is already gone — callers
+	//! must capture stableId from the live network before tearing it down.
+	protected void ApiNotifyNetworkDeleted(int networkId, string networkStableId, string networkName)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
-	    
+
 	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "network_deleted");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("networkId", networkId);
+	    json.WriteValue("networkStableId", networkStableId);
 	    json.WriteValue("networkName", networkName);
-	    
+
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
-	
+
 	protected void ApiNotifyDeviceJoined(AG0_TDLNetwork network, AG0_TDLDeviceComponent device)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
-	    
+
 	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "device_joined");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkStableId", network.GetStableId());
 	    json.WriteValue("networkName", network.GetNetworkName());
 	    json.WriteValue("deviceCallsign", device.GetDisplayName());
 	    json.WriteValue("deviceCapabilities", device.GetActiveCapabilities());
@@ -2827,19 +2910,24 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	protected void ApiNotifyDeviceLeft(int networkId, string networkName, string deviceCallsign)
+	//! Same stableId-as-arg pattern as ApiNotifyNetworkDeleted — caller captures
+	//! stableId before the network ref disappears. Even when the network survives
+	//! the leave (other devices still on it), passing stableId here keeps the
+	//! payload shape consistent across all device_left events.
+	protected void ApiNotifyDeviceLeft(int networkId, string networkStableId, string networkName, string deviceCallsign)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
-	    
+
 	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "device_left");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("networkId", networkId);
+	    json.WriteValue("networkStableId", networkStableId);
 	    json.WriteValue("networkName", networkName);
 	    json.WriteValue("deviceCallsign", deviceCallsign);
-	    
+
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
@@ -2868,12 +2956,15 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("event", "message_sent");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 
-	    // Network context
+	    // Network context — networkStableId is the API's primary persistence key
+	    // (restart-proof). networkId is sidecar for human display and pre-rollout
+	    // backward compat.
 	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkStableId", network.GetStableId());
 	    json.WriteValue("networkName", network.GetNetworkName());
 
-	    // Canonical message fields — API uses (serverId, networkId, messageId) as the
-	    // idempotency key. Resending the same triple is a no-op on the API side.
+	    // Canonical message fields — API uses (serverId, networkStableId, messageId)
+	    // as the idempotency key. Resending the same triple is a no-op on the API side.
 	    json.WriteValue("messageId", msg.GetMessageId());
 	    // Stringify the enum explicitly — keeps wire format human-readable on the
 	    // API side and avoids depending on enum int values matching across versions.
@@ -2937,6 +3028,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("event", "message_delivered");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkStableId", network.GetStableId());
 	    json.WriteValue("messageId", messageId);
 	    json.WriteValue("recipientRplId", recipientRplId);
 	    json.WriteValue("recipientCallsign", recipientCallsign);
@@ -2965,6 +3057,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("event", "message_read");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("networkStableId", network.GetStableId());
 	    json.WriteValue("messageId", messageId);
 	    json.WriteValue("readerRplId", readerRplId);
 	    json.WriteValue("readerCallsign", readerCallsign);
@@ -2981,7 +3074,11 @@ class AG0_TDLSystem : WorldSystem
 	//! The API surfaces this back to the originating web user so they don't see a silent
 	//! drop. `correlationId` echoes the queue command's id so the API can route the failure
 	//! to the exact compose attempt.
-	protected void ApiNotifyMessageSendFailed(string correlationId, string reason, int networkId)
+	//!
+	//! networkStableId may be empty when the failure happened before we could resolve the
+	//! network (e.g. invalid_message_type before any lookup). Pass through whatever we
+	//! have; the API uses correlationId as the primary failure-routing key, not networkId.
+	protected void ApiNotifyMessageSendFailed(string correlationId, string reason, int networkId, string networkStableId)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
@@ -2993,6 +3090,8 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("correlationId", correlationId);
 	    json.WriteValue("reason", reason);
 	    json.WriteValue("networkId", networkId);
+	    if (!networkStableId.IsEmpty())
+	        json.WriteValue("networkStableId", networkStableId);
 
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}

@@ -1,30 +1,30 @@
-// AG0_TDLNetworkMemberData.c
-//
-// Codec rewritten to match the AG0_TDLMessageClient pattern (which works in real
-// MP). The original used raw `SerializeBytes` plus a manual byte loop for the
-// player name — that path silently dropped the string when sent as `array<ref T>`
-// over a real dedicated server. Listen-server worked because in-process Rpc skips
-// serialization.
-//
-// All snapshot writes use typed serializers (SerializeInt / SerializeString /
-// SerializeFloat) so the snapshot's internal type tracking lines up with what
-// Encode/Decode expect. Bools are stored as int 0/1 to keep the wire byte math
-// trivial and avoid SerializeBool size ambiguity (1 bit vs 1 byte).
+// AG0_TDLNetworkMemberData.c - Mario-style codec implementation
 
 class AG0_TDLNetworkMember
 {
-    int m_RplId;
-    string m_sPlayerName;
-    vector m_vPosition;
-    float m_fSignalStrength;
-    int m_iNetworkIP;
-    int m_iDeviceCapabilities;
-    int m_iIsPowered;       // bool stored as int (0/1)
-    int m_iGPSActive;       // bool stored as int (0/1)
-    int m_iOwnerPlayerId = -1;
-    int m_VideoSourceRplId;
-    int m_iIsBridged = 0;   // bool stored as int (0/1)
-    int m_iSourceNetworkId = -1;
+    // Define our data sizes
+    static const int MAX_PLAYER_NAME_LENGTH = 32;  // Fixed size for player name
+    static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1 + 4 + 4 + 1 + 4;
+	// RplId(4) + PlayerName(32) + Position(12) + Signal(4) + NetworkIP(4) + Capabilities(4) +
+	// IsPowered(1) + GPSActive(1) + OwnerPlayerId(4) + VideoSourceRplId(4) +
+	// IsBridged(1) + SourceNetworkId(4) = 75 bytes
+
+    protected RplId m_RplId;
+    protected string m_sPlayerName;
+    protected vector m_vPosition;
+    protected float m_fSignalStrength;
+    protected int m_iNetworkIP;
+    protected int m_iDeviceCapabilities;
+    protected bool m_bIsPowered;
+    protected bool m_bGPSActive;
+	protected int m_iOwnerPlayerId = -1;  // -1 = no player owner
+	protected RplId m_VideoSourceRplId = RplId.Invalid();
+
+	// Bridge fields
+	// m_bIsBridged: true when this member belongs to a foreign network relayed via a bridge device
+	// m_iSourceNetworkId: the network ID this member actually lives in (for UI labeling)
+	protected bool m_bIsBridged = false;
+	protected int m_iSourceNetworkId = -1;
 
     // Getters
     RplId GetRplId() { return m_RplId; }
@@ -33,10 +33,10 @@ class AG0_TDLNetworkMember
     float GetSignalStrength() { return m_fSignalStrength; }
     int GetNetworkIP() { return m_iNetworkIP; }
     int GetCapabilities() { return m_iDeviceCapabilities; }
-    int GetOwnerPlayerId() { return m_iOwnerPlayerId; }
-    RplId GetVideoSourceRplId() { return m_VideoSourceRplId; }
-    bool IsBridged() { return m_iIsBridged != 0; }
-    int GetSourceNetworkId() { return m_iSourceNetworkId; }
+	int GetOwnerPlayerId() { return m_iOwnerPlayerId; }
+	RplId GetVideoSourceRplId() { return m_VideoSourceRplId; }
+	bool IsBridged() { return m_bIsBridged; }
+	int GetSourceNetworkId() { return m_iSourceNetworkId; }
 
     // Setters
     void SetRplId(RplId rplId) { m_RplId = rplId; }
@@ -45,118 +45,156 @@ class AG0_TDLNetworkMember
     void SetNetworkIP(int networkIP) { m_iNetworkIP = networkIP; }
     void SetSignalStrength(float strength) { m_fSignalStrength = strength; }
     void SetCapabilities(int capabilities) { m_iDeviceCapabilities = capabilities; }
-    void SetOwnerPlayerId(int playerId) { m_iOwnerPlayerId = playerId; }
-    void SetVideoSourceRplId(RplId rplId) { m_VideoSourceRplId = rplId; }
-    void SetIsBridged(bool bridged)
-    {
-        if (bridged)
-            m_iIsBridged = 1;
-        else
-            m_iIsBridged = 0;
-    }
-    void SetSourceNetworkId(int networkId) { m_iSourceNetworkId = networkId; }
+	void SetOwnerPlayerId(int playerId) { m_iOwnerPlayerId = playerId; }
+	void SetVideoSourceRplId(RplId rplId) { m_VideoSourceRplId = rplId; }
+	void SetIsBridged(bool bridged) { m_bIsBridged = bridged; }
+	void SetSourceNetworkId(int networkId) { m_iSourceNetworkId = networkId; }
 
-    //------------------------------------------------------------------------------------------------
-    // SerializeFloat takes an inout parameter — vector index access is an rvalue.
-    // Use temp floats and round-trip through Vector().
+    // Extract - following Mario's pattern exactly
     static bool Extract(AG0_TDLNetworkMember instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
-        snapshot.SerializeInt(instance.m_RplId);
-        snapshot.SerializeString(instance.m_sPlayerName);
-        float px = instance.m_vPosition[0];
-        float py = instance.m_vPosition[1];
-        float pz = instance.m_vPosition[2];
-        snapshot.SerializeFloat(px);
-        snapshot.SerializeFloat(py);
-        snapshot.SerializeFloat(pz);
-        instance.m_vPosition = Vector(px, py, pz);
-        snapshot.SerializeFloat(instance.m_fSignalStrength);
-        snapshot.SerializeInt(instance.m_iNetworkIP);
-        snapshot.SerializeInt(instance.m_iDeviceCapabilities);
-        snapshot.SerializeInt(instance.m_iIsPowered);
-        snapshot.SerializeInt(instance.m_iGPSActive);
-        snapshot.SerializeInt(instance.m_iOwnerPlayerId);
-        snapshot.SerializeInt(instance.m_VideoSourceRplId);
-        snapshot.SerializeInt(instance.m_iIsBridged);
-        snapshot.SerializeInt(instance.m_iSourceNetworkId);
+        // RplId - 4 bytes
+        snapshot.SerializeBytes(instance.m_RplId, 4);
+
+        // PlayerName - fixed size 32 bytes
+        string paddedName = instance.m_sPlayerName;
+        int nameLen = paddedName.Length();
+
+        if (nameLen > MAX_PLAYER_NAME_LENGTH)
+        {
+            paddedName = paddedName.Substring(0, MAX_PLAYER_NAME_LENGTH);
+        }
+        else if (nameLen < MAX_PLAYER_NAME_LENGTH)
+        {
+            for (int i = nameLen; i < MAX_PLAYER_NAME_LENGTH; i++)
+                paddedName += "\0";
+        }
+
+        for (int i = 0; i < MAX_PLAYER_NAME_LENGTH; i++)
+        {
+            int charByte = 0;
+            if (i < nameLen)
+                charByte = paddedName.ToAscii(i);
+            snapshot.SerializeBytes(charByte, 1);
+        }
+
+        // Position - 12 bytes (3 floats)
+        snapshot.SerializeBytes(instance.m_vPosition, 12);
+
+        // SignalStrength - 4 bytes
+        snapshot.SerializeBytes(instance.m_fSignalStrength, 4);
+
+        // NetworkIP - 4 bytes
+        snapshot.SerializeBytes(instance.m_iNetworkIP, 4);
+
+        // Capabilities - 4 bytes
+        snapshot.SerializeBytes(instance.m_iDeviceCapabilities, 4);
+
+        // Booleans - 1 byte each
+        snapshot.SerializeBytes(instance.m_bIsPowered, 1);
+        snapshot.SerializeBytes(instance.m_bGPSActive, 1);
+
+		// PlayerId - 4 bytes
+		snapshot.SerializeBytes(instance.m_iOwnerPlayerId, 4);
+
+		// VideoSourceRplId - 4 bytes
+        snapshot.SerializeBytes(instance.m_VideoSourceRplId, 4);
+
+		// IsBridged - 1 byte
+		snapshot.SerializeBytes(instance.m_bIsBridged, 1);
+
+		// SourceNetworkId - 4 bytes
+		snapshot.SerializeBytes(instance.m_iSourceNetworkId, 4);
+
         return true;
     }
 
-    //------------------------------------------------------------------------------------------------
+    // Inject - mirror of Extract
     static bool Inject(SSnapSerializerBase snapshot, ScriptCtx ctx, AG0_TDLNetworkMember instance)
     {
-        snapshot.SerializeInt(instance.m_RplId);
-        snapshot.SerializeString(instance.m_sPlayerName);
-        float px = instance.m_vPosition[0];
-        float py = instance.m_vPosition[1];
-        float pz = instance.m_vPosition[2];
-        snapshot.SerializeFloat(px);
-        snapshot.SerializeFloat(py);
-        snapshot.SerializeFloat(pz);
-        instance.m_vPosition = Vector(px, py, pz);
-        snapshot.SerializeFloat(instance.m_fSignalStrength);
-        snapshot.SerializeInt(instance.m_iNetworkIP);
-        snapshot.SerializeInt(instance.m_iDeviceCapabilities);
-        snapshot.SerializeInt(instance.m_iIsPowered);
-        snapshot.SerializeInt(instance.m_iGPSActive);
-        snapshot.SerializeInt(instance.m_iOwnerPlayerId);
-        snapshot.SerializeInt(instance.m_VideoSourceRplId);
-        snapshot.SerializeInt(instance.m_iIsBridged);
-        snapshot.SerializeInt(instance.m_iSourceNetworkId);
+        // RplId - 4 bytes
+        snapshot.SerializeBytes(instance.m_RplId, 4);
+
+        // PlayerName - fixed size 32 bytes
+        instance.m_sPlayerName = "";
+        for (int i = 0; i < MAX_PLAYER_NAME_LENGTH; i++)
+        {
+            int charByte;
+            snapshot.SerializeBytes(charByte, 1);
+
+            if (charByte == 0)
+            {
+                // Skip remaining bytes to maintain position
+                for (int j = i + 1; j < MAX_PLAYER_NAME_LENGTH; j++)
+                {
+                    int dummy;
+                    snapshot.SerializeBytes(dummy, 1);
+                }
+                break;
+            }
+
+            string charStr = string.Empty;
+            charStr += charByte.AsciiToString();
+            instance.m_sPlayerName += charStr;
+        }
+
+        // Position - 12 bytes
+        snapshot.SerializeBytes(instance.m_vPosition, 12);
+
+        // SignalStrength - 4 bytes
+        snapshot.SerializeBytes(instance.m_fSignalStrength, 4);
+
+        // NetworkIP - 4 bytes
+        snapshot.SerializeBytes(instance.m_iNetworkIP, 4);
+
+        // Capabilities - 4 bytes
+        snapshot.SerializeBytes(instance.m_iDeviceCapabilities, 4);
+
+        // Booleans - 1 byte each
+        snapshot.SerializeBytes(instance.m_bIsPowered, 1);
+        snapshot.SerializeBytes(instance.m_bGPSActive, 1);
+
+		// PlayerId - 4 bytes
+		snapshot.SerializeBytes(instance.m_iOwnerPlayerId, 4);
+
+		// VideoSourceRplId - 4 bytes
+		snapshot.SerializeBytes(instance.m_VideoSourceRplId, 4);
+
+		// IsBridged - 1 byte
+		snapshot.SerializeBytes(instance.m_bIsBridged, 1);
+
+		// SourceNetworkId - 4 bytes
+		snapshot.SerializeBytes(instance.m_iSourceNetworkId, 4);
+
         return true;
     }
 
-    //------------------------------------------------------------------------------------------------
-    // Layout (in order):
-    //   int RplId          4
-    //   string PlayerName  variable (length-prefixed)
-    //   3x float Position  12
-    //   float Signal       4
-    //   int NetworkIP      4
-    //   int Capabilities   4
-    //   int IsPowered      4
-    //   int GPSActive      4
-    //   int OwnerPlayerId  4
-    //   int VideoSourceId  4
-    //   int IsBridged      4
-    //   int SourceNetId    4
-    // Fixed bytes: 52 + variable string.
+    // Encode - Mario's way: one simple serialize call
     static void Encode(SSnapSerializerBase snapshot, ScriptCtx ctx, ScriptBitSerializer packet)
     {
-        snapshot.Serialize(packet, 4);     // RplId
-        snapshot.EncodeString(packet);     // PlayerName
-        snapshot.Serialize(packet, 16);    // 3 floats Position + Signal
-        snapshot.Serialize(packet, 32);    // NetworkIP + Capabilities + IsPowered + GPSActive + OwnerPlayerId + VideoSourceRplId + IsBridged + SourceNetworkId
+        snapshot.Serialize(packet, AG0_TDLNetworkMember.DATA_SIZE);
     }
 
-    //------------------------------------------------------------------------------------------------
+    // Decode - Mario's way: one simple serialize call
     static bool Decode(ScriptBitSerializer packet, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
-        snapshot.Serialize(packet, 4);
-        snapshot.DecodeString(packet);
-        snapshot.Serialize(packet, 16);
-        snapshot.Serialize(packet, 32);
-        return true;
+        return snapshot.Serialize(packet, AG0_TDLNetworkMember.DATA_SIZE);
     }
 
-    //------------------------------------------------------------------------------------------------
+    // SnapCompare - compare all bytes at once
     static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
     {
-        return lhs.CompareSnapshots(rhs, 4)
-            && lhs.CompareStringSnapshots(rhs)
-            && lhs.CompareSnapshots(rhs, 16)
-            && lhs.CompareSnapshots(rhs, 32);
+        return lhs.CompareSnapshots(rhs, AG0_TDLNetworkMember.DATA_SIZE);
     }
 
-    //------------------------------------------------------------------------------------------------
+    // PropCompare - always update
     static bool PropCompare(AG0_TDLNetworkMember instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
     {
-        return false;  // Always update.
+        return false;
     }
 }
 
-//------------------------------------------------------------------------------------------------
-// Container for arrays of members.
+// AG0_TDLNetworkMembers - container for array of members
 class AG0_TDLNetworkMembers
 {
     [Attribute("")]
@@ -167,9 +205,20 @@ class AG0_TDLNetworkMembers
         m_aMembers = new array<ref AG0_TDLNetworkMember>();
     }
 
-    int Count() { return m_aMembers.Count(); }
-    void Clear() { m_aMembers.Clear(); }
-    void Add(AG0_TDLNetworkMember member) { m_aMembers.Insert(member); }
+    int Count()
+    {
+        return m_aMembers.Count();
+    }
+
+    void Clear()
+    {
+        m_aMembers.Clear();
+    }
+
+    void Add(AG0_TDLNetworkMember member)
+    {
+        m_aMembers.Insert(member);
+    }
 
     AG0_TDLNetworkMember Get(int index)
     {
@@ -210,5 +259,115 @@ class AG0_TDLNetworkMembers
         }
 
         return result;
+    }
+
+    static bool Extract(AG0_TDLNetworkMembers instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
+	{
+	    if (!instance)
+	    {
+	        int nullCount = -1;
+	        snapshot.SerializeBytes(nullCount, 4);
+	        return true;
+	    }
+
+	    int count = instance.Count();
+	    snapshot.SerializeBytes(count, 4);
+
+	    if (count > 1000)
+	    {
+	        Print(string.Format("TDL_CODEC: WARNING - Suspiciously high member count %1", count), LogLevel.WARNING);
+	    }
+
+	    for (int i = 0; i < count; i++)
+	    {
+	        if (!instance.m_aMembers[i])
+	        {
+	            Print(string.Format("TDL_CODEC: ERROR - Null member at index %1", i), LogLevel.ERROR);
+	            AG0_TDLNetworkMember emptyMember = new AG0_TDLNetworkMember();
+	            AG0_TDLNetworkMember.Extract(emptyMember, ctx, snapshot);
+	        }
+	        else
+	        {
+	            AG0_TDLNetworkMember.Extract(instance.m_aMembers[i], ctx, snapshot);
+	        }
+	    }
+
+	    return true;
+	}
+
+	static bool Inject(SSnapSerializerBase snapshot, ScriptCtx ctx, AG0_TDLNetworkMembers instance)
+	{
+	    if (!instance)
+	    {
+	        Print("TDL_CODEC: ERROR - Inject called with null instance", LogLevel.ERROR);
+	        return false;
+	    }
+
+	    int count;
+	    snapshot.SerializeBytes(count, 4);
+
+	    instance.Clear();
+
+	    if (count == -1)
+	    {
+	        Print("TDL_CODEC: Decoded null state, keeping empty container", LogLevel.DEBUG);
+	        return true;
+	    }
+
+	    if (count < 0 || count > 1000)
+	    {
+	        Print(string.Format("TDL_CODEC: Invalid member count %1", count), LogLevel.ERROR);
+	        return false;
+	    }
+
+	    for (int i = 0; i < count; i++)
+	    {
+	        AG0_TDLNetworkMember member = new AG0_TDLNetworkMember();
+	        if (!AG0_TDLNetworkMember.Inject(snapshot, ctx, member))
+	        {
+	            Print(string.Format("TDL_CODEC: Failed to inject member %1/%2", i, count), LogLevel.ERROR);
+	            return false;
+	        }
+	        instance.Add(member);
+	    }
+
+	    return true;
+	}
+
+    // Calculate total size: 4 bytes for count + (member count * member size)
+    static void Encode(SSnapSerializerBase snapshot, ScriptCtx ctx, ScriptBitSerializer packet)
+    {
+        int count;
+        snapshot.SerializeBytes(count, 4);
+        packet.Serialize(count, 32);
+
+        int totalMemberBytes = count * AG0_TDLNetworkMember.DATA_SIZE;
+        if (totalMemberBytes > 0)
+            snapshot.Serialize(packet, totalMemberBytes);
+    }
+
+    static bool Decode(ScriptBitSerializer packet, ScriptCtx ctx, SSnapSerializerBase snapshot)
+    {
+        int count;
+        packet.Serialize(count, 32);
+        snapshot.SerializeBytes(count, 4);
+
+        int totalMemberBytes = count * AG0_TDLNetworkMember.DATA_SIZE;
+        if (totalMemberBytes > 0)
+            return snapshot.Serialize(packet, totalMemberBytes);
+
+        return true;
+    }
+
+    static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
+    {
+        return false;  // Always update
+    }
+
+    static bool PropCompare(AG0_TDLNetworkMembers instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
+    {
+        if (!instance)
+            return false;
+        return false;
     }
 }

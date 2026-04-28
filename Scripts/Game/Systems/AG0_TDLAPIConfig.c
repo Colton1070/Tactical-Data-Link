@@ -32,7 +32,7 @@ class AG0_TDLApiConfigData : JsonApiStruct
         apiKey = "";
         serverName = "Unnamed Server";
         enabled = true;
-        pollIntervalSeconds = 30;
+        pollIntervalSeconds = 5;
 		stateSyncIntervalSeconds = 5; // default 5s for sync worker
     }
     
@@ -49,7 +49,7 @@ class AG0_TDLApiConfigData : JsonApiStruct
         config.apiKey = "";
         config.serverName = "Unnamed Server";
         config.enabled = true;
-        config.pollIntervalSeconds = 30;
+        config.pollIntervalSeconds = 5;
         return config;
     }
 }
@@ -906,10 +906,19 @@ class AG0_TDLApiManager
             return;
         }
 
-        int networkId;
-        if (!cmdJson.ReadValue("networkId", networkId))
+        // Network identification: stableId is the preferred lookup key (restart-proof),
+        // numeric networkId is fallback for queue commands enqueued before the API
+        // shipped stableId. We also pass both into failure events so the API can match
+        // either way.
+        string networkStableId;
+        cmdJson.ReadValue("networkStableId", networkStableId);
+
+        int networkId = -1;
+        cmdJson.ReadValue("networkId", networkId);
+
+        if (networkStableId.IsEmpty() && networkId < 0)
         {
-            Print("[TDL_API] message_send missing 'networkId'", LogLevel.WARNING);
+            Print("[TDL_API] message_send missing both 'networkStableId' and 'networkId'", LogLevel.WARNING);
             return;
         }
 
@@ -934,6 +943,28 @@ class AG0_TDLApiManager
             return;
         }
 
+        // Resolve the network. stableId wins when available because it's the only id
+        // that survives a restart — a numeric networkId from a queue row enqueued
+        // before the dedicated server restart is meaningless after.
+        AG0_TDLNetwork network = null;
+        if (!networkStableId.IsEmpty())
+            network = tdlSystem.GetNetworkByStableId(networkStableId);
+        if (!network && networkId >= 0)
+            network = tdlSystem.GetNetworkById(networkId);
+
+        if (!network)
+        {
+            Print(string.Format("[TDL_API] message_send: network not found (stableId=%1, numericId=%2). Likely the server restarted between enqueue and processing.",
+                networkStableId, networkId), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "network_not_found", networkId, networkStableId);
+            return;
+        }
+
+        // From here on, use the resolved network's live id/stableId (what we send back
+        // to the API) instead of whatever the queue row carried.
+        int liveNetworkId = network.GetNetworkID();
+        string liveNetworkStableId = network.GetStableId();
+
         // Resolve web user → live session player. Empty senderPlayerId == not currently
         // online (lobby, mid-respawn, disconnected). We could persist the queue command
         // and replay on connect, but that introduces ordering bugs vs. in-game composes.
@@ -942,26 +973,26 @@ class AG0_TDLApiManager
         if (senderPlayerId <= 0)
         {
             Print(string.Format("[TDL_API] message_send: sender %1 not online", senderIdentityId), LogLevel.DEBUG);
-            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "player_offline", networkId);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "player_offline", liveNetworkId, liveNetworkStableId);
             return;
         }
 
-        // Resolve player → device on the requested network. This is the hop logic's
+        // Resolve player → device on the resolved network. This is the hop logic's
         // entry gate — without a device on the network, the relay graph has nowhere
         // to start, so the compose can't proceed.
-        AG0_TDLDeviceComponent senderDevice = tdlSystem.GetDeviceInNetworkForPlayer(senderPlayerId, networkId);
+        AG0_TDLDeviceComponent senderDevice = tdlSystem.GetDeviceInNetworkForPlayer(senderPlayerId, liveNetworkId);
         if (!senderDevice)
         {
             Print(string.Format("[TDL_API] message_send: player %1 has no device on network %2",
-                senderPlayerId, networkId), LogLevel.DEBUG);
-            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "no_device_in_network", networkId);
+                senderPlayerId, liveNetworkId), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "no_device_in_network", liveNetworkId, liveNetworkStableId);
             return;
         }
 
         RplId senderDeviceRplId = senderDevice.GetDeviceRplId();
         if (senderDeviceRplId == RplId.Invalid())
         {
-            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "device_not_replicated", networkId);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "device_not_replicated", liveNetworkId, liveNetworkStableId);
             return;
         }
 
@@ -977,14 +1008,14 @@ class AG0_TDLApiManager
             int recipientRplIdInt;
             if (!cmdJson.ReadValue("recipientRplId", recipientRplIdInt))
             {
-                tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "missing_recipient", networkId);
+                tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "missing_recipient", liveNetworkId, liveNetworkStableId);
                 return;
             }
             recipientRplId = recipientRplIdInt;
         }
         else
         {
-            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "invalid_message_type", networkId);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "invalid_message_type", liveNetworkId, liveNetworkStableId);
             return;
         }
 
@@ -994,12 +1025,12 @@ class AG0_TDLApiManager
         const int MAX_CONTENT_BYTES = 8000;
         if (content.Length() > MAX_CONTENT_BYTES)
         {
-            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "content_too_long", networkId);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "content_too_long", liveNetworkId, liveNetworkStableId);
             return;
         }
 
-        Print(string.Format("[TDL_API] message_send: routing web compose from %1 (player %2) on network %3 (%4)",
-            senderIdentityId, senderPlayerId, networkId, messageTypeStr), LogLevel.DEBUG);
+        Print(string.Format("[TDL_API] message_send: routing web compose from %1 (player %2) on network %3 [%4] (%5)",
+            senderIdentityId, senderPlayerId, liveNetworkId, liveNetworkStableId, messageTypeStr), LogLevel.DEBUG);
 
         // Single canonical send path — reuses hop graph, replication, RPC delivery,
         // pruning, and the existing ApiNotifyMessageSent fan-out. No bypass.
@@ -1030,10 +1061,19 @@ class AG0_TDLApiManager
             return;
         }
 
-        int networkId;
-        if (!cmdJson.ReadValue("networkId", networkId))
+        // Same dual-id pattern as message_send — stableId preferred, networkId fallback.
+        // Read-mark has no failure event back to the API (no correlationId concept),
+        // so we just silently no-op on lookup miss; the API will see the in-game
+        // message_read event (or not) as the source of truth either way.
+        string networkStableId;
+        cmdJson.ReadValue("networkStableId", networkStableId);
+
+        int networkId = -1;
+        cmdJson.ReadValue("networkId", networkId);
+
+        if (networkStableId.IsEmpty() && networkId < 0)
         {
-            Print("[TDL_API] message_mark_read missing 'networkId'", LogLevel.WARNING);
+            Print("[TDL_API] message_mark_read missing both 'networkStableId' and 'networkId'", LogLevel.WARNING);
             return;
         }
 
@@ -1047,6 +1087,19 @@ class AG0_TDLApiManager
         AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
         if (!tdlSystem) return;
 
+        AG0_TDLNetwork network = null;
+        if (!networkStableId.IsEmpty())
+            network = tdlSystem.GetNetworkByStableId(networkStableId);
+        if (!network && networkId >= 0)
+            network = tdlSystem.GetNetworkById(networkId);
+        if (!network)
+        {
+            // Network gone — likely server restarted between enqueue and processing.
+            // No event to fire, just drop. The web inbox's READ state for this row
+            // will stay DELIVERED until reconciliation via state_sync.
+            return;
+        }
+
         int readerPlayerId = tdlSystem.GetPlayerIdFromIdentityId(readerIdentityId);
         if (readerPlayerId <= 0)
         {
@@ -1055,7 +1108,7 @@ class AG0_TDLApiManager
             return;
         }
 
-        AG0_TDLDeviceComponent readerDevice = tdlSystem.GetDeviceInNetworkForPlayer(readerPlayerId, networkId);
+        AG0_TDLDeviceComponent readerDevice = tdlSystem.GetDeviceInNetworkForPlayer(readerPlayerId, network.GetNetworkID());
         if (!readerDevice) return;
 
         RplId readerDeviceRplId = readerDevice.GetDeviceRplId();
@@ -1397,7 +1450,7 @@ class AG0_TDLApiManager
     {
         if (m_Config)
             return m_Config.pollIntervalSeconds;
-        return 30;
+        return 5;
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1855,6 +1908,11 @@ class AG0_TDLDeviceState
 class AG0_TDLNetworkState
 {
     int networkId;
+    // Stable, restart-proof identifier. Always populated for state_sync emissions
+    // from a mod that ships with the stableId rollout. The API should treat this
+    // as the primary key for persistence; networkId is sidecar for human display
+    // and backward compat with pre-rollout rows.
+    string networkStableId;
     string networkName;
     int waveform;       // AG0_ETDLWaveform cast to int — identifies the RF technology of this network
     int deviceCount;
