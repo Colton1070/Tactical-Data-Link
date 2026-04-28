@@ -1332,13 +1332,21 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    if (m_sCustomCallsign != cleanCallsign) {
 	        m_sCustomCallsign = cleanCallsign;
 	        Replication.BumpMe();
-	        
-	        Print(string.Format("TDL_CALLSIGN: Device %1 callsign changed to '%2'", 
+
+	        Print(string.Format("TDL_CALLSIGN: Device %1 callsign changed to '%2'",
 	            GetOwner(), cleanCallsign), LogLevel.DEBUG);
-	        
-	        // Notify system to update member data across network
+
+	        // Notify system to update member data across the network.
+	        // Do NOT gate on IsInNetwork() — m_iCurrentNetworkID can be transiently
+	        // -1 server-side during client-server transitions (see the comment on
+	        // AG0_TDLSystem.NotifyNetworkConnectivity for the exact mechanism).
+	        // OnDeviceCallsignChanged already iterates m_aNetworks and bails harmlessly
+	        // if the device isn't in any network, so the IsInNetwork() guard was
+	        // redundant — and it caused the "callsign doesn't propagate on the next
+	        // tick" symptom whenever the field happened to be in its briefly-cleared
+	        // state at save time.
 	        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-	        if (system && IsInNetwork()) {
+	        if (system) {
 	            system.OnDeviceCallsignChanged(this);
 	        }
 	    }

@@ -842,6 +842,14 @@ class AG0_TDLApiManager
                 HandleTerrainRoadsRefreshCommand();
                 break;
 
+            case "message_send":
+                HandleMessageSendCommand(cmdJson);
+                break;
+
+            case "message_mark_read":
+                HandleMessageMarkReadCommand(cmdJson);
+                break;
+
             default:
                 Print(string.Format("[TDL_API] Unknown command type: %1", cmdType), LogLevel.WARNING);
                 break;
@@ -860,6 +868,205 @@ class AG0_TDLApiManager
         }
     }
     
+    //------------------------------------------------------------------------------------------------
+    //! Handle message_send command from web API.
+    //!
+    //! The web user composed a message in their inbox UI. We refuse to short-circuit hop
+    //! logic: instead, we look up their currently-online in-game player, find that player's
+    //! device on the named network, and call the EXISTING SendTDLMessage entry point. From
+    //! there the message goes through the same propagation/relay path as an in-game compose,
+    //! meaning hop graph traversal, MarkDeliveredTo, RPC fan-out, and read-receipts all
+    //! work identically. This is also why the resulting message_sent event automatically
+    //! mirrors back to the API — there's only ever one canonical send path.
+    //!
+    //! Failure modes (sender not linked / not online / no device on this network / target
+    //! not on network) all surface as message_send_failed events with a correlationId so
+    //! the web UI can mark the compose attempt as rejected and tell the user why.
+    //!
+    //! Payload shape (from API):
+    //!   {
+    //!     "type": "message_send",
+    //!     "correlationId": "msgsend_<uuid>",     // echoed back on success/fail
+    //!     "senderIdentityId": "<uuid>",          // persistent identity of the web user
+    //!     "networkId": <int>,                    // target TDL network
+    //!     "messageType": "broadcast" | "direct",
+    //!     "content": "<string>",                 // <= 8000 chars (RPC param ceiling)
+    //!     "recipientRplId": <int>                // direct only; mod resolves to network member
+    //!   }
+    protected void HandleMessageSendCommand(SCR_JsonLoadContext cmdJson)
+    {
+        string correlationId;
+        if (!cmdJson.ReadValue("correlationId", correlationId))
+            correlationId = "";
+
+        string senderIdentityId;
+        if (!cmdJson.ReadValue("senderIdentityId", senderIdentityId) || senderIdentityId.IsEmpty())
+        {
+            Print("[TDL_API] message_send missing 'senderIdentityId'", LogLevel.WARNING);
+            return;
+        }
+
+        int networkId;
+        if (!cmdJson.ReadValue("networkId", networkId))
+        {
+            Print("[TDL_API] message_send missing 'networkId'", LogLevel.WARNING);
+            return;
+        }
+
+        string messageTypeStr;
+        if (!cmdJson.ReadValue("messageType", messageTypeStr))
+        {
+            Print("[TDL_API] message_send missing 'messageType'", LogLevel.WARNING);
+            return;
+        }
+
+        string content;
+        if (!cmdJson.ReadValue("content", content) || content.IsEmpty())
+        {
+            Print("[TDL_API] message_send missing 'content'", LogLevel.WARNING);
+            return;
+        }
+
+        AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+        if (!tdlSystem)
+        {
+            Print("[TDL_API] message_send: TDL system unavailable", LogLevel.WARNING);
+            return;
+        }
+
+        // Resolve web user → live session player. Empty senderPlayerId == not currently
+        // online (lobby, mid-respawn, disconnected). We could persist the queue command
+        // and replay on connect, but that introduces ordering bugs vs. in-game composes.
+        // Rejecting now and letting the API surface the failure is the right shape.
+        int senderPlayerId = tdlSystem.GetPlayerIdFromIdentityId(senderIdentityId);
+        if (senderPlayerId <= 0)
+        {
+            Print(string.Format("[TDL_API] message_send: sender %1 not online", senderIdentityId), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "player_offline", networkId);
+            return;
+        }
+
+        // Resolve player → device on the requested network. This is the hop logic's
+        // entry gate — without a device on the network, the relay graph has nowhere
+        // to start, so the compose can't proceed.
+        AG0_TDLDeviceComponent senderDevice = tdlSystem.GetDeviceInNetworkForPlayer(senderPlayerId, networkId);
+        if (!senderDevice)
+        {
+            Print(string.Format("[TDL_API] message_send: player %1 has no device on network %2",
+                senderPlayerId, networkId), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "no_device_in_network", networkId);
+            return;
+        }
+
+        RplId senderDeviceRplId = senderDevice.GetDeviceRplId();
+        if (senderDeviceRplId == RplId.Invalid())
+        {
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "device_not_replicated", networkId);
+            return;
+        }
+
+        ETDLMessageType messageType;
+        RplId recipientRplId = RplId.Invalid();
+        if (messageTypeStr == "broadcast")
+        {
+            messageType = ETDLMessageType.NETWORK_BROADCAST;
+        }
+        else if (messageTypeStr == "direct")
+        {
+            messageType = ETDLMessageType.DIRECT;
+            int recipientRplIdInt;
+            if (!cmdJson.ReadValue("recipientRplId", recipientRplIdInt))
+            {
+                tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "missing_recipient", networkId);
+                return;
+            }
+            recipientRplId = recipientRplIdInt;
+        }
+        else
+        {
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "invalid_message_type", networkId);
+            return;
+        }
+
+        // Trim payload at the per-string-param RPC cap. The API enforces this on input
+        // already (see implementation guide), but defense-in-depth — silent truncation
+        // by the engine would corrupt the message mid-relay.
+        const int MAX_CONTENT_BYTES = 8000;
+        if (content.Length() > MAX_CONTENT_BYTES)
+        {
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "content_too_long", networkId);
+            return;
+        }
+
+        Print(string.Format("[TDL_API] message_send: routing web compose from %1 (player %2) on network %3 (%4)",
+            senderIdentityId, senderPlayerId, networkId, messageTypeStr), LogLevel.DEBUG);
+
+        // Single canonical send path — reuses hop graph, replication, RPC delivery,
+        // pruning, and the existing ApiNotifyMessageSent fan-out. No bypass.
+        tdlSystem.SendTDLMessage(senderDeviceRplId, content, messageType, recipientRplId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Handle message_mark_read command from web API.
+    //!
+    //! Web user opened a conversation; we mirror that to the in-game read state through
+    //! the same MarkTDLMessageRead path that an in-game device would use. Read-receipt
+    //! RPCs to the original sender are emitted by the existing logic — the web user
+    //! showing up in the inbox triggers the same downstream signal as opening it on a CDU.
+    //!
+    //! Payload shape:
+    //!   {
+    //!     "type": "message_mark_read",
+    //!     "readerIdentityId": "<uuid>",
+    //!     "networkId": <int>,
+    //!     "messageId": <int>
+    //!   }
+    protected void HandleMessageMarkReadCommand(SCR_JsonLoadContext cmdJson)
+    {
+        string readerIdentityId;
+        if (!cmdJson.ReadValue("readerIdentityId", readerIdentityId) || readerIdentityId.IsEmpty())
+        {
+            Print("[TDL_API] message_mark_read missing 'readerIdentityId'", LogLevel.WARNING);
+            return;
+        }
+
+        int networkId;
+        if (!cmdJson.ReadValue("networkId", networkId))
+        {
+            Print("[TDL_API] message_mark_read missing 'networkId'", LogLevel.WARNING);
+            return;
+        }
+
+        int messageId;
+        if (!cmdJson.ReadValue("messageId", messageId))
+        {
+            Print("[TDL_API] message_mark_read missing 'messageId'", LogLevel.WARNING);
+            return;
+        }
+
+        AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+        if (!tdlSystem) return;
+
+        int readerPlayerId = tdlSystem.GetPlayerIdFromIdentityId(readerIdentityId);
+        if (readerPlayerId <= 0)
+        {
+            // Reader offline. Read-state will reconcile next time they connect via
+            // state_sync — we don't queue here for the same reasons as message_send.
+            return;
+        }
+
+        AG0_TDLDeviceComponent readerDevice = tdlSystem.GetDeviceInNetworkForPlayer(readerPlayerId, networkId);
+        if (!readerDevice) return;
+
+        RplId readerDeviceRplId = readerDevice.GetDeviceRplId();
+        if (readerDeviceRplId == RplId.Invalid()) return;
+
+        // Routes through MarkTDLMessageRead which (a) flips the in-game read bit,
+        // (b) fires the in-game read-receipt RPC to the sender, (c) emits the
+        // message_read API event. All in one path.
+        tdlSystem.MarkTDLMessageRead(readerDeviceRplId, messageId);
+    }
+
     //------------------------------------------------------------------------------------------------
     //! Handle config update command from API
     protected void HandleConfigUpdateCommand(SCR_JsonLoadContext cmdJson)

@@ -667,19 +667,19 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     {
         if (!m_CallsignEditBox || !m_NetworkDevice)
             return;
-        
+
         string newCallsign = m_CallsignEditBox.GetText();
         if (newCallsign.IsEmpty())
             return;
-        
+
         SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
         if (!controller)
             return;
-        
+
         RplId deviceId = m_NetworkDevice.GetDeviceRplId();
         if (deviceId != RplId.Invalid())
             controller.RequestSetDeviceCallsign(deviceId, newCallsign);
-        
+
         SetPanelContent(ETDLPanelContent.NETWORK_LIST);
     }
     

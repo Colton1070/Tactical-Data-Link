@@ -399,16 +399,186 @@ class AG0_TDLSystem : WorldSystem
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Reverse lookup: given a persistent identity UUID (the same one we send to the API
+	//! in state_sync), return the currently-online session playerId. Returns -1 if the
+	//! identity isn't connected to this server right now.
+	//!
+	//! Used by the message_send queue handler to resolve a web user back to their live
+	//! in-game player. PlayerManager doesn't expose this directly, so we walk the small
+	//! online-player list — fine even at high concurrency since N is small (<= server cap).
+	int GetPlayerIdFromIdentityId(string identityId)
+	{
+	    if (identityId.IsEmpty())
+	        return -1;
+
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    if (!playerMgr)
+	        return -1;
+
+	    array<int> playerIds = {};
+	    playerMgr.GetPlayers(playerIds);
+	    foreach (int playerId : playerIds)
+	    {
+	        if (GetPlayerIdentityId(playerId) == identityId)
+	            return playerId;
+	    }
+	    return -1;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Resolve a device RplId to the session playerId that owns the controlled entity.
+	//! Returns -1 if the device has no live player (NPC, AI, dropped radio, between-respawn, etc.).
+	//!
+	//! Hot path: called from the propagation/delivery loop, so we keep allocations out and
+	//! short-circuit on Invalid early.
+	int GetPlayerIdFromDeviceRplId(RplId deviceRplId)
+	{
+	    if (deviceRplId == RplId.Invalid())
+	        return -1;
+
+	    AG0_TDLDeviceComponent device = GetDeviceByRplId(deviceRplId);
+	    if (!device)
+	        return -1;
+
+	    IEntity player = GetPlayerFromDevice(device);
+	    if (!player)
+	        return -1;
+
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    if (!playerMgr)
+	        return -1;
+
+	    return playerMgr.GetPlayerIdFromControlledEntity(player);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Find the device a given player owns within a specific network. Used by message_send
+	//! to enforce: a web user can only post in a network they're actually a member of in-game.
+	//! No device → no compose. This is the hop logic's first gate — without a device on the
+	//! network, the whole graph traversal can't even start.
+	AG0_TDLDeviceComponent GetDeviceInNetworkForPlayer(int playerId, int networkId)
+	{
+	    if (playerId <= 0)
+	        return null;
+
+	    AG0_TDLNetwork network = null;
+	    foreach (AG0_TDLNetwork n : m_aNetworks)
+	    {
+	        if (n.GetNetworkID() == networkId)
+	        {
+	            network = n;
+	            break;
+	        }
+	    }
+	    if (!network)
+	        return null;
+
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    if (!playerMgr)
+	        return null;
+	    IEntity controlled = playerMgr.GetPlayerControlledEntity(playerId);
+	    if (!controlled)
+	        return null;
+
+	    foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
+	    {
+	        if (GetPlayerFromDevice(device) == controlled)
+	            return device;
+	    }
+	    return null;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Drains the (messageId, deviceRplId) pairs collected during PropagateMessagesInNetwork
+	//! and fires one API delivery event per pair whose recipient is web-linked. Identity
+	//! resolution is cached by deviceRplId across the batch so each device costs at most one
+	//! SCR_PlayerIdentityUtils lookup, no matter how many messages targeted it.
+	void FlushApiDeliveryEvents(AG0_TDLNetwork network, array<int> messageIds, array<RplId> deviceRplIds)
+	{
+	    if (!network) return;
+	    if (messageIds.Count() != deviceRplIds.Count()) return;
+
+	    // Per-batch identity cache — RplId → identity (empty string means "checked, not linked")
+	    map<RplId, string> identityCache = new map<RplId, string>();
+	    map<RplId, int> playerIdCache = new map<RplId, int>();
+	    map<RplId, string> callsignCache = new map<RplId, string>();
+
+	    for (int i = 0; i < messageIds.Count(); i++)
+	    {
+	        RplId deviceRplId = deviceRplIds[i];
+	        string identity;
+	        int playerId;
+	        string callsign;
+
+	        if (identityCache.Contains(deviceRplId))
+	        {
+	            identity = identityCache.Get(deviceRplId);
+	            playerId = playerIdCache.Get(deviceRplId);
+	            callsign = callsignCache.Get(deviceRplId);
+	        }
+	        else
+	        {
+	            playerId = GetPlayerIdFromDeviceRplId(deviceRplId);
+	            if (playerId > 0)
+	                identity = GetPlayerIdentityId(playerId);
+	            else
+	                identity = "";
+
+	            AG0_TDLDeviceComponent device = GetDeviceByRplId(deviceRplId);
+	            if (device)
+	                callsign = device.GetDisplayName();
+
+	            identityCache.Set(deviceRplId, identity);
+	            playerIdCache.Set(deviceRplId, playerId);
+	            callsignCache.Set(deviceRplId, callsign);
+	        }
+
+	        if (identity.IsEmpty())
+	            continue;  // Not a web-linked recipient — skip the API event entirely.
+
+	        ApiNotifyMessageDelivered(network, messageIds[i],
+	            deviceRplId, callsign, identity, playerId);
+	    }
+	}
+
+	//------------------------------------------------------------------------------------------------
 	// Message API - called from PlayerController
 	//------------------------------------------------------------------------------------------------
 	void SendTDLMessage(RplId senderDeviceRplId, string content, ETDLMessageType messageType, RplId recipientRplId = RplId.Invalid())
 	{
 	    SendMessage(this, senderDeviceRplId, content, messageType, recipientRplId);
 	}
-	
+
+	//------------------------------------------------------------------------------------------------
+	//! Public wrapper around the protected ApiNotifyMessageSendFailed event so the
+	//! AG0_TDLApiManager queue handlers (different class scope) can surface compose
+	//! failures back to the web user. Kept thin to avoid leaking the protected internal.
+	void ApiNotifyMessageSendFailedPublic(string correlationId, string reason, int networkId)
+	{
+	    ApiNotifyMessageSendFailed(correlationId, reason, networkId);
+	}
+
 	void MarkTDLMessageRead(RplId readerDeviceRplId, int messageId)
 	{
 	    MarkMessageRead(this, readerDeviceRplId, messageId);
+
+	    // After the static MarkMessageRead has flipped the bit and dispatched the
+	    // existing in-game read receipt RPC, mirror the state to the API — but only
+	    // for web-linked readers, so the web inbox flips DELIVERED→READ. Non-linked
+	    // readers (NPCs, unattended devices) need no API state.
+	    AG0_TDLDeviceComponent readerDevice = GetDeviceByRplId(readerDeviceRplId);
+	    if (!readerDevice) return;
+	    AG0_TDLNetwork network = FindNetworkForDevice(this, readerDevice);
+	    if (!network) return;
+	    AG0_TDLMessage msg = GetNetworkMessage(network, messageId);
+	    if (!msg) return;
+	    int playerId = GetPlayerIdFromDeviceRplId(readerDeviceRplId);
+	    if (playerId <= 0) return;
+	    string identity = GetPlayerIdentityId(playerId);
+	    if (identity.IsEmpty()) return;
+
+	    ApiNotifyMessageRead(network, messageId, readerDeviceRplId,
+	        readerDevice.GetDisplayName(), identity, playerId);
 	}
 	
     AG0_TDLDeviceComponent GetDeviceByRplId(RplId deviceId)
@@ -943,6 +1113,19 @@ class AG0_TDLSystem : WorldSystem
                 }
                 else
                 {
+                    // Tell the web API the network is gone BEFORE removing it locally.
+                    // Without this call the web map keeps the now-empty network as a
+                    // zombie entry — and any device that subsequently joins or has its
+                    // callsign updated appears to be "in two networks" because the
+                    // zombie membership never gets refreshed or removed. This is the
+                    // same omission that caused both the leave→create double-network
+                    // bug AND the "callsign doesn't propagate" symptom against the web
+                    // map (the zombie membership's callsign field has no live device
+                    // backing it server-side, so it never updates).
+                    //
+                    // Mirrors the symmetric call in the empty-network cleanup loop
+                    // (~line 793) which already does this for the periodic-tick path.
+                    ApiNotifyNetworkDeleted(leftNetworkId, leftNetworkName);
                     m_aNetworks.RemoveItem(network);
                 }
 
@@ -1131,26 +1314,36 @@ class AG0_TDLSystem : WorldSystem
                 
                 if (canMerge)
                 {
+                    // Capture id/name before we tear networkB down — needed for
+                    // the ApiNotifyNetworkDeleted call below.
+                    int mergedAwayId = networkB.GetNetworkID();
+                    string mergedAwayName = networkB.GetNetworkName();
+
                     array<AG0_TDLDeviceComponent> devicesToMove = {};
                     devicesToMove.Copy(networkB.GetNetworkDevices());
-                    
+
                     foreach (AG0_TDLDeviceComponent device : devicesToMove)
                     {
                         networkB.RemoveDevice(device);
-                        
+
                         RplId deviceRplId = device.GetDeviceRplId();
                         string playerName = device.GetOwnerPlayerName();
                         vector position = device.GetOwner().GetOrigin();
-                        
+
                         if (deviceRplId != RplId.Invalid())
                         {
                             networkA.AddDevice(device, deviceRplId, playerName, position);
                         }
                     }
-                    
+
+                    // Web API needs to know networkB is gone, otherwise it stays as
+                    // a zombie entry on the map. Same root cause as the leave-and-
+                    // recreate "device appears in two networks" bug.
+                    ApiNotifyNetworkDeleted(mergedAwayId, mergedAwayName);
+
                     m_aNetworks.Remove(j);
                     j--;
-                    
+
                     NotifyNetworkMembersUpdated(networkA);
                 }
             }
@@ -2116,7 +2309,6 @@ class AG0_TDLSystem : WorldSystem
         if (messageType == ETDLMessageType.NETWORK_BROADCAST)
         {
             messageId = AddBroadcastToNetwork(network, senderDeviceRplId, senderCallsign, content);
-			system.ApiNotifyMessageSent(network, senderCallsign, "broadcast");
         }
         else if (messageType == ETDLMessageType.DIRECT)
         {
@@ -2124,12 +2316,18 @@ class AG0_TDLSystem : WorldSystem
             AG0_TDLNetworkMember recipientMember = network.GetDeviceData().Get(recipientRplId);
             if (recipientMember)
                 recipientCallsign = recipientMember.GetPlayerName();
-            
-            messageId = AddDirectToNetwork(network, senderDeviceRplId, senderCallsign, 
+
+            messageId = AddDirectToNetwork(network, senderDeviceRplId, senderCallsign,
                                           content, recipientRplId, recipientCallsign);
-			system.ApiNotifyMessageSent(network, senderCallsign, "direct");
         }
-        
+
+        // Notify API with the canonical message record. Single callsite covers both
+        // broadcast and direct — the message itself carries its type, content, and
+        // routing so the API doesn't need a parallel switch on messageType.
+        AG0_TDLMessage canonical = GetNetworkMessage(network, messageId);
+        if (canonical)
+            system.ApiNotifyMessageSent(network, canonical);
+
         PropagateMessagesInNetwork(system, network);
     }
     
@@ -2159,28 +2357,43 @@ class AG0_TDLSystem : WorldSystem
     {
         if (!Replication.IsServer()) return;
         if (!network || !device) return;
-        
+
         RplId deviceRplId = device.GetDeviceRplId();
         if (deviceRplId == RplId.Invalid()) return;
-        
+
         set<RplId> connectedRplIds = new set<RplId>();
         foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
         {
             connectedRplIds.Insert(rplId);
         }
-        
+
         array<ref AG0_TDLMessage> deliverable = GetDeliverableMessages(network, deviceRplId, connectedRplIds);
-        
+
         if (deliverable.Count() > 0)
         {
             Print(string.Format("TDL_MESSAGE_PROPAGATION: %1 new messages can be delivered to %2",
                 deliverable.Count(), device.GetDisplayName()), LogLevel.DEBUG);
-            
+
+            // Resolve identity ONCE per device — only fire API delivery events for
+            // web-linked players (saves quota; the API ignores deliveries it can't
+            // surface anywhere). Empty identityId == not linked / NPC / AI.
+            int devicePlayerId = system.GetPlayerIdFromDeviceRplId(deviceRplId);
+            string deviceIdentity = "";
+            if (devicePlayerId > 0)
+                deviceIdentity = system.GetPlayerIdentityId(devicePlayerId);
+            string deviceCallsign = device.GetDisplayName();
+
             foreach (AG0_TDLMessage msg : deliverable)
             {
                 msg.MarkDeliveredTo(deviceRplId);
+
+                if (!deviceIdentity.IsEmpty())
+                {
+                    system.ApiNotifyMessageDelivered(network, msg.GetMessageId(),
+                        deviceRplId, deviceCallsign, deviceIdentity, devicePlayerId);
+                }
             }
-            
+
             SendMessagesToClient(system, network, device);
         }
     }
@@ -2190,25 +2403,34 @@ class AG0_TDLSystem : WorldSystem
     {
         if (!Replication.IsServer()) return;
         if (!network) return;
-        
+
         bool anyDelivered = true;
         int iterations = 0;
         const int MAX_ITERATIONS = 10;
-        
+
+        // Buffer (msgId, deviceRplId) pairs that flipped to delivered during this
+        // multi-pass relay so we can fire API events ONCE at the end. Doing it
+        // inside the inner loop would re-emit duplicates as later passes revisit
+        // already-delivered messages, and would also slow the propagation loop with
+        // per-pair JSON serialization. Identity resolution is also expensive enough
+        // to want to amortize.
+        array<int> newlyDeliveredMessageIds = {};
+        array<RplId> newlyDeliveredDeviceIds = {};
+
         while (anyDelivered && iterations < MAX_ITERATIONS)
         {
             anyDelivered = false;
             iterations++;
-            
+
             foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
             {
                 if (!device.CanAccessNetwork()) continue;
-                
+
                 RplId deviceRplId = device.GetDeviceRplId();
                 if (deviceRplId == RplId.Invalid()) continue;
-                
+
                 set<RplId> connectedRplIds = GetDeviceConnectedRplIds(system, device, network);
-                
+
                 array<ref AG0_TDLMessage> messages = GetNetworkMessages(network);
                 foreach (AG0_TDLMessage msg : messages)
                 {
@@ -2216,18 +2438,26 @@ class AG0_TDLSystem : WorldSystem
                     {
                         msg.MarkDeliveredTo(deviceRplId);
                         anyDelivered = true;
-                        
+                        newlyDeliveredMessageIds.Insert(msg.GetMessageId());
+                        newlyDeliveredDeviceIds.Insert(deviceRplId);
+
                         Print(string.Format("TDL_MESSAGE_PROPAGATION: Message %1 delivered to %2",
                             msg.GetMessageId(), device.GetDisplayName()), LogLevel.DEBUG);
                     }
                 }
             }
         }
-        
+
         foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
         {
             SendMessagesToClient(system, network, device);
         }
+
+        // After the relay settles, fan out delivery events to the API for each
+        // (message, web-linked recipient) pair that flipped this pass. Resolve
+        // identity per unique deviceRplId so we only call SCR_PlayerIdentityUtils once.
+        if (newlyDeliveredMessageIds.Count() > 0)
+            system.FlushApiDeliveryEvents(network, newlyDeliveredMessageIds, newlyDeliveredDeviceIds);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -2423,13 +2653,21 @@ class AG0_TDLSystem : WorldSystem
 			netState.waveform = network.GetWaveform();
 	        netState.deviceCount = network.GetNetworkDevices().Count();
 	        netState.messageCount = network.GetMessages().Count();
-	        
+
 	        array<ref AG0_TDLDeviceState> deviceStates = {};
 	        foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
 	        {
 	            AG0_TDLDeviceState devState = new AG0_TDLDeviceState();
-	            if (device.GetDeviceRplId().IsValid())
-				    devState.rplId = 1;
+	            // Send the actual replication id, not a presence flag. The web UI
+	            // round-trips this value back to us in message_send.recipientRplId
+	            // for direct traffic, so collapsing every valid device to "1" made
+	            // every direct compose route to whichever device happened to hold
+	            // RplId(1) in that frame — wrong recipient, or none if (1) was free.
+	            // RplId converts to int natively for the JSON writer (same path
+	            // ApiNotifyMessageSent uses for senderRplId).
+	            RplId deviceRplId = device.GetDeviceRplId();
+	            if (deviceRplId.IsValid())
+				    devState.rplId = deviceRplId;
 				else
 				    devState.rplId = 0;
 	            devState.callsign = device.GetDisplayName();
@@ -2605,24 +2843,157 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	
-	protected void ApiNotifyMessageSent(AG0_TDLNetwork network, string senderCallsign, 
-	                                     string messageType, string recipientCallsign = "")
+	//------------------------------------------------------------------------------------------------
+	//! Notify API of a freshly-created message. Sends the full canonical record so the
+	//! web app can persist it and stream it to linked viewers via SSE.
+	//!
+	//! NOTE: this is NOT a delivery notification — the message's per-recipient delivery
+	//! state lives in the mod's hop graph (see ApiNotifyMessageDelivered, fired from
+	//! PropagateMessagesForDevice when MarkDeliveredTo lands on a web-linked player).
+	//! The API must treat all recipients as PENDING until it receives a matching
+	//! message_delivered event for them.
+	//!
+	//! Callsite: AG0_TDLSystem.SendMessage — runs once per message regardless of origin
+	//! (in-game compose OR web compose routed through message_send queue command), so
+	//! API persistence naturally covers both paths without special-casing.
+	protected void ApiNotifyMessageSent(AG0_TDLNetwork network, AG0_TDLMessage msg)
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
-	    
+	    if (!network || !msg)
+	        return;
+
 	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "message_sent");
 	    json.WriteValue("timestamp", System.GetUnixTime());
+
+	    // Network context
 	    json.WriteValue("networkId", network.GetNetworkID());
 	    json.WriteValue("networkName", network.GetNetworkName());
-	    json.WriteValue("senderCallsign", senderCallsign);
-	    json.WriteValue("messageType", messageType);
-	    
-	    if (!recipientCallsign.IsEmpty())
-	        json.WriteValue("recipientCallsign", recipientCallsign);
-	    
+
+	    // Canonical message fields — API uses (serverId, networkId, messageId) as the
+	    // idempotency key. Resending the same triple is a no-op on the API side.
+	    json.WriteValue("messageId", msg.GetMessageId());
+	    // Stringify the enum explicitly — keeps wire format human-readable on the
+	    // API side and avoids depending on enum int values matching across versions.
+	    string messageTypeStr = "broadcast";
+	    if (msg.GetMessageType() == ETDLMessageType.DIRECT)
+	        messageTypeStr = "direct";
+	    json.WriteValue("messageType", messageTypeStr);
+	    json.WriteValue("messageTimestamp", msg.GetTimestamp());
+	    json.WriteValue("content", msg.GetContent());
+
+	    // Sender — RplId for in-game replication, identity for web linking
+	    json.WriteValue("senderRplId", msg.GetSenderRplId());
+	    json.WriteValue("senderCallsign", msg.GetSenderCallsign());
+	    int senderPlayerId = GetPlayerIdFromDeviceRplId(msg.GetSenderRplId());
+	    if (senderPlayerId > 0)
+	    {
+	        string senderIdentity = GetPlayerIdentityId(senderPlayerId);
+	        if (!senderIdentity.IsEmpty())
+	            json.WriteValue("senderIdentityId", senderIdentity);
+	        json.WriteValue("senderPlayerId", senderPlayerId);
+	    }
+
+	    // Recipient — only present for DIRECT messages
+	    if (msg.GetMessageType() == ETDLMessageType.DIRECT)
+	    {
+	        RplId recipientRpl = msg.GetDirectRecipientRplId();
+	        json.WriteValue("recipientRplId", recipientRpl);
+	        json.WriteValue("recipientCallsign", msg.GetDirectRecipientCallsign());
+	        int recipientPlayerId = GetPlayerIdFromDeviceRplId(recipientRpl);
+	        if (recipientPlayerId > 0)
+	        {
+	            string recipientIdentity = GetPlayerIdentityId(recipientPlayerId);
+	            if (!recipientIdentity.IsEmpty())
+	                json.WriteValue("recipientIdentityId", recipientIdentity);
+	            json.WriteValue("recipientPlayerId", recipientPlayerId);
+	        }
+	    }
+
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Fired from PropagateMessagesForDevice when MarkDeliveredTo lands on a device whose
+	//! owner is a web-linked player. The mod's hop logic stays authoritative — this just
+	//! mirrors the state change so the web inbox flips PENDING→DELIVERED in real time.
+	//!
+	//! We deliberately skip non-linked recipients: the API has no UI for them, so spamming
+	//! events for every NPC/AI device wastes bandwidth and the API quota. The check is in
+	//! the caller (PropagateMessagesForDevice) so this method just emits unconditionally.
+	protected void ApiNotifyMessageDelivered(AG0_TDLNetwork network, int messageId,
+	                                          RplId recipientRplId, string recipientCallsign,
+	                                          string recipientIdentityId, int recipientPlayerId)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    if (!network)
+	        return;
+
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "message_delivered");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("messageId", messageId);
+	    json.WriteValue("recipientRplId", recipientRplId);
+	    json.WriteValue("recipientCallsign", recipientCallsign);
+	    if (!recipientIdentityId.IsEmpty())
+	        json.WriteValue("recipientIdentityId", recipientIdentityId);
+	    if (recipientPlayerId > 0)
+	        json.WriteValue("recipientPlayerId", recipientPlayerId);
+
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Fired from MarkMessageRead when a web-linked player views a delivered message.
+	//! Same gating rule as message_delivered — caller checks for link before invoking.
+	protected void ApiNotifyMessageRead(AG0_TDLNetwork network, int messageId,
+	                                     RplId readerRplId, string readerCallsign,
+	                                     string readerIdentityId, int readerPlayerId)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+	    if (!network)
+	        return;
+
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "message_read");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("networkId", network.GetNetworkID());
+	    json.WriteValue("messageId", messageId);
+	    json.WriteValue("readerRplId", readerRplId);
+	    json.WriteValue("readerCallsign", readerCallsign);
+	    if (!readerIdentityId.IsEmpty())
+	        json.WriteValue("readerIdentityId", readerIdentityId);
+	    if (readerPlayerId > 0)
+	        json.WriteValue("readerPlayerId", readerPlayerId);
+
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Fired when web-side compose fails (sender not linked, no device in network, etc.).
+	//! The API surfaces this back to the originating web user so they don't see a silent
+	//! drop. `correlationId` echoes the queue command's id so the API can route the failure
+	//! to the exact compose attempt.
+	protected void ApiNotifyMessageSendFailed(string correlationId, string reason, int networkId)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "message_send_failed");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("correlationId", correlationId);
+	    json.WriteValue("reason", reason);
+	    json.WriteValue("networkId", networkId);
+
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 	

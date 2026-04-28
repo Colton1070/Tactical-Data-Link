@@ -767,9 +767,8 @@ modded class SCR_PlayerController
         AG0_TDLNetworkMembers membersData = new AG0_TDLNetworkMembers();
         foreach (AG0_TDLNetworkMember member : members)
             membersData.Add(member);
-        
+
         m_mTDLNetworkMembersMap.Set(networkId, membersData);
-        //Print(string.Format("TDL_PLAYERCONTROLLER: Received network %1 member update with %2 members", networkId, members.Count()), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -868,11 +867,11 @@ modded class SCR_PlayerController
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system)
             return;
-        
+
         AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
         if (!device)
             return;
-        
+
         // Server-side call - SetCustomCallsign handles the logic + bump + system notify
         device.SetCustomCallsign(callsign);
     }
