@@ -852,6 +852,20 @@ modded class SCR_PlayerController
         if (!device)
             return;
 
+        // Diagnostic: how many AG0_TDLDeviceComponents live on the entity backing
+        // this RplId? If >1, multiple TDL components share a single RplComponent
+        // and the system-level cache (m_mDeviceCache) — last writer wins — may
+        // hand back a different physical script object than the one the client UI
+        // is bound to, even though both sides agree on the RplId.
+        IEntity entityOwner = device.GetOwner();
+        if (entityOwner)
+        {
+            array<Managed> tdlComps = {};
+            entityOwner.FindComponents(AG0_TDLDeviceComponent, tdlComps);
+            Print(string.Format("TDL_CS_COMPCOUNT: entity %1 has %2 AG0_TDLDeviceComponent(s) this is not good! Please tell someone to fix it. — RplId=%3 caps(this)=%4",
+                entityOwner, tdlComps.Count(), deviceRplId, device.GetActiveCapabilities()), LogLevel.WARNING);
+        }
+
         // Server-side call - SetCustomCallsign handles the logic + bump + system notify
         device.SetCustomCallsign(callsign);
     }
@@ -1043,12 +1057,12 @@ modded class SCR_PlayerController
     // CLIENT -> SERVER: Send a message
     //------------------------------------------------------------------------------------------------
     [RplRpc(RplChannel.Reliable, RplRcver.Server)]
-    protected void RpcAsk_SendTDLMessage(RplId senderDeviceRplId, string content, 
+    protected void RpcAsk_SendTDLMessage(RplId senderDeviceRplId, string content,
                                          ETDLMessageType messageType, RplId recipientRplId)
     {
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system) return;
-        
+
         system.SendTDLMessage(senderDeviceRplId, content, messageType, recipientRplId);
     }
     

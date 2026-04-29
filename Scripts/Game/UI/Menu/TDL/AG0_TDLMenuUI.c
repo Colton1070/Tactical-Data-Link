@@ -1052,11 +1052,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected void FindNetworkDevice()
     {
         m_NetworkDevice = null;
-        
+
         SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
         if (!controller)
             return;
-        
+
         array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
@@ -1066,7 +1066,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 return;
             }
         }
-        
+
         foreach (AG0_TDLDeviceComponent device : devices)
         {
             if (device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS))
@@ -1588,20 +1588,20 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	{
 	    if (!m_ChatEditBox || !m_NetworkDevice)
 	        return;
-	    
+
 	    string content = m_ChatEditBox.GetText();
 	    if (content.IsEmpty())
 	        return;
-	    
+
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
 	    if (!controller)
 	        return;
-	    
+
 	    RplId senderDeviceRplId = m_NetworkDevice.GetDeviceRplId();
-	    
+
 	    if (m_ChatContactRplId != RplId.Invalid())
 	        SCR_PlayerController.RequestSendDirectMessage(controller, senderDeviceRplId, content, m_ChatContactRplId);
-	    
+
 	    m_ChatEditBox.SetText("");
 	    m_bScrollToBottom = true;
 	}

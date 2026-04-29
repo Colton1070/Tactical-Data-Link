@@ -949,30 +949,65 @@ class AG0_TDLSystem : WorldSystem
 	    }
 	    
 	    IEntity owner = device.GetOwner();
-	    if (!owner || owner.IsDeleted()) 
+	    if (!owner || owner.IsDeleted())
 	    {
 	        Print("TDL_DEVICE_REGISTRATION: Device owner was deleted before registration", LogLevel.DEBUG);
 	        return;
 	    }
-	    
+
 	    if (m_aRegisteredNetworkDevices.Contains(device))
 	    {
 	        Print("TDL_DEVICE_REGISTRATION: Device already registered", LogLevel.DEBUG);
 	        return;
 	    }
-	    
+
 	    if (!device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS))
 	    {
 	        Print("TDL_DEVICE_REGISTRATION: Device lacks NETWORK_ACCESS capability", LogLevel.DEBUG);
 	        return;
 	    }
-	    
-	    m_aRegisteredNetworkDevices.Insert(device);
-    
+
+	    // Mod-conflict guard: if another AG0_TDLDeviceComponent already registered
+	    // on the SAME owner entity, REJECT this duplicate registration. Why
+	    // first-wins instead of last-writer-wins:
+	    //
+	    //   Client-side, the menu UI binds via entity.FindComponent(AG0_TDLDeviceComponent),
+	    //   which is singular and returns the FIRST-declared component on the
+	    //   entity (deterministic from prefab order — Colton's experience confirms).
+	    //   If the server cache here did last-writer-wins, server lookups via
+	    //   GetDeviceByRplId would return the LAST-registered component, which is
+	    //   a different physical script object than the one client UI is bound to.
+	    //   Same RplId, different objects → callsign and messaging fail silently
+	    //   because the RPC handler operates on the "wrong" component.
+	    //
+	    //   Bailing on the second registration keeps server cache aligned with
+	    //   client FindComponent — both pick the first-declared component every
+	    //   time, no split-brain. The duplicate component is effectively inert
+	    //   (won't appear in m_aRegisteredNetworkDevices, won't receive system-
+	    //   driven RPCs), but its presence in the prefab is still surfaced via
+	    //   the warning so the underlying mod conflict gets fixed.
+	    //
+	    //   Skipped predicate gates: existing.GetOwner() == device.GetOwner()
+	    //   filters out cross-entity RplId reuse (preview spawns, destroyed-
+	    //   then-respawned items) which are NOT mod conflicts and should let
+	    //   the cache update normally below.
 	    RplId deviceRplId = device.GetDeviceRplId();
 	    if (deviceRplId != RplId.Invalid())
+	    {
+	        AG0_TDLDeviceComponent existing = m_mDeviceCache.Get(deviceRplId);
+	        if (existing && existing != device && existing.GetOwner() == device.GetOwner())
+	        {
+	            Print(string.Format("[TDL_MOD_CONFLICT] Entity %1 already has an AG0_TDLDeviceComponent on RplId %2. This is bad! Remove the conflicting mod.",
+	                device.GetOwner(), deviceRplId), LogLevel.WARNING);
+	            return;
+	        }
+	    }
+
+	    m_aRegisteredNetworkDevices.Insert(device);
+
+	    if (deviceRplId != RplId.Invalid())
 	        m_mDeviceCache.Set(deviceRplId, device);
-	    
+
 	    LogDeviceRegistration(device, true);
 	    
 	    m_fTimeSinceGridRebuild = 999.0;
@@ -2334,20 +2369,20 @@ class AG0_TDLSystem : WorldSystem
                            ETDLMessageType messageType, RplId recipientRplId = RplId.Invalid())
     {
         if (!Replication.IsServer()) return;
-        
+
         if (content.IsEmpty())
         {
             Print("TDL_MESSAGE_SYSTEM: Empty message content, ignoring", LogLevel.DEBUG);
             return;
         }
-        
+
         AG0_TDLDeviceComponent senderDevice = system.GetDeviceByRplId(senderDeviceRplId);
         if (!senderDevice)
         {
             Print(string.Format("TDL_MESSAGE_SYSTEM: Sender device %1 not found", senderDeviceRplId), LogLevel.DEBUG);
             return;
         }
-        
+
         AG0_TDLNetwork network = FindNetworkForDevice(system, senderDevice);
         if (!network)
         {

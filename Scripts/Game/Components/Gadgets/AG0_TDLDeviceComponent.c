@@ -947,7 +947,16 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	
 	//------------------------------------------------------------------------------------------------
-	// Public API to check if device has network member data
+	// Public API: does this device have any network member data available to it,
+	// from either source (own local copy OR the controlling player's cache)?
+	//
+	// NOTE: this is NOT the same as HasLocalNetworkData() below, despite the
+	// implementations looking similar at first glance — this delegates to
+	// GetNetworkMembersData() which transparently falls through from local
+	// storage to the controller cache, so it returns true for any device that
+	// can serve member data, including handheld radios. HasLocalNetworkData() is
+	// specifically asking "does this device hold its own copy" and is the right
+	// check for code that needs to know if the device is INFORMATION-class.
 	//------------------------------------------------------------------------------------------------
 	bool HasNetworkMemberData()
 	{
@@ -957,22 +966,38 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		
 	AG0_TDLNetworkMembers GetNetworkMembersData()
 	{
-	    if (!HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
-	        return null;
-	    
-	    // HYBRID APPROACH: Check local storage first (for shared/vehicle devices)
-	    // If this device has its own copy of network data, use it
-	    // This enables vehicle displays and fixed installations to work
+	    // INFORMATION capability is about which DATA SOURCE serves a device, not
+	    // about whether a device may read network member data at all. Two cases:
+	    //
+	    //   1. INFORMATION device (TOC computer, vehicle CDU, fixed installation):
+	    //      The device holds its own copy of member data so it stays useful
+	    //      even when no player is in possession. Server populates
+	    //      m_LocalNetworkMembers via RpcDo_SetLocalNetworkMembers (gated on
+	    //      INFORMATION at the server emission site, AG0_TDLSystem.c:2119).
+	    //      For these devices we return the local copy.
+	    //
+	    //   2. Personal handheld (legacy radio, Wave Relay, etc. without
+	    //      INFORMATION): The data lives on the controlling player's
+	    //      m_mTDLNetworkMembersMap because exactly one player owns the
+	    //      device and follows it. We fall through to the controller cache.
+	    //
+	    // The local-storage check below is naturally self-gating because
+	    // m_LocalNetworkMembers is never populated on a device without
+	    // INFORMATION — the server simply never fires the RPC for it. So no
+	    // explicit capability gate is needed at this layer. The previous gate
+	    // here ('if (!HasCapability(INFORMATION)) return null') broke handheld
+	    // radios entirely: the menu UI would open, the contact list / callsign
+	    // / message rendering would all silently see null data, and the user
+	    // would observe "can join a network but can't do anything in it." This
+	    // is what made legacy radios appear broken on dedicated servers.
 	    if (m_LocalNetworkMembers && m_LocalNetworkMembers.Count() > 0)
 	        return m_LocalNetworkMembers;
-	    
-	    // FALLBACK: Player controller path (for personal devices held by player)
+
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
 		    GetGame().GetPlayerController()
 		);
 	    if (!controller) return null;
-	    
-	    // Hybrid approach - specific network or aggregate
+
 	    if (m_iCurrentNetworkID > 0)
 	        return controller.GetTDLNetworkMembers(m_iCurrentNetworkID);
 	    else
@@ -1322,13 +1347,13 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	        Rpc(RpcAsk_SetCustomCallsign, callsign);
 	        return;
 	    }
-	    
+
 	    // Validate callsign (optional - add your own rules)
 	    string cleanCallsign = callsign.Trim();
 	    if (cleanCallsign.Length() > 16) {
 	        cleanCallsign = cleanCallsign.Substring(0, 16); // Max 16 chars
 	    }
-	    
+
 	    if (m_sCustomCallsign != cleanCallsign) {
 	        m_sCustomCallsign = cleanCallsign;
 	        Replication.BumpMe();
