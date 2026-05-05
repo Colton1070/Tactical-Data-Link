@@ -384,14 +384,14 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     {
         bool currentlyVisible = AG0_TDLDisplayController.GetSidePanelVisible();
         if (currentlyVisible)
-            AG0_TDLDisplayController.SetPanelState(false, false, false, false, "");
+            AG0_TDLDisplayController.SetPanelState(false, false, false, false, false, "");
         else
-            AG0_TDLDisplayController.SetPanelState(true, true, false, false, "CONTACTS");
+            AG0_TDLDisplayController.SetPanelState(true, true, false, false, false, "CONTACTS");
     }
-    
+
     protected void OnBackButtonClicked(SCR_ModularButtonComponent comp)
     {
-        AG0_TDLDisplayController.SetPanelState(true, true, false, false, "CONTACTS");
+        AG0_TDLDisplayController.SetPanelState(true, true, false, false, false, "CONTACTS");
     }
     
     //------------------------------------------------------------------------------------------------

@@ -445,17 +445,21 @@ class AG0_TDLMapView
         // Convert from screen center
         float canvasCenterX = m_fCanvasWidth * 0.5;
         float canvasCenterY = m_fCanvasHeight * 0.5;
-        
+
         float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
-        
+
         float offsetX = (screenX - canvasCenterX) / pixelsPerWorldUnit;
         float offsetZ = -(screenY - canvasCenterY) / pixelsPerWorldUnit; // Flip Y
-        
-        // Reverse rotation
-        float rotRad = -m_fRotation * Math.DEG2RAD;
+
+        // Inverse rotation — WorldToScreen applies rotation by -m_fRotation
+        // (negated for texture-direction match), so the inverse must apply
+        // +m_fRotation. Previously this used the SAME negated value as
+        // WorldToScreen, which only cancelled correctly when rotation = 0
+        // (north-up); track-up mode produced clicks at wrong world coords.
+        float rotRad = m_fRotation * Math.DEG2RAD;
         float cosR = Math.Cos(rotRad);
         float sinR = Math.Sin(rotRad);
-        
+
         float worldX = offsetX * cosR - offsetZ * sinR;
         float worldZ = offsetX * sinR + offsetZ * cosR;
         
@@ -509,6 +513,7 @@ class AG0_TDLMapView
 	{
 		m_aTerrainRoads = roads;
 	}
+
     
     //------------------------------------------------------------------------------------------------
     void AddSelfMarker(vector worldPos, float heading)
@@ -587,7 +592,7 @@ class AG0_TDLMapView
 		
 		//Draw TDL shapes
 		DrawShapes();
-		
+
         // Draw markers (on top)
         DrawMarkers();
         
@@ -1022,7 +1027,12 @@ class AG0_TDLMapView
 	        // Building rotation is world-CCW; map rotation is also world-CCW (track
 	        // mode rotates the world frame). Combine then negate to take both into
 	        // the Y-flipped screen frame in one step.
-	        float totalRot = -(rec.m_fRotation + mapRotRad);
+	        //
+	        // The +π/2 offset compensates for a 90° mismatch between the API's
+	        // rotation reference and the renderer's local-rect axis convention.
+	        // If the structures rotate the *wrong* direction after this fix,
+	        // change `+ Math.PI * 0.5` to `- Math.PI * 0.5`.
+	        float totalRot = -(rec.m_fRotation + Math.PI * 0.5 + mapRotRad);
 	        float cosR = Math.Cos(totalRot);
 	        float sinR = Math.Sin(totalRot);
 
@@ -1594,16 +1604,16 @@ class AG0_TDLMapView
         {
             float screenX, screenY;
             WorldToScreen(marker.m_vWorldPos, screenX, screenY);
-            
+
             // Skip if outside canvas
             if (screenX < -20 || screenX > m_fCanvasWidth + 20 ||
                 screenY < -20 || screenY > m_fCanvasHeight + 20)
                 continue;
-            
+
             DrawMarker(marker, screenX, screenY);
         }
     }
-	
+
 	//------------------------------------------------------------------------------------------------
 	protected void DrawGrid()
 	{

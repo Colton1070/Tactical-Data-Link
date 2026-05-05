@@ -2,6 +2,7 @@ ButtonWidgetClass {
  Name "MessageCard"
  Slot LayoutSlot "{65F049EE6A586DEF}" {
   Padding 4 4 4 4
+  SizeMode Fill
  }
  Color 0 0 0 1
  components {
@@ -41,12 +42,14 @@ ButtonWidgetClass {
    }
    AllowMaxDesiredWidth 1
    MaxDesiredWidth 400
+   AllowMaxDesiredHeight 1
+   MaxDesiredHeight 1000
    {
     OverlayWidgetClass "{6842E37DD116017B}" {
      Name "CardOverlay"
      Slot AlignableSlot "{6842E37DD116017C}" {
       HorizontalAlign 3
-      VerticalAlign 0
+      VerticalAlign 3
      }
      {
       ImageWidgetClass "{6842E37DD116017A}" {
@@ -117,6 +120,37 @@ ButtonWidgetClass {
          Text "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum."
          "Font Size" 14
          Wrap 1
+        }
+        OverlayWidgetClass "{69423051532BB858}" {
+         Name "ImageOverlay"
+         Slot LayoutSlot "{69423051532BB873}" {
+          VerticalAlign 0
+          SizeMode Fill
+         }
+         {
+          SizeLayoutWidgetClass "{694230512E4C597B}" {
+           Name "ImageContainer"
+           Slot OverlayWidgetSlot "{694230512E4C5916}" {
+           }
+           AllowMinDesiredWidth 1
+           MinDesiredWidth 256
+           AllowMinDesiredHeight 1
+           MinDesiredHeight 256
+           AllowMaxDesiredWidth 1
+           MaxDesiredWidth 512
+           AllowMaxDesiredHeight 1
+           MaxDesiredHeight 512
+           {
+            CanvasWidgetClass "{694230D55831DEB8}" {
+             Name "ImageCanvas"
+             Slot AlignableSlot "{694230512CC68D1B}" {
+              HorizontalAlign 3
+              VerticalAlign 3
+             }
+            }
+           }
+          }
+         }
         }
        }
       }

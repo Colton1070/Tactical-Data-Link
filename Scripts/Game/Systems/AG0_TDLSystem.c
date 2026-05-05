@@ -58,6 +58,15 @@ class AG0_TDLNetwork
     protected ref map<RplId, ref AG0_TDLNetworkMember> m_mDeviceData = new map<RplId, ref AG0_TDLNetworkMember>();
     protected int m_iNextNetworkIP = 1;
 
+    // Set of playerIds that received a NotifyNetworkMembers RPC for this network on the
+    // previous UpdateNetworkConnectivity tick. Used to detect departures: a player who
+    // was in the previous-tick set but not in the current-tick set has dropped their
+    // last device on this network (radio dropped, died with loot loss, slot swap,
+    // disconnect, etc.) and needs a NotifyClearNetwork RPC so their client-side
+    // m_mTDLNetworkMembersMap entry for this network gets removed. Without this, the
+    // player's cache shows ghost members from a network they're no longer on.
+    protected ref set<int> m_aLastNotifiedPlayerIds = new set<int>();
+
 
 	// Message storage
     protected ref array<ref AG0_TDLMessage> m_aMessages = {};
@@ -87,6 +96,8 @@ class AG0_TDLNetwork
     int GetWaveform() { return m_eWaveform; }
     array<AG0_TDLDeviceComponent> GetNetworkDevices() { return m_aNetworkDevices; }
     map<RplId, ref AG0_TDLNetworkMember> GetDeviceData() { return m_mDeviceData; }
+    set<int> GetLastNotifiedPlayerIds() { return m_aLastNotifiedPlayerIds; }
+    void SetLastNotifiedPlayerIds(set<int> ids) { m_aLastNotifiedPlayerIds = ids; }
 	array<ref AG0_TDLMessage> GetMessages() { return m_aMessages; }
 	int GetNextMessageId() { return m_iNextMessageId++; }
     
@@ -172,6 +183,59 @@ class AG0_TDLNetwork
     // Add a direct message to the network
     // Returns the message ID
     //------------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------------
+    //! Image-message variants — parallel to AddBroadcastMessage / AddDirectMessage but
+    //! populating the image fields. The text `caption` is what shows alongside the image.
+    //------------------------------------------------------------------------------------------------
+    static int AddBroadcastImageMessage(AG0_TDLNetwork network, RplId senderRplId,
+                                        string senderCallsign, string caption,
+                                        string deliveryId, string fingerprint, int sizeBytes,
+                                        inout array<ref AG0_TDLMessage> messages,
+                                        inout int nextMessageId)
+    {
+        AG0_TDLMessage msg = AG0_TDLMessage.CreateBroadcastImage(
+            nextMessageId,
+            network.GetNetworkID(),
+            senderRplId,
+            senderCallsign,
+            caption,
+            deliveryId,
+            fingerprint,
+            sizeBytes
+        );
+
+        messages.Insert(msg);
+        int messageId = nextMessageId;
+        nextMessageId++;
+        return messageId;
+    }
+
+    static int AddDirectImageMessage(AG0_TDLNetwork network, RplId senderRplId,
+                                     string senderCallsign, string caption,
+                                     RplId recipientRplId, string recipientCallsign,
+                                     string deliveryId, string fingerprint, int sizeBytes,
+                                     inout array<ref AG0_TDLMessage> messages,
+                                     inout int nextMessageId)
+    {
+        AG0_TDLMessage msg = AG0_TDLMessage.CreateDirectImage(
+            nextMessageId,
+            network.GetNetworkID(),
+            senderRplId,
+            senderCallsign,
+            caption,
+            recipientRplId,
+            recipientCallsign,
+            deliveryId,
+            fingerprint,
+            sizeBytes
+        );
+
+        messages.Insert(msg);
+        int messageId = nextMessageId;
+        nextMessageId++;
+        return messageId;
+    }
+
     static int AddDirectMessage(AG0_TDLNetwork network, RplId senderRplId, string senderCallsign,
                                 string content, RplId recipientRplId, string recipientCallsign,
                                 inout array<ref AG0_TDLMessage> messages, inout int nextMessageId)
@@ -185,7 +249,7 @@ class AG0_TDLNetwork
             recipientRplId,
             recipientCallsign
         );
-        
+
         messages.Insert(msg);
         nextMessageId++;
         
@@ -315,6 +379,10 @@ class AG0_TDLSystem : WorldSystem
     protected static bool s_bShuttingDown = false;
 	
 	protected ref AG0_TDLApiManager m_ApiManager;
+	// Photo manager — runs on BOTH server and client (unlike m_ApiManager which is server-only).
+	// Owns the rgz cache, in-flight HTTP fetches (server-only path inside the manager), and
+	// the per-request decode pipeline (base64 → gunzip → rect parse).
+	protected ref AG0_TDLPhotoManager m_PhotoManager;
 	// API sync intervals (in seconds)
 	protected const float API_HEARTBEAT_INTERVAL = 60.0;
 	protected float m_fApiStateSyncInterval = 5.0;
@@ -608,6 +676,81 @@ class AG0_TDLSystem : WorldSystem
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Public entry point for image-message delivery. The caller (typically the
+	//! image_deliver queue handler in AG0_TDLApiManager) has already fetched the image
+	//! payload into AG0_TDLPhotoManager's cache by deliveryId. This call:
+	//!   1. Creates the image AG0_TDLMessage on the resolved network (broadcast or direct)
+	//!   2. Triggers the existing message replication path so clients see the metadata
+	//!   3. Resolves the recipient player IDs from network membership and kicks chunk
+	//!      distribution via the photo manager.
+	//! Returns the new messageId, or -1 on failure (sender / network resolution failed).
+	int SendImageTDLMessage(RplId senderDeviceRplId, string caption, ETDLMessageType messageType,
+	                        string deliveryId, string fingerprint, int sizeBytes,
+	                        RplId recipientRplId = RplId.Invalid())
+	{
+	    return SendImageMessage(this, senderDeviceRplId, caption, messageType,
+	        deliveryId, fingerprint, sizeBytes, recipientRplId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Resolve "all online players reachable on this network" — used by chunk distribution
+	//! to address the broadcast recipient set. For DIRECT messages the caller passes a
+	//! single recipientRplId; this helper handles the broadcast case.
+	//!
+	//! Returns a deduplicated list of player IDs whose owning device is on this network.
+	//! Players whose devices aren't replicated, who aren't online, or who can't be resolved
+	//! to a player controller are skipped silently.
+	array<int> ResolveNetworkPlayerIds(AG0_TDLNetwork network)
+	{
+	    array<int> result = {};
+	    if (!network)
+	        return result;
+
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    if (!playerMgr)
+	        return result;
+
+	    array<AG0_TDLDeviceComponent> devices = network.GetNetworkDevices();
+	    if (!devices)
+	        return result;
+
+	    foreach (AG0_TDLDeviceComponent device : devices)
+	    {
+	        if (!device)
+	            continue;
+	        IEntity player = GetPlayerFromDevice(device);
+	        if (!player)
+	            continue;
+	        int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+	        if (playerId <= 0)
+	            continue;
+	        if (!result.Contains(playerId))
+	            result.Insert(playerId);
+	    }
+
+	    return result;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Resolve a single recipient device → owning player ID. Returns -1 on failure.
+	int ResolveRecipientPlayerId(RplId recipientDeviceRplId)
+	{
+	    AG0_TDLDeviceComponent device = GetDeviceByRplId(recipientDeviceRplId);
+	    if (!device)
+	        return -1;
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    if (!playerMgr)
+	        return -1;
+	    IEntity player = GetPlayerFromDevice(device);
+	    if (!player)
+	        return -1;
+	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
+	    if (playerId <= 0)
+	        return -1;
+	    return playerId;
+	}
+
+	//------------------------------------------------------------------------------------------------
 	//! Public wrapper around the protected ApiNotifyMessageSendFailed event so the
 	//! AG0_TDLApiManager queue handlers (different class scope) can surface compose
 	//! failures back to the web user. Kept thin to avoid leaking the protected internal.
@@ -616,6 +759,15 @@ class AG0_TDLSystem : WorldSystem
 	void ApiNotifyMessageSendFailedPublic(string correlationId, string reason, int networkId, string networkStableId)
 	{
 	    ApiNotifyMessageSendFailed(correlationId, reason, networkId, networkStableId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Public wrapper around ApiNotifyImageDeliverFailed so the image_deliver queue
+	//! handler (in AG0_TDLApiManager) and the fetch-completion sink can surface failures
+	//! back to the web user. Symmetric with ApiNotifyMessageSendFailedPublic.
+	void ApiNotifyImageDeliverFailedPublic(string correlationId, string deliveryId, string reason)
+	{
+	    ApiNotifyImageDeliverFailed(correlationId, deliveryId, reason);
 	}
 
 	void MarkTDLMessageRead(RplId readerDeviceRplId, int messageId)
@@ -665,15 +817,24 @@ class AG0_TDLSystem : WorldSystem
 	override protected void OnInit()
 	{
 	    super.OnInit();
-	    
+
 		s_bShuttingDown = false;
-		
+
+		// Photo manager initialized on BOTH server and client. The manager itself
+		// gates HTTP-issuing methods to server-only internally (clients never hit REST).
+		m_PhotoManager = new AG0_TDLPhotoManager();
+		if (!m_PhotoManager.Initialize())
+		{
+			Print("TDL_SYSTEM: Photo Manager initialization failed", LogLevel.WARNING);
+			m_PhotoManager = null;
+		}
+
 	    if (!Replication.IsServer())
 	    {
 	        Print("TDL_SYSTEM: Running on client/proxy - skipping API initialization", LogLevel.DEBUG);
 	        return;
 	    }
-	    
+
 	    m_ApiManager = new AG0_TDLApiManager();
 	    if (m_ApiManager.Initialize())
 	    {
@@ -690,6 +851,13 @@ class AG0_TDLSystem : WorldSystem
     //------------------------------------------------------------------------------------------------
     override protected void OnUpdatePoint(WorldUpdatePointArgs args)
     {
+        float timeSlice = GetWorld().GetFixedTimeSlice();
+
+        // Photo manager ticks on BOTH server and client (cache age sweep, fetch
+        // timeout sweep, decode-step driver). Must run before the server-only gate.
+        if (m_PhotoManager)
+            m_PhotoManager.Update(timeSlice);
+
         if (!Replication.IsServer()) return;
 
         // The game mode is not necessarily live during our OnInit (system-init
@@ -698,7 +866,6 @@ class AG0_TDLSystem : WorldSystem
         if (!m_bPlayerAuditHandlerRegistered)
             EnsurePlayerAuditHandlerRegistered();
 
-        float timeSlice = GetWorld().GetFixedTimeSlice();
         m_fTimeSinceLastUpdate += timeSlice;
         
         if (m_fTimeSinceLastUpdate >= m_fUpdateInterval)
@@ -738,9 +905,12 @@ class AG0_TDLSystem : WorldSystem
 	void ~AG0_TDLSystem()
 	{
 	    s_bShuttingDown = true;
-	    
+
 	    if (m_ApiManager)
 	        m_ApiManager = null;
+
+	    if (m_PhotoManager)
+	        m_PhotoManager = null;
 	}
     
     int GetAggregatedPlayerCapabilities(IEntity player)
@@ -1601,8 +1771,38 @@ class AG0_TDLSystem : WorldSystem
     
     protected void UpdateNetworkConnectivity(AG0_TDLNetwork network)
 	{
-	    if (!network || !network.HasDevices()) return;
-	    
+	    if (!network) return;
+
+	    // If the network is empty this tick, anyone we notified last tick has departed.
+	    // Fire NotifyClearNetwork at each former member so their client-side cache for
+	    // this network gets removed, then drop our bookkeeping. Without this, a network
+	    // that fully empties out leaves stale entries in every former member's
+	    // m_mTDLNetworkMembersMap.
+	    if (!network.HasDevices())
+	    {
+	        set<int> oldNotifiedEmpty = network.GetLastNotifiedPlayerIds();
+	        if (oldNotifiedEmpty && oldNotifiedEmpty.Count() > 0)
+	        {
+	            PlayerManager pmEmpty = GetGame().GetPlayerManager();
+	            int emptyNetId = network.GetNetworkID();
+	            foreach (int oldPidEmpty : oldNotifiedEmpty)
+	            {
+	                SCR_PlayerController pcEmpty = SCR_PlayerController.Cast(pmEmpty.GetPlayerController(oldPidEmpty));
+	                if (pcEmpty) pcEmpty.NotifyClearNetwork(emptyNetId);
+	            }
+	            network.SetLastNotifiedPlayerIds(new set<int>());
+	        }
+	        return;
+	    }
+
+	    // Snapshot the set of playerIds we notified on the previous tick, and start a
+	    // fresh set for this tick. The per-device foreach below populates newNotified
+	    // from the return value of NotifyNetworkConnectivity. After the foreach, the
+	    // diff (oldNotified - newNotified) gives us exactly the players who lost their
+	    // last device on this network this tick (drop, death, slot swap, disconnect).
+	    set<int> oldNotified = network.GetLastNotifiedPlayerIds();
+	    set<int> newNotified = new set<int>();
+
 	    foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
 	    {
 	        if (!device.CanAccessNetwork()) continue;
@@ -1696,9 +1896,27 @@ class AG0_TDLSystem : WorldSystem
 	        AppendBridgedMembers(network, device, connectedMembers);
 
 	        // Pass network.GetNetworkID() explicitly — see NotifyNetworkConnectivity doc.
-	        NotifyNetworkConnectivity(device, network.GetNetworkID(), connectedMembers);
+	        // Capture the returned playerId (-1 if no RPC was sent) so we can detect
+	        // departures after the loop completes.
+	        int notifiedPid = NotifyNetworkConnectivity(device, network.GetNetworkID(), connectedMembers);
+	        if (notifiedPid >= 0)
+	            newNotified.Insert(notifiedPid);
 			PropagateMessagesForDevice(this, network, device, connectedMembers);
 	    }
+
+	    // Departure detection: anyone we notified last tick but not this tick has
+	    // dropped their last device on this network. Fire NotifyClearNetwork so their
+	    // client-side m_mTDLNetworkMembersMap entry for this network gets removed.
+	    PlayerManager departurePm = GetGame().GetPlayerManager();
+	    int currentNetId = network.GetNetworkID();
+	    foreach (int oldPid : oldNotified)
+	    {
+	        if (newNotified.Contains(oldPid)) continue;
+	        SCR_PlayerController departedPc = SCR_PlayerController.Cast(departurePm.GetPlayerController(oldPid));
+	        if (departedPc) departedPc.NotifyClearNetwork(currentNetId);
+	    }
+	    network.SetLastNotifiedPlayerIds(newNotified);
+
 		// After all devices processed, derive player connectivity
 	    map<int, ref set<int>> playerConnections = new map<int, ref set<int>>();
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
@@ -2135,7 +2353,11 @@ class AG0_TDLSystem : WorldSystem
     //! killing tick-based callsign/position updates for that player until something
     //! resets the id — which is exactly the "stale icons / callsign doesn't update
     //! on next tick" symptom.
-    protected void NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, int networkId, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
+    //! Returns the playerId that was notified for this device's owning player,
+    //! or -1 if no NotifyNetworkMembers RPC was sent (no owning player, no controller,
+    //! invalid networkId). Caller in UpdateNetworkConnectivity uses the return value to
+    //! build the set of "players we notified this tick" for departure-detection.
+    protected int NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, int networkId, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
 	{
 	    array<RplId> deviceIDs = new array<RplId>();
 	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
@@ -2159,11 +2381,11 @@ class AG0_TDLSystem : WorldSystem
 	    }
 
 	    IEntity player = GetPlayerFromDevice(device);
-	    if (!player) return;
+	    if (!player) return -1;
 
 	    PlayerManager playerMgr = GetGame().GetPlayerManager();
 	    int playerId = playerMgr.GetPlayerIdFromControlledEntity(player);
-	    if (playerId < 0) return;
+	    if (playerId < 0) return -1;
 
 	   	SCR_PlayerController controller = SCR_PlayerController.Cast(
 	        GetGame().GetPlayerManager().GetPlayerController(playerId)
@@ -2171,12 +2393,13 @@ class AG0_TDLSystem : WorldSystem
         if (!controller)
         {
             Print(string.Format("TDL_System: Controller not found for player %1", playerId), LogLevel.DEBUG);
-            return;
+            return -1;
         }
 
-	    if (networkId <= 0) return;
-	    
+	    if (networkId <= 0) return -1;
+
 	    controller.NotifyNetworkMembers(networkId, membersArray);
+	    return playerId;
 	}
     
     //------------------------------------------------------------------------------------------------
@@ -2441,7 +2664,138 @@ class AG0_TDLSystem : WorldSystem
 
         PropagateMessagesInNetwork(system, network);
     }
-    
+
+    //------------------------------------------------------------------------------------------------
+    //! Image-message variant of SendMessage. Same orchestration shape: resolve sender/network,
+    //! create the message via the IMAGE factory (NOT text), notify API of message_sent,
+    //! propagate metadata via the existing replication path, then kick chunk distribution
+    //! to the resolved recipient set.
+    //!
+    //! The image payload MUST already be in AG0_TDLPhotoManager's cache under `deliveryId` —
+    //! caller is responsible for FetchByDeliveryId completing successfully before invoking this.
+    //!
+    //! Returns the new messageId, or -1 on failure.
+    static int SendImageMessage(AG0_TDLSystem system, RplId senderDeviceRplId, string caption,
+                                ETDLMessageType messageType, string deliveryId, string fingerprint,
+                                int sizeBytes, RplId recipientRplId = RplId.Invalid())
+    {
+        if (!Replication.IsServer()) return -1;
+
+        if (deliveryId.IsEmpty())
+        {
+            Print("TDL_MESSAGE_SYSTEM: SendImageMessage with empty deliveryId — ignoring", LogLevel.WARNING);
+            return -1;
+        }
+
+        AG0_TDLDeviceComponent senderDevice = system.GetDeviceByRplId(senderDeviceRplId);
+        if (!senderDevice)
+        {
+            Print(string.Format("TDL_MESSAGE_SYSTEM: image sender device %1 not found", senderDeviceRplId), LogLevel.DEBUG);
+            return -1;
+        }
+
+        AG0_TDLNetwork network = FindNetworkForDevice(system, senderDevice);
+        if (!network)
+        {
+            Print(string.Format("TDL_MESSAGE_SYSTEM: image sender device %1 not in any network", senderDeviceRplId), LogLevel.DEBUG);
+            return -1;
+        }
+
+        string senderCallsign = senderDevice.GetDisplayName();
+        int messageId = -1;
+
+        if (messageType == ETDLMessageType.NETWORK_BROADCAST)
+        {
+            array<ref AG0_TDLMessage> messages = network.GetMessages();
+            int nextId = network.GetNextMessageId();
+            messageId = network.AddBroadcastImageMessage(network, senderDeviceRplId, senderCallsign, caption,
+                deliveryId, fingerprint, sizeBytes, messages, nextId);
+        }
+        else if (messageType == ETDLMessageType.DIRECT)
+        {
+            string recipientCallsign = "Unknown";
+            AG0_TDLNetworkMember recipientMember = network.GetDeviceData().Get(recipientRplId);
+            if (recipientMember)
+                recipientCallsign = recipientMember.GetPlayerName();
+
+            array<ref AG0_TDLMessage> messages = network.GetMessages();
+            int nextId = network.GetNextMessageId();
+            messageId = network.AddDirectImageMessage(network, senderDeviceRplId, senderCallsign, caption,
+                recipientRplId, recipientCallsign, deliveryId, fingerprint, sizeBytes,
+                messages, nextId);
+        }
+        else
+        {
+            return -1;
+        }
+
+        // Notify API of the canonical message and the implicit sender-side delivery, mirroring
+        // the rationale block in SendMessage above (sender pre-marked DELIVERED at construction
+        // means PropagateMessagesInNetwork won't fire ApiNotifyMessageDelivered for them).
+        AG0_TDLMessage canonical = GetNetworkMessage(network, messageId);
+        if (canonical)
+        {
+            system.ApiNotifyMessageSent(network, canonical);
+
+            int senderPlayerId = system.GetPlayerIdFromDeviceRplId(senderDeviceRplId);
+            if (senderPlayerId > 0)
+            {
+                string senderIdentity = system.GetPlayerIdentityId(senderPlayerId);
+                if (!senderIdentity.IsEmpty())
+                {
+                    system.ApiNotifyMessageDelivered(network, canonical.GetMessageId(),
+                        senderDeviceRplId, senderCallsign, senderIdentity, senderPlayerId);
+                }
+            }
+        }
+
+        // Replicate metadata (deliveryId / fingerprint / sizeBytes / transferState=TRANSFERRING)
+        // via the existing message-replication path. Clients see the placeholder image-message
+        // and start showing "incoming…" UI before any chunks arrive.
+        PropagateMessagesInNetwork(system, network);
+
+        // Resolve recipient player IDs and kick chunk distribution. For broadcast, every
+        // network member is a recipient; for direct, just the one.
+        AG0_TDLPhotoManager photoMgr = system.GetPhotoManager();
+        if (!photoMgr)
+        {
+            Print("TDL_MESSAGE_SYSTEM: photo manager unavailable — image metadata sent but no chunks", LogLevel.WARNING);
+            return messageId;
+        }
+
+        array<int> recipientPlayerIds = {};
+        if (messageType == ETDLMessageType.NETWORK_BROADCAST)
+        {
+            // ResolveNetworkPlayerIds already includes the sender's player (their device
+            // is on the network too), so the sender sees their own broadcast in chat.
+            recipientPlayerIds = system.ResolveNetworkPlayerIds(network);
+        }
+        else
+        {
+            int rid = system.ResolveRecipientPlayerId(recipientRplId);
+            if (rid > 0)
+                recipientPlayerIds.Insert(rid);
+
+            // Include the sender in the recipient list so their own outbox renders the
+            // image. Without this, the sender sees the message metadata (replicated via
+            // the regular message path) but no chunk bytes ever arrive at their client,
+            // so the image-message card sits at "[image — incoming…]" indefinitely.
+            int senderPid = system.ResolveRecipientPlayerId(senderDeviceRplId);
+            if (senderPid > 0 && !recipientPlayerIds.Contains(senderPid))
+                recipientPlayerIds.Insert(senderPid);
+        }
+
+        if (recipientPlayerIds.Count() == 0)
+        {
+            Print(string.Format("TDL_MESSAGE_SYSTEM: image deliveryId=%1 has no online recipients — chunks skipped",
+                deliveryId), LogLevel.WARNING);
+            return messageId;
+        }
+
+        photoMgr.BeginDistribute(deliveryId, network.GetNetworkID(), recipientPlayerIds, null);
+        return messageId;
+    }
+
     //------------------------------------------------------------------------------------------------
     static void MarkMessageRead(AG0_TDLSystem system, RplId readerDeviceRplId, int messageId)
     {
@@ -3038,6 +3392,24 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
 
+	    // Image-message fields — present iff this is an IMAGE message. Default-text
+	    // messages omit these entirely (no contentType/imageDeliveryId/etc. in the JSON)
+	    // so existing API consumers that don't know about images are unaffected.
+	    //
+	    // The API uses imageDeliveryId to reconcile this success event back to the
+	    // originating image_deliver queue row (correlationId → deliveryId via the
+	    // queue table). See docs/messaging-images.md "Reconciling success".
+	    if (msg.IsImage())
+	    {
+	        json.WriteValue("contentType", "image");
+	        json.WriteValue("imageDeliveryId", msg.GetImageDeliveryId());
+	        json.WriteValue("imageFingerprint", msg.GetImageFingerprint());
+	        json.WriteValue("imageSizeBytes", msg.GetImageSizeBytes());
+	        // imageTransferState intentionally omitted — at message_sent time it's
+	        // always TRANSFERRING; the API doesn't need to track per-message transfer
+	        // progress (chunked distribution is mod-internal).
+	    }
+
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
 
@@ -3130,6 +3502,27 @@ class AG0_TDLSystem : WorldSystem
 
 	    m_ApiManager.SubmitData(json.ExportToString());
 	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Surface an image_deliver failure to the API so the web UI can flip the compose to
+	//! a rejected state. Mirrors message_send_failed shape — `correlationId` is the queue
+	//! command's id (echoed back), `deliveryId` is the per-image identifier, `reason` is
+	//! a short machine-readable string (e.g. "fetch_failed", "no_recipients", etc.).
+	protected void ApiNotifyImageDeliverFailed(string correlationId, string deliveryId, string reason)
+	{
+	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+	        return;
+
+	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    json.WriteValue("type", "event");
+	    json.WriteValue("event", "image_deliver_failed");
+	    json.WriteValue("timestamp", System.GetUnixTime());
+	    json.WriteValue("correlationId", correlationId);
+	    json.WriteValue("deliveryId", deliveryId);
+	    json.WriteValue("reason", reason);
+
+	    m_ApiManager.SubmitData(json.ExportToString());
+	}
 	
 	protected int GetConnectedPlayerCount()
 	{
@@ -3145,6 +3538,11 @@ class AG0_TDLSystem : WorldSystem
 	AG0_TDLApiManager GetApiManager()
 	{
 	    return m_ApiManager;
+	}
+
+	AG0_TDLPhotoManager GetPhotoManager()
+	{
+	    return m_PhotoManager;
 	}
 	
 	bool IsApiConnected()

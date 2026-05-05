@@ -1,0 +1,312 @@
+FrameWidgetClass {
+ Name "MarkerEditRoot"
+ Slot FrameWidgetSlot "{5DA681954DE6635D}" {
+  Anchor 0 0 1 1
+  PositionX 0
+  OffsetLeft 0
+  PositionY 0
+  OffsetTop 0
+  SizeX 0
+  OffsetRight 0
+  SizeY 0
+  OffsetBottom 0
+  SizeToContent 1
+ }
+ Clipping False
+ {
+  FrameWidgetClass "{69472CDB4DDCBCE9}" : "{DD15734EB89D74E2}UI/layouts/Map/MapMarkerBase.layout" {
+   Name "rootFrame0"
+   Slot FrameWidgetSlot "{5D2691F3AE61A7FC}" {
+   }
+   {
+    VerticalLayoutWidgetClass "{5D56BA46E7717DBF}" {
+     Prefab "{5D56BA46E7717DBF}"
+     {
+      FrameWidgetClass "{5E3E82F0B6DE3AC9}" {
+       Prefab "{5E3E82F0B6DE3AC9}"
+       "Is Visible" 0
+       {
+        ImageWidgetClass "{5E3E82F09B48A9B8}" {
+         Prefab "{5E3E82F09B48A9B8}"
+         "Is Visible" 1
+        }
+       }
+      }
+      SizeLayoutWidgetClass "{5DB880D509DB9BFB}" {
+       Prefab "{5DB880D509DB9BFB}"
+       "Is Visible" 1
+       {
+        OverlayWidgetClass "{5DB880D58674BE6E}" {
+         Prefab "{5DB880D58674BE6E}"
+         components {
+          SCR_MilitarySymbolUIComponent "{5DB880D56B45FA22}" {
+           m_MilitarySymbol SCR_MilitarySymbol "{5DB880D56FF1176A}" {
+           }
+          }
+         }
+        }
+       }
+      }
+      TextWidgetClass "{5D269372DA54B302}" {
+       Prefab "{5D269372DA54B302}"
+       Text ""
+      }
+     }
+    }
+   }
+  }
+  FrameWidgetClass "{69472CDB4DDCBC93}" {
+   Name "SizeFrame"
+   Slot FrameWidgetSlot "{5E1EC62B6B3A089A}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 14
+    SizeX 124
+    OffsetRight 0
+    SizeY -100
+    OffsetBottom 0
+    SizeToContent 1
+   }
+   {
+    SmartPanelWidgetClass "{69472CDB4DDCBC92}" {
+     Name "Background0"
+     Slot FrameWidgetSlot "{5E20DAC96557C7F3}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX -900
+      OffsetRight 0
+      SizeY -470
+      OffsetBottom 0
+     }
+     Opacity 0.98
+     Color 0.0075 0.0123 0.0144 0
+     style rounded_4px
+    }
+    SizeLayoutWidgetClass "{69472CDB4DDCC74C}" {
+     Name "SizeLayout0"
+     Slot FrameWidgetSlot "{5E2C825DA2EDA3F6}" {
+      Anchor 0.5 0.5 0.5 0.5
+      OffsetLeft 0
+      OffsetTop 0
+      SizeX 1000
+      OffsetRight -1000
+      SizeY 500
+      OffsetBottom -500
+      Alignment 0.5 0.5
+      SizeToContent 1
+     }
+     WidthOverride 880
+     {
+      VerticalLayoutWidgetClass "{69472CDB4DDCC74E}" {
+       Name "MarkerEditVLayout"
+       Slot AlignableSlot "{5E2C825DA2FAB4C5}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+       }
+       {
+        TextWidgetClass "{69472CDB4DDCC749}" {
+         Name "Text0"
+         Slot LayoutSlot "{5E4E834C8B9C24F8}" {
+          Padding 36 30 36 0
+         }
+         Text "#AR-MapMarker_Military_Header"
+        }
+        SizeLayoutWidgetClass "{69472DFC59B925E6}" {
+         Name "MarkerPreview"
+         Slot LayoutSlot "{69472DFC59B92583}" {
+          HorizontalAlign 1
+          Padding 36 20 36 0
+         }
+         AllowWidthOverride 1
+         WidthOverride 96
+         AllowHeightOverride 1
+         HeightOverride 96
+         {
+          OverlayWidgetClass "{69472DFCD33755EF}" {
+           Name "Overlay0"
+           Slot AlignableSlot "{69472DFCD337559E}" {
+            HorizontalAlign 3
+            VerticalAlign 3
+           }
+           components {
+            SCR_MilitarySymbolUIComponent "{69472DFC8F6C6AE8}" {
+             m_MilitarySymbol SCR_MilitarySymbol "{69472DFC8CA07ADC}" {
+             }
+            }
+           }
+          }
+         }
+        }
+        SizeLayoutWidgetClass "{69472CDB4DDC2B24}" {
+         Name "FactionSelector"
+         Slot LayoutSlot "{5D9EB6F2F56614ED}" {
+          Padding 36 18 36 0
+         }
+         "Left rule" Wrap
+         "Right rule" Wrap
+         "Up target" "IconEntry1"
+         AllowHeightOverride 1
+         HeightOverride 40
+         {
+          OverlayWidgetClass "{69472CDB4DDC2B25}" {
+           Name "Overlay0"
+           Slot AlignableSlot "{5D9EB6F2600AA569}" {
+            HorizontalAlign 3
+            VerticalAlign 3
+           }
+           {
+            ButtonWidgetClass "{69472DC34B8BDE82}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
+             Name "FactionSpinBox"
+             Slot OverlayWidgetSlot "{69472DC34B8BDF53}" {
+              HorizontalAlign 3
+              Padding 4 4 4 4
+             }
+             components {
+              SCR_SpinBoxComponent "{5472C6CBC0640458}" {
+               m_sLabel "#AR-MapMarker_Military_Identity"
+               m_fSizeWithLabel 44
+               m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+        SizeLayoutWidgetClass "{69472CDB4DDDD439}" {
+         Name "DimensionSelector"
+         Slot LayoutSlot "{5D9EB6F2F56614ED}" {
+          Padding 36 14 36 0
+         }
+         "Left rule" Wrap
+         "Right rule" Wrap
+         "Up target" "IconEntry1"
+         AllowHeightOverride 1
+         HeightOverride 40
+         {
+          OverlayWidgetClass "{69472CDB4DDDD438}" {
+           Name "Overlay0"
+           Slot AlignableSlot "{5D9EB6F2600AA569}" {
+            HorizontalAlign 3
+            VerticalAlign 3
+           }
+           {
+            ButtonWidgetClass "{69472DC32681057F}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
+             Name "DimensionSpinBox"
+             Slot OverlayWidgetSlot "{69472DC34B8BDF53}" {
+              HorizontalAlign 3
+              Padding 4 4 4 4
+             }
+             components {
+              SCR_SpinBoxComponent "{5472C6CBC0640458}" {
+               m_sLabel "#AR-MapMarker_Military_Dimension"
+               m_fSizeWithLabel 44
+               m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+        ButtonWidgetClass "{69472CDB4DDD2492}" : "{4B5AE6E64037FFB4}UI/layouts/WidgetLibrary/ComboBox/WLib_ComboBox.layout" {
+         Name "ComboBox1"
+         Slot LayoutSlot "{5E4E8323CB797011}" {
+          HorizontalAlign 3
+          Padding 36 14 36 0
+         }
+         components {
+          SCR_ComboBoxComponent "{546B1D464BC32853}" {
+           m_sLabel "#AR-MapMarker_Military_Type 1"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+        }
+        ButtonWidgetClass "{69472CDB4DDD2496}" : "{4B5AE6E64037FFB4}UI/layouts/WidgetLibrary/ComboBox/WLib_ComboBox.layout" {
+         Name "ComboBox2"
+         Slot LayoutSlot "{5E4E8323CB797011}" {
+          HorizontalAlign 3
+          Padding 36 14 36 0
+         }
+         components {
+          SCR_ComboBoxComponent "{546B1D464BC32853}" {
+           m_sLabel "#AR-MapMarker_Military_Type 2"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+        }
+        ButtonWidgetClass "{69472CDB4DDD2495}" : "{0022F0B45ADBC5AC}UI/layouts/WidgetLibrary/EditBox/WLib_EditBox.layout" {
+         Name "EditBoxRoot"
+         Slot LayoutSlot "{5E20DAC8EB0F7180}" {
+          HorizontalAlign 3
+          Padding 36 14 36 0
+         }
+         components {
+          SCR_EditBoxComponent "{547290FFBD5B33E9}" {
+           m_sLabel "#AR-MapMarker_TextHint"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+         {
+          VerticalLayoutWidgetClass "{5AA4D27F39EB2514}" {
+           Prefab "{5AA4D27F39EB2514}"
+           {
+            SizeLayoutWidgetClass "{5538C205B27B0F5D}" {
+             Prefab "{5538C205B27B0F5D}"
+             {
+              OverlayWidgetClass "{55367D8E531FD623}" {
+               Prefab "{55367D8E531FD623}"
+               {
+                HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
+                 Prefab "{55367D8E4592BC6E}"
+                 {
+                  OverlayWidgetClass "{5538C2059A570E94}" {
+                   Prefab "{5538C2059A570E94}"
+                   {
+                    HorizontalLayoutWidgetClass "{58D095EE846E2B93}" {
+                     Prefab "{58D095EE846E2B93}"
+                     {
+                      EditBoxWidgetClass "{5538C2058B18F877}" {
+                       Prefab "{5538C2058B18F877}"
+                       components {
+                        EditBoxFilterComponent "{5538D70DF38310BC}" {
+                         m_iCharacterLimit 16
+                        }
+                       }
+                       "Font Size" 16
+                      }
+                     }
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+        ButtonWidgetClass "{69472CDB4DDD2499}" : "{1446259344AFACD3}UI/layouts/Map/MapMilitaryMarkerEditBoxTimestamp.layout" {
+         Name "TimestampSpinBox"
+         Slot LayoutSlot "{62EAA56ECB38F895}" {
+          Padding 36 14 36 0
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

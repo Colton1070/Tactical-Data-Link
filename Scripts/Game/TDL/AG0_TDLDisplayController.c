@@ -17,6 +17,7 @@ class AG0_TDLDisplayController
     static bool s_bNetworkContentVisible = true;
     static bool s_bDetailContentVisible = false;
     static bool s_bSettingsContentVisible = false;
+    static bool s_bMarkerToolContentVisible = false;
     static string s_sPanelTitle = "CONTACTS";
     
     // Instance widgets
@@ -29,6 +30,29 @@ class AG0_TDLDisplayController
     protected Widget m_wSelfMapMarker;
     protected ref map<RplId, Widget> m_mMemberMarkers = new map<RplId, Widget>();
     protected const float MARKER_SIZE = 64.0;
+
+    // Vanilla map markers (PLACED_MILITARY + TDL PLACED_CUSTOM) — widget cache
+    // keyed by marker.GetMarkerID(). Each widget is built from the marker's
+    // own SCR_MapMarkerEntryConfig.GetMarkerLayout() so the ATAK presentation
+    // matches the vanilla M map exactly (same imagesets, same widget components).
+    // Source: SCR_MapMarkerManagerComponent's static + disabled lists, unioned
+    // (see project memory vanilla_marker_enum — the base game shuffles markers
+    // off m_aStaticMarkers when they leave the M map's visible frame, so the
+    // union is what frees the ATAK from the "open the map and zoom" workaround
+    // that bites the EnhancedNVG tactical overlay).
+    //
+    // Why ID-keyed instead of SCR_MapMarkerBase-keyed: when the server
+    // auto-deletes a marker (e.g. SCR_MapMarkerSyncComponent's
+    // m_iPlacedMarkerLimit kicks in and the oldest marker gets dropped
+    // when a new placement pushes past 10), the broadcast back removes
+    // the marker from both manager lists and frees the SCR_MapMarkerBase
+    // object. A reference-keyed map would then have a dangling/null key,
+    // and the prune-phase foreach silently misses it — the widget gets
+    // orphaned: stuck on the canvas, no longer position-updated, no
+    // longer cleaned up until the menu reopens. Keying by int ID avoids
+    // that entirely; the manager's ID is stable over the marker's
+    // lifetime and gone when the marker is gone.
+    protected ref map<int, Widget> m_mVanillaMarkerWidgets = new map<int, Widget>();
     
     // Self marker info panel
     protected TextWidget m_wGPSStatus;
@@ -46,6 +70,7 @@ class AG0_TDLDisplayController
     protected Widget m_wNetworkContent;
     protected Widget m_wDetailContent;
     protected Widget m_wSettingsContent;
+    protected Widget m_wMarkerToolContent;
     protected Widget m_wMemberList;
     protected TextWidget m_wDeviceName;
     protected TextWidget m_wNetworkStatus;
@@ -97,6 +122,7 @@ class AG0_TDLDisplayController
         m_wNetworkContent = m_wRoot.FindAnyWidget("NetworkContent");
         m_wDetailContent = m_wRoot.FindAnyWidget("DetailContent");
         m_wSettingsContent = m_wRoot.FindAnyWidget("SettingsContent");
+        m_wMarkerToolContent = m_wRoot.FindAnyWidget("MarkerToolContent");
         m_wMemberList = m_wRoot.FindAnyWidget("MemberList");
         m_wDeviceName = TextWidget.Cast(m_wRoot.FindAnyWidget("DeviceName"));
         m_wNetworkStatus = TextWidget.Cast(m_wRoot.FindAnyWidget("NetworkStatus"));
@@ -185,6 +211,14 @@ class AG0_TDLDisplayController
                 marker.RemoveFromHierarchy();
         }
         m_mMemberMarkers.Clear();
+
+        // Cleanup vanilla map marker widgets
+        foreach (int id, Widget w : m_mVanillaMarkerWidgets)
+        {
+            if (w)
+                w.RemoveFromHierarchy();
+        }
+        m_mVanillaMarkerWidgets.Clear();
         
         // Cleanup member cards
         foreach (Widget card : m_aMemberCards)
@@ -231,13 +265,19 @@ class AG0_TDLDisplayController
     // STATIC PANEL STATE ACCESSORS
     //------------------------------------------------------------------------------------------------
     
-    static void SetPanelState(bool sideVisible, bool networkVisible, bool detailVisible, bool settingsVisible, string title)
+    static void SetPanelState(bool sideVisible, bool networkVisible, bool detailVisible, bool settingsVisible, bool markerToolVisible, string title)
     {
         s_bSidePanelVisible = sideVisible;
         s_bNetworkContentVisible = networkVisible;
         s_bDetailContentVisible = detailVisible;
         s_bSettingsContentVisible = settingsVisible;
+        s_bMarkerToolContentVisible = markerToolVisible;
         s_sPanelTitle = title;
+    }
+
+    static bool GetMarkerToolContentVisible()
+    {
+        return s_bMarkerToolContentVisible;
     }
     
     static bool GetSidePanelVisible()
@@ -251,16 +291,19 @@ class AG0_TDLDisplayController
     {
         if (m_wSidePanel)
             m_wSidePanel.SetVisible(s_bSidePanelVisible);
-        
+
         if (m_wNetworkContent)
             m_wNetworkContent.SetVisible(s_bNetworkContentVisible);
-        
+
         if (m_wDetailContent)
             m_wDetailContent.SetVisible(s_bDetailContentVisible);
-        
+
         if (m_wSettingsContent)
             m_wSettingsContent.SetVisible(s_bSettingsContentVisible);
-        
+
+        if (m_wMarkerToolContent)
+            m_wMarkerToolContent.SetVisible(s_bMarkerToolContentVisible);
+
         if (m_wPanelTitle)
             m_wPanelTitle.SetText(s_sPanelTitle);
     }
@@ -350,20 +393,21 @@ class AG0_TDLDisplayController
 			m_MapView.SetTerrainStructures(null);
 			m_MapView.SetTerrainRoads(null);
 		}
-		
+
         // Draw map
         m_MapView.Draw();
-        
+
         // Update markers
         UpdateSelfMapMarker(player);
         UpdateMemberMapMarkers();
+        UpdateVanillaMarkers(controller);
         
         // NOTE: Do NOT sync zoom/center to static state here.
         // Multiple instances (menu + world-space device) run UpdateMapView every frame,
         // each with their own independent zoom. Syncing here causes the world-space device
         // to overwrite menu zoom changes continuously. State is saved correctly in Cleanup().
     }
-    
+
     //------------------------------------------------------------------------------------------------
     protected void UpdateSelfMarker()
     {
@@ -560,12 +604,276 @@ class AG0_TDLDisplayController
         Widget marker = GetGame().GetWorkspace().CreateWidgets(MEMBER_MARKER_LAYOUT, m_wMarkerOverlay);
         if (!marker)
             return null;
-        
+
         TextWidget label = TextWidget.Cast(marker.FindAnyWidget("DeviceIdentifier"));
         if (label)
             label.SetText(member.GetPlayerName());
-        
+
         return marker;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Tick the vanilla-marker widget cache: reconcile against the live marker
+    //! list, create widgets for new markers, remove widgets for gone markers,
+    //! reposition existing ones, hide off-canvas. Mirrors UpdateMemberMapMarkers's
+    //! create/cull/position pattern but the widgets come from each marker's own
+    //! SCR_MapMarkerEntryConfig.GetMarkerLayout() so the ATAK shows them with
+    //! identical visuals to the vanilla M map.
+    //!
+    //! Source: SCR_MapMarkerManagerComponent.GetStaticMarkers() unioned with
+    //! GetDisabledMarkers(). The base manager moves markers between these lists
+    //! based on the M map's visible-frame test (SetStaticMarkerDisabled in
+    //! Update()), so GetStaticMarkers() alone is incomplete whenever the M map
+    //! is closed or zoomed in. The union is what makes the ATAK independent of
+    //! M-map state — see project memory: vanilla_marker_enum.
+    //!
+    //! Filter:
+    //!  - Type ∈ {PLACED_MILITARY, PLACED_CUSTOM} — naturally excludes the
+    //!    TDL device PLI marker (TDL_RADIO is dynamic, not in either list).
+    //!  - marker.GetBlocked() drops UGC-blocked markers (mirrors vanilla).
+    //!  - TDL custom markers gated by GetTDLConnectedPlayers() to mirror the
+    //!    visibility rule from modded SCR_MapMarkerBase.OnUpdate. Self always
+    //!    visible. Non-TDL custom markers (vanilla user pins) are not gated.
+    protected void UpdateVanillaMarkers(SCR_PlayerController controller)
+    {
+        if (!m_MapView || !m_wMarkerOverlay || !m_wMapCanvas)
+            return;
+
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+            return;
+
+        array<int> connectedPlayers;
+        int selfPlayerId = -1;
+        if (controller)
+        {
+            connectedPlayers = controller.GetTDLConnectedPlayers();
+            selfPlayerId = controller.GetPlayerId();
+        }
+
+        // Union both lists into a single keep-set candidate list
+        array<SCR_MapMarkerBase> allMarkers = markerMgr.GetStaticMarkers();
+        foreach (SCR_MapMarkerBase d : markerMgr.GetDisabledMarkers())
+            allMarkers.Insert(d);
+
+        // Phase 1 — apply filters, build the markers we want to render this tick
+        array<SCR_MapMarkerBase> keep = {};
+        foreach (SCR_MapMarkerBase marker : allMarkers)
+        {
+            if (!marker || marker.GetBlocked())
+                continue;
+
+            int t = marker.GetType();
+            if (t != SCR_EMapMarkerType.PLACED_MILITARY && t != SCR_EMapMarkerType.PLACED_CUSTOM)
+                continue;
+
+            // TDL connectivity gate (TDL custom markers only — vanilla user
+            // pins on PLACED_CUSTOM pass straight through, matching the
+            // modded SCR_MapMarkerBase.OnUpdate which only gates TDL markers).
+            if (t == SCR_EMapMarkerType.PLACED_CUSTOM && marker.IsTDLMarker())
+            {
+                int ownerID = marker.GetMarkerOwnerID();
+                if (ownerID > 0 && ownerID != selfPlayerId)
+                {
+                    if (!connectedPlayers || !connectedPlayers.Contains(ownerID))
+                        continue;
+                }
+            }
+
+            keep.Insert(marker);
+        }
+
+        // Build the keep-set as an ID set so Phase 2 can do the prune
+        // check against int keys (the new map type) instead of marker
+        // references that may have been freed under us.
+        set<int> keepIds = new set<int>();
+        foreach (SCR_MapMarkerBase m : keep)
+        {
+            if (m)
+                keepIds.Insert(m.GetMarkerID());
+        }
+
+        // Phase 2 — prune widgets whose marker IDs are no longer in keep
+        // (deleted, blocked, filtered out, owner disconnected, or — the
+        // failure mode this refactor was made for — server-side auto-
+        // dropped due to placement-limit overflow).
+        array<int> idsToRemove = {};
+        foreach (int id, Widget w : m_mVanillaMarkerWidgets)
+        {
+            if (!keepIds.Contains(id))
+                idsToRemove.Insert(id);
+        }
+        foreach (int id : idsToRemove)
+        {
+            Widget w = m_mVanillaMarkerWidgets.Get(id);
+            if (w)
+                w.RemoveFromHierarchy();
+            m_mVanillaMarkerWidgets.Remove(id);
+        }
+
+        // Off-canvas culling math (in canvas-local layout coords) — same
+        // pattern as UpdateMemberMapMarkers
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        float canvasW, canvasH;
+        m_wMapCanvas.GetScreenSize(canvasW, canvasH);
+        float layoutCanvasW = workspace.DPIUnscale(canvasW);
+        float layoutCanvasH = workspace.DPIUnscale(canvasH);
+        float margin = MARKER_SIZE;
+
+        // Phase 3 — create widgets for new markers, position + show/hide for all
+        foreach (SCR_MapMarkerBase marker : keep)
+        {
+            int mId = marker.GetMarkerID();
+            Widget icon;
+            if (m_mVanillaMarkerWidgets.Contains(mId))
+            {
+                icon = m_mVanillaMarkerWidgets.Get(mId);
+            }
+            else
+            {
+                icon = CreateVanillaMarkerWidget(marker);
+                if (!icon)
+                    continue;
+                m_mVanillaMarkerWidgets.Set(mId, icon);
+            }
+
+            int wp[2];
+            marker.GetWorldPos(wp);
+            float layoutX, layoutY;
+            m_MapView.WorldToLayout(Vector(wp[0], 0, wp[1]), layoutX, layoutY);
+
+            bool isVisible = (layoutX >= -margin && layoutX <= layoutCanvasW + margin &&
+                              layoutY >= -margin && layoutY <= layoutCanvasH + margin);
+
+            if (isVisible)
+            {
+                FrameSlot.SetPos(icon, layoutX, layoutY);
+                icon.SetVisible(true);
+            }
+            else
+            {
+                icon.SetVisible(false);
+            }
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Public hook for the marker-tool panel: drop the 3D widget for a
+    //! marker that's just been deleted, without waiting for the next
+    //! UpdateVanillaMarkers tick. The panel calls this immediately after
+    //! firing AskRemoveStaticMarker so the on-map icon disappears the
+    //! same frame the scroll card does — otherwise the manager still has
+    //! the marker for a network roundtrip and UpdateVanillaMarkers's
+    //! "is in keep" check keeps the widget alive until the broadcast back.
+    //!
+    //! Now an O(1) lookup since the widget map is keyed by marker ID.
+    void DropVanillaMarkerWidgetById(int markerId)
+    {
+        if (!m_mVanillaMarkerWidgets.Contains(markerId))
+            return;
+
+        Widget w = m_mVanillaMarkerWidgets.Get(markerId);
+        if (w)
+            w.RemoveFromHierarchy();
+        m_mVanillaMarkerWidgets.Remove(markerId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Build a vanilla marker widget from the marker's own SCR_MapMarkerEntryConfig.
+    //! Pattern adapted from AG0_EnhancedNightVisionComponent.CreateMarkerTacticalWidget:
+    //!  - PLACED_MILITARY: SetMilitarySymbolMode(true), decode configID into
+    //!    faction + dimension via the military config's FACTION_DETERMINATOR /
+    //!    DIMENSION_DETERMINATOR constants, build a SCR_MilitarySymbol, and
+    //!    apply the faction colour.
+    //!  - PLACED_CUSTOM: defer to entryConfig.InitClientSettings which picks
+    //!    the icon from the imageset using marker.GetIconEntry() and applies
+    //!    the user-selected color entry.
+    //!
+    //! Author chrome and event listening are disabled — the ATAK markers are
+    //! display-only mirrors. Without SetEventListening(false) they would
+    //! intercept clicks meant for MapDragSurface (the overlay sits z-above
+    //! the canvas, same as the existing self/member marker layouts).
+    //! Caller positions and sets visibility after creation.
+    protected Widget CreateVanillaMarkerWidget(SCR_MapMarkerBase marker)
+    {
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+            return null;
+
+        SCR_MapMarkerConfig config = markerMgr.GetMarkerConfig();
+        if (!config)
+            return null;
+
+        SCR_MapMarkerEntryConfig entryConfig = config.GetMarkerEntryConfigByType(marker.GetType());
+        if (!entryConfig)
+            return null;
+
+        Widget markerWidget = GetGame().GetWorkspace().CreateWidgets(entryConfig.GetMarkerLayout(), m_wMarkerOverlay);
+        if (!markerWidget)
+            return null;
+
+        SCR_MapMarkerWidgetComponent widgetComp = SCR_MapMarkerWidgetComponent.Cast(markerWidget.FindHandler(SCR_MapMarkerWidgetComponent));
+        if (widgetComp)
+        {
+            widgetComp.SetMarkerObject(marker);
+
+            int t = marker.GetType();
+
+            if (t == SCR_EMapMarkerType.PLACED_MILITARY)
+            {
+                SCR_MapMarkerEntryMilitary militaryConfig = SCR_MapMarkerEntryMilitary.Cast(entryConfig);
+                if (militaryConfig)
+                {
+                    widgetComp.SetMilitarySymbolMode(true);
+
+                    int configID = marker.GetMarkerConfigID();
+                    int factionID = configID % militaryConfig.FACTION_DETERMINATOR;
+                    int dimensionID = configID * militaryConfig.DIMENSION_DETERMINATOR;
+
+                    array<ref SCR_MarkerMilitaryFactionEntry> factionEntries = militaryConfig.GetMilitaryFactionEntries();
+                    array<ref SCR_MarkerMilitaryDimension> dimensions = militaryConfig.GetMilitaryDimensions();
+
+                    if (factionEntries.IsIndexValid(factionID) && dimensions.IsIndexValid(dimensionID))
+                    {
+                        SCR_MilitarySymbol milSymbol = new SCR_MilitarySymbol();
+                        SCR_MarkerMilitaryFactionEntry factionEntry = factionEntries[factionID];
+
+                        milSymbol.SetIdentity(factionEntry.GetFactionIdentity());
+                        milSymbol.SetDimension(dimensions[dimensionID].GetDimension());
+                        milSymbol.SetIcons(marker.GetFlags());
+
+                        widgetComp.UpdateMilitarySymbol(milSymbol);
+                        widgetComp.SetColor(factionEntry.GetColor());
+                    }
+                }
+            }
+            else if (t == SCR_EMapMarkerType.PLACED_CUSTOM)
+            {
+                // Picks the imageset + quad based on marker.GetIconEntry()
+                // and applies the marker's color entry. True = skip profanity
+                // filter; the manager has already filtered text upstream.
+                entryConfig.InitClientSettings(marker, widgetComp, true);
+            }
+
+            widgetComp.SetRotation(marker.GetRotation());
+            widgetComp.SetText(marker.GetCustomText(), true);
+
+            // Display-only: SetEventListening(false) so the marker widget's
+            // backing frame doesn't absorb mouse-down/drag/click events that
+            // should pass through to MapDragSurface. Without this, the
+            // markers' wide hit-rects swallowed pan-drags and the new
+            // click-to-place handler in marker tool mode. Tradeoff: the
+            // hover-text behaviour from SCR_MapMarkerWidgetComponent's
+            // OnMouseEnter/OnMouseLeave is also disabled — when we want
+            // hover preview back, the path is to make the marker hit-rect
+            // smaller (just the icon, not the surrounding frame) rather
+            // than re-enable event listening.
+            widgetComp.SetAuthorVisible(false);
+            widgetComp.SetEventListening(false);
+        }
+
+        markerWidget.SetVisible(false);  // Caller flips visibility after positioning
+        return markerWidget;
     }
     
     //------------------------------------------------------------------------------------------------

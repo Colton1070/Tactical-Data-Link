@@ -1,12 +1,35 @@
 // AG0_TDLMessage.c - TDL Network Messaging Data Classes
 
 //------------------------------------------------------------------------------------------------
-// Message destination types
+// Message destination types — describe ROUTING (where the message goes).
 //------------------------------------------------------------------------------------------------
 enum ETDLMessageType
 {
     NETWORK_BROADCAST,  // Message to all network members
     DIRECT              // Direct message to specific device
+}
+
+//------------------------------------------------------------------------------------------------
+// Message content types — describe PAYLOAD KIND (what the message carries).
+// Orthogonal to ETDLMessageType, which describes routing.
+//------------------------------------------------------------------------------------------------
+enum ETDLMessageContentType
+{
+    TEXT,   // Plain text in m_sContent (default — unchanged behavior)
+    IMAGE   // Image-message; m_sContent typically holds an optional caption,
+            // image-specific fields (deliveryId / fingerprint / size / transferState) carry the rest
+}
+
+//------------------------------------------------------------------------------------------------
+// Image transfer state — only meaningful when contentType == IMAGE.
+// Decoupled from ETDLMessageStatus (which tracks delivery acknowledgement, not transfer progress).
+//------------------------------------------------------------------------------------------------
+enum ETDLImageTransferState
+{
+    NONE,           // Not an image, or transfer not yet initiated
+    TRANSFERRING,   // Chunks/bytes en route — recipient should show "incoming…" UI
+    READY,          // Bytes received, decoded, displayable
+    FAILED          // Transfer or decode failed — show failure UI with reason
 }
 
 //------------------------------------------------------------------------------------------------
@@ -43,7 +66,16 @@ class AG0_TDLMessage
     protected ETDLMessageType m_eMessageType;
     protected RplId m_DirectRecipientRplId;      // Only used for DIRECT messages
     protected string m_sDirectRecipientCallsign; // For display purposes
-    
+
+    // Content kind (TEXT default; IMAGE for image-messages)
+    protected ETDLMessageContentType m_eContentType = ETDLMessageContentType.TEXT;
+
+    // Image-message fields (only meaningful when m_eContentType == IMAGE)
+    protected string m_sImageDeliveryId;                                          // API-side deliveryId; cache key
+    protected string m_sImageFingerprint;                                         // Integrity / dedupe identifier
+    protected int    m_iImageSizeBytes;                                           // Decoded payload size in bytes
+    protected ETDLImageTransferState m_eImageTransferState = ETDLImageTransferState.NONE;
+
     // Delivery tracking (server-side only, not serialized to clients)
     protected ref set<RplId> m_DeliveredTo;
     protected ref set<RplId> m_ReadBy;
@@ -81,7 +113,7 @@ class AG0_TDLMessage
     //------------------------------------------------------------------------------------------------
     // Factory method for direct message
     //------------------------------------------------------------------------------------------------
-    static AG0_TDLMessage CreateDirect(int messageId, int networkId, RplId senderRplId, 
+    static AG0_TDLMessage CreateDirect(int messageId, int networkId, RplId senderRplId,
                                        string senderCallsign, string content,
                                        RplId recipientRplId, string recipientCallsign)
     {
@@ -95,10 +127,72 @@ class AG0_TDLMessage
         msg.m_eMessageType = ETDLMessageType.DIRECT;
         msg.m_DirectRecipientRplId = recipientRplId;
         msg.m_sDirectRecipientCallsign = recipientCallsign;
-        
+
         // Sender has "delivered" to themselves
         msg.m_DeliveredTo.Insert(senderRplId);
-        
+
+        return msg;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    // Factory method for image broadcast (network-wide image-message).
+    // `caption` is shown alongside the image (may be empty). The image bytes themselves are
+    // referenced by deliveryId — they live in the photo manager's cache (server) and are
+    // delivered to recipient clients via the chunk distribution path (phase 2).
+    //------------------------------------------------------------------------------------------------
+    static AG0_TDLMessage CreateBroadcastImage(int messageId, int networkId, RplId senderRplId,
+                                               string senderCallsign, string caption,
+                                               string deliveryId, string fingerprint, int sizeBytes)
+    {
+        AG0_TDLMessage msg = new AG0_TDLMessage();
+        msg.m_iMessageId = messageId;
+        msg.m_iNetworkId = networkId;
+        msg.m_SenderRplId = senderRplId;
+        msg.m_sSenderCallsign = senderCallsign;
+        msg.m_iTimestamp = System.GetUnixTime();
+        msg.m_sContent = caption;
+        msg.m_eMessageType = ETDLMessageType.NETWORK_BROADCAST;
+        msg.m_DirectRecipientRplId = RplId.Invalid();
+        msg.m_sDirectRecipientCallsign = "";
+
+        msg.m_eContentType         = ETDLMessageContentType.IMAGE;
+        msg.m_sImageDeliveryId     = deliveryId;
+        msg.m_sImageFingerprint    = fingerprint;
+        msg.m_iImageSizeBytes      = sizeBytes;
+        msg.m_eImageTransferState  = ETDLImageTransferState.TRANSFERRING;
+
+        msg.m_DeliveredTo.Insert(senderRplId);
+
+        return msg;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    // Factory method for direct image-message (one recipient).
+    //------------------------------------------------------------------------------------------------
+    static AG0_TDLMessage CreateDirectImage(int messageId, int networkId, RplId senderRplId,
+                                            string senderCallsign, string caption,
+                                            RplId recipientRplId, string recipientCallsign,
+                                            string deliveryId, string fingerprint, int sizeBytes)
+    {
+        AG0_TDLMessage msg = new AG0_TDLMessage();
+        msg.m_iMessageId = messageId;
+        msg.m_iNetworkId = networkId;
+        msg.m_SenderRplId = senderRplId;
+        msg.m_sSenderCallsign = senderCallsign;
+        msg.m_iTimestamp = System.GetUnixTime();
+        msg.m_sContent = caption;
+        msg.m_eMessageType = ETDLMessageType.DIRECT;
+        msg.m_DirectRecipientRplId = recipientRplId;
+        msg.m_sDirectRecipientCallsign = recipientCallsign;
+
+        msg.m_eContentType         = ETDLMessageContentType.IMAGE;
+        msg.m_sImageDeliveryId     = deliveryId;
+        msg.m_sImageFingerprint    = fingerprint;
+        msg.m_iImageSizeBytes      = sizeBytes;
+        msg.m_eImageTransferState  = ETDLImageTransferState.TRANSFERRING;
+
+        msg.m_DeliveredTo.Insert(senderRplId);
+
         return msg;
     }
     
@@ -114,6 +208,22 @@ class AG0_TDLMessage
     ETDLMessageType GetMessageType() { return m_eMessageType; }
     RplId GetDirectRecipientRplId() { return m_DirectRecipientRplId; }
     string GetDirectRecipientCallsign() { return m_sDirectRecipientCallsign; }
+
+    //------------------------------------------------------------------------------------------------
+    // Image-message accessors / mutators (server-side)
+    //------------------------------------------------------------------------------------------------
+    ETDLMessageContentType GetContentType()        { return m_eContentType; }
+    bool                   IsImage()               { return m_eContentType == ETDLMessageContentType.IMAGE; }
+    string                 GetImageDeliveryId()    { return m_sImageDeliveryId; }
+    string                 GetImageFingerprint()   { return m_sImageFingerprint; }
+    int                    GetImageSizeBytes()     { return m_iImageSizeBytes; }
+    ETDLImageTransferState GetImageTransferState() { return m_eImageTransferState; }
+
+    //! Server flips this as the chunk-distribution pipeline progresses (TRANSFERRING → READY/FAILED).
+    void SetImageTransferState(ETDLImageTransferState state)
+    {
+        m_eImageTransferState = state;
+    }
     
     //------------------------------------------------------------------------------------------------
     // Delivery tracking (server-side)
@@ -203,7 +313,7 @@ class AG0_TDLMessage
 // Does not include delivery tracking sets (those are server-only)
 //------------------------------------------------------------------------------------------------
 class AG0_TDLMessageClient
-{   
+{
 	int messageId;
     int networkId;
     RplId senderRplId;
@@ -214,7 +324,17 @@ class AG0_TDLMessageClient
     RplId directRecipientRplId;
     string directRecipientCallsign;
     ETDLMessageStatus status; // Delivery status (for sender's messages)
-    
+
+    // Content kind. Default TEXT means the existing behavior is unchanged for non-image
+    // messages — the new image fields below are serialized but ignored.
+    ETDLMessageContentType contentType;
+
+    // Image-message fields. Only meaningful when contentType == IMAGE.
+    string imageDeliveryId;
+    string imageFingerprint;
+    int    imageSizeBytes;
+    ETDLImageTransferState imageTransferState;
+
     //------------------------------------------------------------------------------------------------
     static bool Extract(AG0_TDLMessageClient instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
@@ -228,9 +348,14 @@ class AG0_TDLMessageClient
         snapshot.SerializeInt(instance.directRecipientRplId);
         snapshot.SerializeString(instance.directRecipientCallsign);
         snapshot.SerializeInt(instance.status);
+        snapshot.SerializeInt(instance.contentType);
+        snapshot.SerializeString(instance.imageDeliveryId);
+        snapshot.SerializeString(instance.imageFingerprint);
+        snapshot.SerializeInt(instance.imageSizeBytes);
+        snapshot.SerializeInt(instance.imageTransferState);
         return true;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     static bool Inject(SSnapSerializerBase snapshot, ScriptCtx ctx, AG0_TDLMessageClient instance)
     {
@@ -244,9 +369,14 @@ class AG0_TDLMessageClient
         snapshot.SerializeInt(instance.directRecipientRplId);
         snapshot.SerializeString(instance.directRecipientCallsign);
         snapshot.SerializeInt(instance.status);
+        snapshot.SerializeInt(instance.contentType);
+        snapshot.SerializeString(instance.imageDeliveryId);
+        snapshot.SerializeString(instance.imageFingerprint);
+        snapshot.SerializeInt(instance.imageSizeBytes);
+        snapshot.SerializeInt(instance.imageTransferState);
         return true;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     static void Encode(SSnapSerializerBase snapshot, ScriptCtx ctx, ScriptBitSerializer packet)
     {
@@ -257,8 +387,12 @@ class AG0_TDLMessageClient
         snapshot.Serialize(packet, 8);     // messageType + directRecipientRplId (2 ints)
         snapshot.EncodeString(packet);     // directRecipientCallsign
         snapshot.Serialize(packet, 4);     // status
+        snapshot.Serialize(packet, 4);     // contentType
+        snapshot.EncodeString(packet);     // imageDeliveryId
+        snapshot.EncodeString(packet);     // imageFingerprint
+        snapshot.Serialize(packet, 8);     // imageSizeBytes + imageTransferState (2 ints)
     }
-    
+
     //------------------------------------------------------------------------------------------------
     static bool Decode(ScriptBitSerializer packet, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
@@ -269,9 +403,13 @@ class AG0_TDLMessageClient
         snapshot.Serialize(packet, 8);     // messageType + directRecipientRplId
         snapshot.DecodeString(packet);     // directRecipientCallsign
         snapshot.Serialize(packet, 4);     // status
+        snapshot.Serialize(packet, 4);     // contentType
+        snapshot.DecodeString(packet);     // imageDeliveryId
+        snapshot.DecodeString(packet);     // imageFingerprint
+        snapshot.Serialize(packet, 8);     // imageSizeBytes + imageTransferState
         return true;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     static bool SnapCompare(SSnapSerializerBase lhs, SSnapSerializerBase rhs, ScriptCtx ctx)
     {
@@ -281,9 +419,13 @@ class AG0_TDLMessageClient
             && lhs.CompareStringSnapshots(rhs)      // content
             && lhs.CompareSnapshots(rhs, 8)         // messageType + directRecipientRplId
             && lhs.CompareStringSnapshots(rhs)      // directRecipientCallsign
-            && lhs.CompareSnapshots(rhs, 4);        // status
+            && lhs.CompareSnapshots(rhs, 4)         // status
+            && lhs.CompareSnapshots(rhs, 4)         // contentType
+            && lhs.CompareStringSnapshots(rhs)      // imageDeliveryId
+            && lhs.CompareStringSnapshots(rhs)      // imageFingerprint
+            && lhs.CompareSnapshots(rhs, 8);        // imageSizeBytes + imageTransferState
     }
-    
+
     //------------------------------------------------------------------------------------------------
     static bool PropCompare(AG0_TDLMessageClient instance, SSnapSerializerBase snapshot, ScriptCtx ctx)
     {
@@ -296,7 +438,12 @@ class AG0_TDLMessageClient
             && snapshot.CompareInt(instance.messageType)
             && snapshot.CompareInt(instance.directRecipientRplId)
             && snapshot.CompareString(instance.directRecipientCallsign)
-            && snapshot.CompareInt(instance.status);
+            && snapshot.CompareInt(instance.status)
+            && snapshot.CompareInt(instance.contentType)
+            && snapshot.CompareString(instance.imageDeliveryId)
+            && snapshot.CompareString(instance.imageFingerprint)
+            && snapshot.CompareInt(instance.imageSizeBytes)
+            && snapshot.CompareInt(instance.imageTransferState);
     }
 	
     //------------------------------------------------------------------------------------------------
@@ -314,7 +461,14 @@ class AG0_TDLMessageClient
         clientMsg.messageType = serverMsg.GetMessageType();
         clientMsg.directRecipientRplId = serverMsg.GetDirectRecipientRplId();
         clientMsg.directRecipientCallsign = serverMsg.GetDirectRecipientCallsign();
-        
+
+        // Image-message fields (TEXT messages get NONE / empty values which serialize cleanly).
+        clientMsg.contentType        = serverMsg.GetContentType();
+        clientMsg.imageDeliveryId    = serverMsg.GetImageDeliveryId();
+        clientMsg.imageFingerprint   = serverMsg.GetImageFingerprint();
+        clientMsg.imageSizeBytes     = serverMsg.GetImageSizeBytes();
+        clientMsg.imageTransferState = serverMsg.GetImageTransferState();
+
         // For sender, show delivery status to recipient
         // For recipient, status is always "delivered" (they have it)
         if (viewerRplId == serverMsg.GetSenderRplId())
@@ -344,10 +498,10 @@ class AG0_TDLMessageClient
             // Recipient viewing - they have it, so it's delivered
             clientMsg.status = ETDLMessageStatus.DELIVERED;
         }
-        
+
         return clientMsg;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Helper to check if this is an outgoing message for a viewer
     //------------------------------------------------------------------------------------------------
@@ -355,7 +509,7 @@ class AG0_TDLMessageClient
     {
         return senderRplId == viewerRplId;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Get conversation ID for grouping messages
     // For broadcasts: "NETWORK"
@@ -365,7 +519,7 @@ class AG0_TDLMessageClient
     {
         if (messageType == ETDLMessageType.NETWORK_BROADCAST)
             return "NETWORK";
-        
+
         // For direct messages, conversation is with the "other" party
         if (senderRplId == viewerRplId)
             return directRecipientRplId.ToString();
@@ -381,14 +535,14 @@ class AG0_TDLMessageStore
 {
     protected ref array<ref AG0_TDLMessageClient> m_aMessages = {};
     protected ref map<int, int> m_mMessageIndex = new map<int, int>();  // messageId -> array index
-    
+
     //------------------------------------------------------------------------------------------------
     void Clear()
     {
         m_aMessages.Clear();
         m_mMessageIndex.Clear();
     }
-    
+
     //------------------------------------------------------------------------------------------------
     void AddOrUpdateMessage(AG0_TDLMessageClient msg)
     {
@@ -405,7 +559,7 @@ class AG0_TDLMessageStore
             m_aMessages.Insert(msg);
         }
     }
-    
+
     //------------------------------------------------------------------------------------------------
     AG0_TDLMessageClient GetByMessageId(int messageId)
     {
@@ -413,20 +567,20 @@ class AG0_TDLMessageStore
             return null;
         return m_aMessages[m_mMessageIndex.Get(messageId)];
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Get all messages for a conversation (sorted by timestamp)
     //------------------------------------------------------------------------------------------------
     array<ref AG0_TDLMessageClient> GetConversation(RplId viewerRplId, string conversationId)
     {
         array<ref AG0_TDLMessageClient> result = {};
-        
+
         foreach (AG0_TDLMessageClient msg : m_aMessages)
         {
             if (msg.GetConversationId(viewerRplId) == conversationId)
                 result.Insert(msg);
         }
-        
+
         // Sort by timestamp (simple bubble sort - messages are usually small sets)
         for (int i = 0; i < result.Count() - 1; i++)
         {
@@ -440,23 +594,23 @@ class AG0_TDLMessageStore
                 }
             }
         }
-        
+
         return result;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Get network broadcast messages
     //------------------------------------------------------------------------------------------------
     array<ref AG0_TDLMessageClient> GetNetworkMessages()
     {
         array<ref AG0_TDLMessageClient> result = {};
-        
+
         foreach (AG0_TDLMessageClient msg : m_aMessages)
         {
             if (msg.messageType == ETDLMessageType.NETWORK_BROADCAST)
                 result.Insert(msg);
         }
-        
+
         // Sort by timestamp
         for (int i = 0; i < result.Count() - 1; i++)
         {
@@ -470,10 +624,10 @@ class AG0_TDLMessageStore
                 }
             }
         }
-        
+
         return result;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Get direct messages with a specific contact
     //------------------------------------------------------------------------------------------------
@@ -481,7 +635,7 @@ class AG0_TDLMessageStore
     {
         return GetConversation(viewerRplId, contactRplId.ToString());
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Count unread messages (messages where viewer is recipient and hasn't marked read)
     // Note: "unread" tracking is client-side; server tracks "read" separately
@@ -497,11 +651,11 @@ class AG0_TDLMessageStore
                 continue;  // Own messages don't count as unread
             if (readMessageIds.Contains(msg.messageId))
                 continue;
-            count++;
+            count = count + 1;
         }
         return count;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Get total unread count across all conversations
     //------------------------------------------------------------------------------------------------
@@ -514,11 +668,42 @@ class AG0_TDLMessageStore
                 continue;
             if (readMessageIds.Contains(msg.messageId))
                 continue;
-            count++;
+            count = count + 1;
         }
         return count;
     }
-    
+
+    //------------------------------------------------------------------------------------------------
+    // Filter image-messages from the store (across all conversations).
+    // Sorted by timestamp ascending. Use this to populate an image-only view, or
+    // to find image-messages that are still TRANSFERRING and need refresh.
+    //------------------------------------------------------------------------------------------------
+    array<ref AG0_TDLMessageClient> GetImageMessages()
+    {
+        array<ref AG0_TDLMessageClient> result = {};
+
+        foreach (AG0_TDLMessageClient msg : m_aMessages)
+        {
+            if (msg.contentType == ETDLMessageContentType.IMAGE)
+                result.Insert(msg);
+        }
+
+        for (int i = 0; i < result.Count() - 1; i++)
+        {
+            for (int j = 0; j < result.Count() - i - 1; j++)
+            {
+                if (result[j].timestamp > result[j + 1].timestamp)
+                {
+                    AG0_TDLMessageClient temp = result[j];
+                    result[j] = result[j + 1];
+                    result[j + 1] = temp;
+                }
+            }
+        }
+
+        return result;
+    }
+
     //------------------------------------------------------------------------------------------------
     array<ref AG0_TDLMessageClient> GetAllMessages() { return m_aMessages; }
     int Count() { return m_aMessages.Count(); }

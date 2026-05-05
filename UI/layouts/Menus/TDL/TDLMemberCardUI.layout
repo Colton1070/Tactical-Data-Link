@@ -76,8 +76,8 @@ ButtonWidgetClass {
         VerticalAlign 1
         Padding 5 5 5 5
        }
-       Size 10 10
-       Tiling None
+       Texture "{73B3D8BBB785B5B9}UI/Textures/Common/circleFull.edds"
+       Size 12 12
       }
       TextWidgetClass "{65F7502A1B3E4C93}" {
        Name "PlayerName"
@@ -89,6 +89,31 @@ ButtonWidgetClass {
        Color 1 1 1 1
        Text "Player Name"
        "Font Size" 18
+      }
+      OverlayWidgetClass "{69423048E4F4DD4F}" {
+       Name "NotificationDot"
+       Slot LayoutSlot "{69423048E4F4DD6F}" {
+       }
+       {
+        ImageWidgetClass "{69423048DDAFE94C}" {
+         Name "NotificationUnreadIndicator"
+         Slot OverlayWidgetSlot "{6944EEA01ED08F67}" {
+         }
+         Color 0.6235 0.1569 0.1569 1
+         Size 24 24
+         Tiling None
+        }
+        RichTextWidgetClass "{69423048C8ADB2A4}" {
+         Name "NotificationNumberText"
+         Slot OverlayWidgetSlot "{69423048C8ADB2BA}" {
+         }
+         Text "0"
+         "Font Size" 18
+         "Min Font Size" 18
+         "Horizontal Alignment" Center
+         "Vertical Alignment" Center
+        }
+       }
       }
       SizeLayoutWidgetClass "{65F7502A1B3E4C95}" {
        Name "Spacer"

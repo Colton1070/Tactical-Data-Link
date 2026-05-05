@@ -78,6 +78,12 @@ modded class SCR_PlayerController
     protected ref ScriptInvoker m_OnMessagesUpdated = new ScriptInvoker();  // (int networkId)
     protected ref ScriptInvoker m_OnNewMessageReceived = new ScriptInvoker();  // (int networkId, int messageId)
     protected ref ScriptInvoker m_OnReadReceiptReceived = new ScriptInvoker();  // (int networkId, int messageId)
+
+    // Per-PC photo manager. Owns client-side reassembly + decoded-photo cache + decode pipeline.
+    // Lazily created on first chunk RPC or first UI lookup. Lives on the player controller
+    // (NOT the server-only AG0_TDLSystem) so it actually exists on remote clients — matches
+    // the pattern used for m_TDLTerrainStructureManager and m_mNetworkMessages.
+    protected ref AG0_TDLPhotoManager m_TDLPhotoManager;
 	
 	// ============================================
 	// NETWORK DIALOG STATE (CLIENT-SIDE)
@@ -129,15 +135,41 @@ modded class SCR_PlayerController
     override void OnUpdate(float timeSlice)
     {
         super.OnUpdate(timeSlice);
-        
+
         if (m_bIsLocalPlayerController)
         {
 			if (HasATAKDevice() && ShouldActivateTDLContext())
 		        m_TDLInputManager.ActivateContext("TDLMenuContext");
-			
+
             UpdateTDLNetworkState(timeSlice);
             UpdateHeldDeviceCache(timeSlice);
         }
+
+        // Drive the per-PC photo manager's tick (decode pipeline, reassembler stall sweep).
+        // No-op on PCs that haven't received any image traffic yet.
+        if (m_TDLPhotoManager)
+            m_TDLPhotoManager.Update(timeSlice);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Lazily allocate the per-PC photo manager. Used by client-side image chunk RPCs and
+    //! the UI to access the reassembler + decoded-photo cache without going through the
+    //! server-only AG0_TDLSystem.
+    AG0_TDLPhotoManager GetOrCreatePhotoManager()
+    {
+        if (!m_TDLPhotoManager)
+        {
+            m_TDLPhotoManager = new AG0_TDLPhotoManager();
+            m_TDLPhotoManager.Initialize();
+        }
+        return m_TDLPhotoManager;
+    }
+
+    //! Return the photo manager if it exists, without allocating. UI and read-only callers
+    //! should prefer this — avoids spinning up state on PCs that never received an image.
+    AG0_TDLPhotoManager GetPhotoManagerIfExists()
+    {
+        return m_TDLPhotoManager;
     }
 	
 	// ============================================
@@ -1115,6 +1147,41 @@ modded class SCR_PlayerController
 	}
     
     //------------------------------------------------------------------------------------------------
+    // SERVER -> CLIENT: Image-message chunk distribution.
+    //
+    // Mirrors the proven-working terrain chunk shape exactly:
+    //     RpcDo_ReceiveTDLTerrainStructuresChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
+    //
+    // One RPC, 4 params, (string, int, int, string). No Pending / Finalize / Failed
+    // bookkeeping RPCs — the reassembler keys on deliveryId, allocates on first chunk,
+    // auto-finalizes when iReceived == totalChunks (same contract as terrain).
+    //
+    // Image-message metadata (fingerprint, sizeBytes, transferState) flows via the regular
+    // message replication path (RpcDo_ReceiveTDLMessages above) and is looked up by deliveryId
+    // when the photo manager finalizes. Failures surface as silent stall-timeouts in the
+    // reassembler — UI shows the placeholder until either the photo arrives or the message's
+    // transferState replicates to FAILED via the message path.
+    //------------------------------------------------------------------------------------------------
+    [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+    protected void RpcDo_ReceiveImageChunk(string deliveryId, int totalChunks, int chunkIndex, string chunkData)
+    {
+        // Photo manager lives on this PC (NOT on the server-only AG0_TDLSystem).
+        // Lazily allocated on first chunk so PCs without image traffic carry no state.
+        AG0_TDLPhotoManager mgr = GetOrCreatePhotoManager();
+        if (!mgr) return;
+        mgr.HandleChunkData(deliveryId, totalChunks, chunkIndex, chunkData);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Server-side entry point: AG0_TDLImageChunkSender calls this on each recipient's
+    //! controller, once per chunk. The Rpc() routes to the owning client via RpcDo_ReceiveImageChunk.
+    //------------------------------------------------------------------------------------------------
+    void ReceiveImageChunk(string deliveryId, int totalChunks, int chunkIndex, string chunkData)
+    {
+        Rpc(RpcDo_ReceiveImageChunk, deliveryId, totalChunks, chunkIndex, chunkData);
+    }
+
+    //------------------------------------------------------------------------------------------------
     // SERVER -> CLIENT: Receive read receipt notification
     //------------------------------------------------------------------------------------------------
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
@@ -1375,6 +1442,16 @@ modded class SCR_PlayerController
         if (!m_mNetworkMessages.Contains(networkId))
             return null;
         return m_mNetworkMessages.Get(networkId);
+    }
+
+    // Get all network IDs the local player has message stores for. Used by the
+    // photo manager to resolve which network owns a given deliveryId post-decode.
+    array<int> GetAllTDLNetworkIds()
+    {
+        array<int> ids = {};
+        foreach (int nid, AG0_TDLMessageStore store : m_mNetworkMessages)
+            ids.Insert(nid);
+        return ids;
     }
     
     // Get network broadcast messages

@@ -9,9 +9,10 @@ with an external online service operated by BLUFOR (blufor.info).
 
 IMPORTANT TAKEAWAY (CRITICAL):
 If you use TDL on ANY server that uses BLUFOR (tdl.blufor.info) features, you
-agree to the Terms of Service at https://tdl.blufor.info/terms — EVEN IF you did
-not initiate, configure, or intend the connection yourself. If you do not agree,
-do not use TDL on servers that use BLUFOR features.
+agree to the Terms of Service at https://tdl.blufor.info/terms and the Privacy
+Policy at https://tdl.blufor.info/privacy — EVEN IF you did not initiate,
+configure, or intend the connection yourself. If you do not agree, do not use
+TDL on servers that use BLUFOR features.
 
 ================================================================================
                           SECTION A: ARMA PUBLIC LICENSE
@@ -115,9 +116,12 @@ TDL optionally integrates with an external online service hosted at
 https://tdl.blufor.info ("BLUFOR Service") for additional functionality,
 including:
 
-  * Image processing and display capabilities
-  * Server registration and management
-  * Cloud-based data storage and transmission
+  * Image processing, quantization, and display capabilities
+  * Map metadata, layers, and user-placed marker storage and sync
+  * Real-time position and marker data synced between game servers and clients
+  * Server registration and management (including invitation codes and
+    multiple API keys per server)
+  * Cloud-based data storage, transmission, and short-lived messaging
   * API access for server integration
 
 --------------------------------------------------------------------------------
@@ -125,31 +129,42 @@ including:
 --------------------------------------------------------------------------------
 
 Full Terms of Service: https://tdl.blufor.info/terms
+Full Privacy Policy:    https://tdl.blufor.info/privacy
+
+The Privacy Policy is incorporated into the Terms by reference and describes
+the categories of information collected, subprocessors used, retention, and
+security practices.
 
 TDL MAY CONNECT TO BLUFOR SERVICES AUTOMATICALLY BASED ON THE SERVER YOU JOIN.
 BY USING TDL ON A SERVER THAT USES BLUFOR (tdl.blufor.info) FEATURES, YOU ARE
 CONSIDERED TO BE USING THE EXTERNAL SERVICE FEATURES AND YOU AGREE TO THE TERMS
-OF SERVICE ABOVE — EVEN IF YOU PERSONALLY DID NOT INITIATE OR CONFIGURE THE
-CONNECTION.
+OF SERVICE AND PRIVACY POLICY ABOVE — EVEN IF YOU PERSONALLY DID NOT INITIATE OR
+CONFIGURE THE CONNECTION.
 
-If you do not agree to the Terms of Service, do not use TDL on servers that use
-BLUFOR features.
+If you do not agree to the Terms of Service or Privacy Policy, do not use TDL
+on servers that use BLUFOR features.
 
 BY USING THE EXTERNAL SERVICE FEATURES, YOU ACKNOWLEDGE THAT:
 
-  1. You have read and agree to the Terms of Service at the URL above.
+  1. You have read and agree to the Terms of Service and Privacy Policy at the
+     URLs above.
 
   2. You grant the Service permission to process, store, and transmit data as
-     described in those Terms.
+     described in those Terms, including transmitting marker, position, map,
+     and messaging data between integrated game servers and clients.
 
   3. You are responsible for ensuring any content you upload complies with the
      Terms of Service, including prohibitions on illegal, copyrighted, explicit,
      or otherwise prohibited content.
 
-  4. Your use of the Service is subject to content moderation and may be
+  4. Image content you upload may be submitted to third-party content
+     moderation APIs (for example, OpenAI) for automated safety and policy
+     checks, and content that is flagged may be rejected or removed.
+
+  5. Your use of the Service is subject to content moderation and may be
      suspended or terminated for violations.
 
-  5. The external service is provided "AS IS" without warranties of any kind.
+  6. The external service is provided "AS IS" without warranties of any kind.
 
 --------------------------------------------------------------------------------
                            SERVICE INDEPENDENCE
@@ -183,13 +198,23 @@ If you integrate a server with the BLUFOR Service:
 
 When using external service features, the following data may be processed:
 
-  * Image files uploaded for processing
-  * Server metadata and state information
-  * Network and device configurations
+  * Image files uploaded for processing (including derivatives submitted to
+    third-party moderation APIs)
+  * Maps, layers, and user-placed markers
+  * Marker and position data synced between game servers and clients
+  * Server metadata (name, status, player counts, network counts, device
+    counts) and network/device state snapshots
+  * Command queue items and execution history
   * Event logs and activity data
+  * Account, session, and server-integration state
+  * Short-lived messaging or delivery payloads (which may auto-expire on a
+    schedule)
 
-Data may be stored in Cloudflare R2 cloud storage and transmitted via encrypted
-HTTPS connections. For full details on data handling, see the Terms of Service.
+Image and map asset data may be stored in Cloudflare R2 (or compatible object
+storage). Application data is stored in databases and caches (such as MongoDB
+and Redis) operated by us or our hosting providers. All data in transit uses
+encrypted HTTPS connections. For full details on subprocessors, retention, and
+security, see the Terms of Service and Privacy Policy.
 
 ================================================================================
                               CONTACT INFORMATION
@@ -207,6 +232,10 @@ For BLUFOR Terms of Service:
 
   https://tdl.blufor.info/terms
 
+For BLUFOR Privacy Policy:
+
+  https://tdl.blufor.info/privacy
+
 ================================================================================
                               BOHEMIA INTERACTIVE NOTICE
 ================================================================================
@@ -222,5 +251,7 @@ written consent.
 
 © 2025-2026 TDL Mod Authors. Licensed under the Arma Public License (APL).
 External service operated by BLUFOR (blufor.info).
+
+Section B last aligned with BLUFOR Terms of Service: 2026-05-02.
 
 ================================================================================

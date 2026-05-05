@@ -301,6 +301,73 @@ class AG0_TDLApiValidateCallback : RestCallback
 }
 
 //------------------------------------------------------------------------------------------------
+//! Fetch-completion callback for the image_deliver queue handler. Captures the queue
+//! item's parsed fields so that, on photo manager fetch success, we can call into the
+//! system's SendImageTDLMessage entry point with the right sender/message-type/recipient.
+//!
+//! Holds NO back-ref to the manager; settlement happens via AG0_TDLSystem.GetInstance().
+//------------------------------------------------------------------------------------------------
+class AG0_TDLImageDeliverFetchSink : AG0_TDLPhotoFetchCallback
+{
+    protected RplId           m_SenderDeviceRplId;
+    protected string          m_sCaption;
+    protected ETDLMessageType m_eMessageType;
+    protected string          m_sDeliveryId;
+    protected string          m_sFingerprint;
+    protected int             m_iSizeBytes;
+    protected RplId           m_RecipientRplId;
+    protected string          m_sCorrelationId;
+
+    void AG0_TDLImageDeliverFetchSink(RplId senderDeviceRplId, string caption,
+                                      ETDLMessageType messageType, string deliveryId,
+                                      string fingerprint, int sizeBytes,
+                                      RplId recipientRplId, string correlationId)
+    {
+        m_SenderDeviceRplId = senderDeviceRplId;
+        m_sCaption          = caption;
+        m_eMessageType      = messageType;
+        m_sDeliveryId       = deliveryId;
+        m_sFingerprint      = fingerprint;
+        m_iSizeBytes        = sizeBytes;
+        m_RecipientRplId    = recipientRplId;
+        m_sCorrelationId    = correlationId;
+    }
+
+    override void OnPhotoReady(int requestId, AG0_TDLPhotoData photo)
+    {
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system) return;
+
+        Print(string.Format("[TDL_API] image_deliver corr=%1 fetch ready — sending image-message (deliveryId=%2)",
+            m_sCorrelationId, m_sDeliveryId), LogLevel.NORMAL);
+
+        // The photo is sitting in AG0_TDLPhotoManager.m_Cache under m_sDeliveryId by now
+        // (OnFetchSuccess populates the cache before BeginDecode fires). SendImageTDLMessage
+        // creates the AG0_TDLMessage, propagates metadata to clients, and kicks the chunk
+        // sender targeting the resolved recipients.
+        int messageId = system.SendImageTDLMessage(m_SenderDeviceRplId, m_sCaption, m_eMessageType,
+            m_sDeliveryId, m_sFingerprint, m_iSizeBytes, m_RecipientRplId);
+
+        if (messageId < 0)
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 SendImageTDLMessage rejected the message",
+                m_sCorrelationId), LogLevel.WARNING);
+        }
+    }
+
+    override void OnPhotoFailed(int requestId, string reason)
+    {
+        Print(string.Format("[TDL_API] image_deliver corr=%1 fetch failed: %2 (deliveryId=%3)",
+            m_sCorrelationId, reason, m_sDeliveryId), LogLevel.WARNING);
+
+        // Surface the failure to the API so the web UI can flip the compose to rejected.
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (system)
+            system.ApiNotifyImageDeliverFailedPublic(m_sCorrelationId, m_sDeliveryId, reason);
+    }
+}
+
+//------------------------------------------------------------------------------------------------
 // TDL API Manager
 // Handles config loading/saving and API communication
 // SERVER-SIDE ONLY
@@ -670,6 +737,18 @@ class AG0_TDLApiManager
     {
         return m_bInitialized && m_bApiKeyValid && m_Config && m_Config.enabled && m_Config.HasValidApiKey();
     }
+
+    //------------------------------------------------------------------------------------------------
+    //! Returns the configured Bearer api key, or empty if uninitialized / missing.
+    //! Exposed so server-only siblings (e.g. AG0_TDLPhotoManager) can construct
+    //! authenticated REST requests against endpoints outside the /api/mod path —
+    //! e.g. /api/image/{deliveryId} which sits under /api, not /api/mod.
+    string GetApiKey()
+    {
+        if (!m_Config)
+            return "";
+        return m_Config.apiKey;
+    }
     
     //------------------------------------------------------------------------------------------------
     // Callback handlers
@@ -850,6 +929,10 @@ class AG0_TDLApiManager
                 HandleMessageMarkReadCommand(cmdJson);
                 break;
 
+            case "image_deliver":
+                HandleImageDeliverCommand(cmdJson);
+                break;
+
             default:
                 Print(string.Format("[TDL_API] Unknown command type: %1", cmdType), LogLevel.WARNING);
                 break;
@@ -996,6 +1079,235 @@ class AG0_TDLApiManager
             return;
         }
 
+        // Trim payload at the per-string-param RPC cap. The API enforces this on input
+        // already (see implementation guide), but defense-in-depth — silent truncation
+        // by the engine would corrupt the message mid-relay. Checked before the type
+        // branch since both broadcast fan-out and direct path emit the same content.
+        const int MAX_CONTENT_BYTES = 8000;
+        if (content.Length() > MAX_CONTENT_BYTES)
+        {
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "content_too_long", liveNetworkId, liveNetworkStableId);
+            return;
+        }
+
+        if (messageTypeStr == "broadcast")
+        {
+            // Web-originated broadcast → mod-side fan-out into per-recipient DIRECT
+            // messages, one per device on the resolved network (skipping the sender's
+            // own device). Each direct flows through SendTDLMessage normally:
+            // AddDirectToNetwork → PropagateMessagesInNetwork → recipient's
+            // RpcDo_ReceiveTDLMessages. The result is each player seeing the message
+            // in their direct conversation with the web sender, including notification
+            // badges via the contact-card unread count.
+            //
+            // Multi-device players will receive duplicates if they happen to have more
+            // than one device on the same network — accepted edge case (rare in
+            // practice; dedupe by senderPlayerId is a future refinement).
+            //
+            // The API will receive N message_sent events (one per fanned-out direct).
+            // Web inbox can either show N sent rows or aggregate by (sender, content,
+            // timestamp window) — see message-handling docs for the tradeoff.
+            array<AG0_TDLDeviceComponent> members = network.GetNetworkDevices();
+            if (!members || members.Count() == 0)
+            {
+                tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "no_recipients", liveNetworkId, liveNetworkStableId);
+                return;
+            }
+
+            int fanCount = 0;
+            foreach (AG0_TDLDeviceComponent recipientDevice : members)
+            {
+                if (!recipientDevice)
+                    continue;
+                RplId recipientRpl = recipientDevice.GetDeviceRplId();
+                if (recipientRpl == RplId.Invalid())
+                    continue;
+                if (recipientRpl == senderDeviceRplId)
+                    continue;  // skip self-delivery — sender doesn't message themselves
+
+                tdlSystem.SendTDLMessage(senderDeviceRplId, content, ETDLMessageType.DIRECT, recipientRpl);
+                fanCount = fanCount + 1;
+            }
+
+            Print(string.Format("[TDL_API] message_send corr=%1 broadcast → fanned to %2 directs on network %3 [%4]",
+                correlationId, fanCount, liveNetworkId, liveNetworkStableId), LogLevel.DEBUG);
+
+            if (fanCount == 0)
+                tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "no_recipients", liveNetworkId, liveNetworkStableId);
+
+            return;
+        }
+
+        if (messageTypeStr != "direct")
+        {
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "invalid_message_type", liveNetworkId, liveNetworkStableId);
+            return;
+        }
+
+        // Direct case: single recipient required.
+        RplId recipientRplId = RplId.Invalid();
+        int recipientRplIdInt;
+        if (!cmdJson.ReadValue("recipientRplId", recipientRplIdInt))
+        {
+            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "missing_recipient", liveNetworkId, liveNetworkStableId);
+            return;
+        }
+        recipientRplId = recipientRplIdInt;
+
+        Print(string.Format("[TDL_API] message_send: routing web compose from %1 (player %2) on network %3 [%4] (direct)",
+            senderIdentityId, senderPlayerId, liveNetworkId, liveNetworkStableId), LogLevel.DEBUG);
+
+        // Single canonical send path — reuses hop graph, replication, RPC delivery,
+        // pruning, and the existing ApiNotifyMessageSent fan-out. No bypass.
+        tdlSystem.SendTDLMessage(senderDeviceRplId, content, ETDLMessageType.DIRECT, recipientRplId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Handle image_deliver command from API.
+    //!
+    //! Two-phase orchestration: (1) fetch the pre-rendered image from the API by deliveryId,
+    //! (2) on fetch success the AG0_TDLImageDeliverFetchSink callback fires SendImageTDLMessage,
+    //! which creates the AG0_TDLMessage with image fields populated, propagates metadata to
+    //! recipient clients via the existing message-replication path, and kicks chunked
+    //! distribution of the image bytes via AG0_TDLPhotoManager's chunk sender.
+    //!
+    //! The mod never originates an image-message in phase 2 — only the API can. This handler
+    //! is the only entry point.
+    //!
+    //! Payload shape (from API):
+    //!   {
+    //!     "type": "image_deliver",
+    //!     "correlationId": "imgdel_<uuid>",
+    //!     "deliveryId":    "<string>",          // unique per delivery; cache key
+    //!     "fetchUrl":      "https://...",       // server hits this to get the rgz JSON
+    //!     "fingerprint":   "<string>",          // FNV / SHA-ish identifier for blocklist lookups
+    //!     "sizeBytes":     <int>,               // expected payload size after fetch
+    //!     "networkId":     <int>,               // numeric, may be stale across restarts
+    //!     "networkStableId": "<string>",        // preferred lookup key
+    //!     "messageType":   "broadcast" | "direct",
+    //!     "senderIdentityId": "<uuid>",         // web user identity → online player → device
+    //!     "caption":       "<optional string>", // shown alongside the image (may be empty)
+    //!     "recipientRplId": <int>               // direct only
+    //!   }
+    protected void HandleImageDeliverCommand(SCR_JsonLoadContext cmdJson)
+    {
+        string correlationId;
+        if (!cmdJson.ReadValue("correlationId", correlationId))
+            correlationId = "";
+
+        string deliveryId;
+        if (!cmdJson.ReadValue("deliveryId", deliveryId) || deliveryId.IsEmpty())
+        {
+            Print("[TDL_API] image_deliver missing 'deliveryId'", LogLevel.WARNING);
+            return;
+        }
+
+        string fetchUrl;
+        if (!cmdJson.ReadValue("fetchUrl", fetchUrl) || fetchUrl.IsEmpty())
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 missing 'fetchUrl'", correlationId), LogLevel.WARNING);
+            AG0_TDLSystem failSys = AG0_TDLSystem.GetInstance();
+            if (failSys)
+                failSys.ApiNotifyImageDeliverFailedPublic(correlationId, deliveryId, "missing_fetch_url");
+            return;
+        }
+
+        string fingerprint;
+        cmdJson.ReadValue("fingerprint", fingerprint);  // optional — empty is OK
+
+        int sizeBytes = 0;
+        cmdJson.ReadValue("sizeBytes", sizeBytes);  // optional hint, used for cache sizing
+
+        // Network resolution — same dual-id pattern as message_send.
+        string networkStableId;
+        cmdJson.ReadValue("networkStableId", networkStableId);
+
+        int networkIdNumeric = -1;
+        cmdJson.ReadValue("networkId", networkIdNumeric);
+
+        if (networkStableId.IsEmpty() && networkIdNumeric < 0)
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 missing both 'networkStableId' and 'networkId'",
+                correlationId), LogLevel.WARNING);
+            return;
+        }
+
+        string senderIdentityId;
+        if (!cmdJson.ReadValue("senderIdentityId", senderIdentityId) || senderIdentityId.IsEmpty())
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 missing 'senderIdentityId'", correlationId), LogLevel.WARNING);
+            return;
+        }
+
+        string messageTypeStr;
+        if (!cmdJson.ReadValue("messageType", messageTypeStr))
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 missing 'messageType'", correlationId), LogLevel.WARNING);
+            return;
+        }
+
+        string caption;
+        cmdJson.ReadValue("caption", caption);  // optional
+
+        AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+        if (!tdlSystem)
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 TDL system unavailable", correlationId), LogLevel.WARNING);
+            return;
+        }
+
+        AG0_TDLPhotoManager photoMgr = tdlSystem.GetPhotoManager();
+        if (!photoMgr)
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 photo manager unavailable", correlationId), LogLevel.WARNING);
+            return;
+        }
+
+        // Resolve network (stable id wins).
+        AG0_TDLNetwork network = null;
+        if (!networkStableId.IsEmpty())
+            network = tdlSystem.GetNetworkByStableId(networkStableId);
+        if (!network && networkIdNumeric >= 0)
+            network = tdlSystem.GetNetworkById(networkIdNumeric);
+
+        if (!network)
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 network not found (stableId=%2 numericId=%3)",
+                correlationId, networkStableId, networkIdNumeric), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyImageDeliverFailedPublic(correlationId, deliveryId, "network_not_found");
+            return;
+        }
+
+        int liveNetworkId = network.GetNetworkID();
+
+        // Resolve sender identity → online player → device on this network.
+        int senderPlayerId = tdlSystem.GetPlayerIdFromIdentityId(senderIdentityId);
+        if (senderPlayerId <= 0)
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 sender %2 not online",
+                correlationId, senderIdentityId), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyImageDeliverFailedPublic(correlationId, deliveryId, "sender_offline");
+            return;
+        }
+
+        AG0_TDLDeviceComponent senderDevice = tdlSystem.GetDeviceInNetworkForPlayer(senderPlayerId, liveNetworkId);
+        if (!senderDevice)
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 player %2 has no device on network %3",
+                correlationId, senderPlayerId, liveNetworkId), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyImageDeliverFailedPublic(correlationId, deliveryId, "no_device_in_network");
+            return;
+        }
+
+        RplId senderDeviceRplId = senderDevice.GetDeviceRplId();
+        if (senderDeviceRplId == RplId.Invalid())
+        {
+            Print(string.Format("[TDL_API] image_deliver corr=%1 sender device not replicated", correlationId), LogLevel.DEBUG);
+            tdlSystem.ApiNotifyImageDeliverFailedPublic(correlationId, deliveryId, "device_not_replicated");
+            return;
+        }
+
+        // Decode messageType.
         ETDLMessageType messageType;
         RplId recipientRplId = RplId.Invalid();
         if (messageTypeStr == "broadcast")
@@ -1008,33 +1320,30 @@ class AG0_TDLApiManager
             int recipientRplIdInt;
             if (!cmdJson.ReadValue("recipientRplId", recipientRplIdInt))
             {
-                tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "missing_recipient", liveNetworkId, liveNetworkStableId);
+                Print(string.Format("[TDL_API] image_deliver corr=%1 direct without recipientRplId", correlationId), LogLevel.WARNING);
+                tdlSystem.ApiNotifyImageDeliverFailedPublic(correlationId, deliveryId, "missing_recipient");
                 return;
             }
             recipientRplId = recipientRplIdInt;
         }
         else
         {
-            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "invalid_message_type", liveNetworkId, liveNetworkStableId);
+            Print(string.Format("[TDL_API] image_deliver corr=%1 invalid messageType: %2",
+                correlationId, messageTypeStr), LogLevel.WARNING);
+            tdlSystem.ApiNotifyImageDeliverFailedPublic(correlationId, deliveryId, "invalid_message_type");
             return;
         }
 
-        // Trim payload at the per-string-param RPC cap. The API enforces this on input
-        // already (see implementation guide), but defense-in-depth — silent truncation
-        // by the engine would corrupt the message mid-relay.
-        const int MAX_CONTENT_BYTES = 8000;
-        if (content.Length() > MAX_CONTENT_BYTES)
-        {
-            tdlSystem.ApiNotifyMessageSendFailedPublic(correlationId, "content_too_long", liveNetworkId, liveNetworkStableId);
-            return;
-        }
+        // Fire the fetch. The sink captures the parsed state and on success calls
+        // SendImageTDLMessage which orchestrates message creation + chunk distribution.
+        AG0_TDLImageDeliverFetchSink sink = new AG0_TDLImageDeliverFetchSink(
+            senderDeviceRplId, caption, messageType, deliveryId, fingerprint, sizeBytes,
+            recipientRplId, correlationId);
 
-        Print(string.Format("[TDL_API] message_send: routing web compose from %1 (player %2) on network %3 [%4] (%5)",
-            senderIdentityId, senderPlayerId, liveNetworkId, liveNetworkStableId, messageTypeStr), LogLevel.DEBUG);
+        Print(string.Format("[TDL_API] image_deliver corr=%1 fetching (deliveryId=%2 url=%3)",
+            correlationId, deliveryId, fetchUrl), LogLevel.NORMAL);
 
-        // Single canonical send path — reuses hop graph, replication, RPC delivery,
-        // pruning, and the existing ApiNotifyMessageSent fan-out. No bypass.
-        tdlSystem.SendTDLMessage(senderDeviceRplId, content, messageType, recipientRplId);
+        photoMgr.FetchByDeliveryId(deliveryId, fetchUrl, fingerprint, sizeBytes, sink);
     }
 
     //------------------------------------------------------------------------------------------------
