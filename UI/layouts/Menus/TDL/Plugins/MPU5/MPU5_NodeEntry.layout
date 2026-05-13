@@ -1,0 +1,107 @@
+ButtonWidgetClass {
+ Name "KickButton"
+ components {
+  SCR_ModularButtonComponent "{695026F2AD575357}" {
+   m_aEffects {
+    SCR_ButtonEffectColor "{672744B4046ACA52}" {
+     m_eEvents 6149
+     m_sWidgetName "KickImage"
+     m_fAnimationTime 0.08
+     m_cDefault 0.75 0.75 0.75 1
+     m_cHovered 0.2 0.8 0.8 1
+     m_cActivated 0.2 0.8 0.8 1
+     m_cActivatedHovered 0.3 1 1 1
+     m_cClicked 0.3 1 1 1
+     m_cFocusGained 0.2 0.8 0.8 1
+     m_cFocusLost 0.75 0.75 0.75 1
+    }
+   }
+   m_bFocusOnMouseEnter 1
+  }
+ }
+ style blank
+ {
+  HorizontalLayoutWidgetClass "{695026F20C4243E2}" {
+   Name "HorizontalLayout0"
+   Slot ButtonWidgetSlot "{695026F2C01950C4}" {
+    HorizontalAlign 3
+    VerticalAlign 3
+   }
+   {
+    TextWidgetClass "{695026F2EEFB19C4}" {
+     Name "NodeName"
+     Slot LayoutSlot "{65F7502A1B3E4C94}" {
+      HorizontalAlign 1
+      VerticalAlign 1
+      Padding 0 0 8 0
+     }
+     Color 1 1 1 1
+     Text "Player Name"
+     "Font Size" 18
+    }
+    TextWidgetClass "{695026F2EEFB3FDF}" {
+     Name "NetworkIP"
+     Slot LayoutSlot "{65F7502A1B3E4C98}" {
+      HorizontalAlign 1
+      VerticalAlign 1
+      Padding 0 0 20 0
+     }
+     Color 1 1 1 1
+     Text "192.168.0.0"
+     "Font Size" 16
+    }
+    TextWidgetClass "{695026F2DB552E99}" {
+     Name "NodeSignal"
+     Slot LayoutSlot "{65F7502A1B3E4C98}" {
+      HorizontalAlign 1
+      VerticalAlign 1
+      Padding 0 0 20 0
+     }
+     Color 1 1 1 1
+     Text "192.168.0.0"
+     "Font Size" 16
+    }
+    TextWidgetClass "{695026F2D73B61D9}" {
+     Name "NodeCaps"
+     Slot LayoutSlot "{65F7502A1B3E4C98}" {
+      HorizontalAlign 1
+      VerticalAlign 1
+      Padding 0 0 20 0
+     }
+     Color 1 1 1 1
+     Text "192.168.0.0"
+     "Font Size" 16
+    }
+    SizeLayoutWidgetClass "{695026F2EEFB3FFE}" {
+     Name "Spacer"
+     Slot LayoutSlot "{65F7502A1B3E4C96}" {
+      SizeMode Fill
+     }
+    }
+    SizeLayoutWidgetClass "{695026F377748158}" {
+     Name "SizeLayout0"
+     Slot LayoutSlot "{69472DE792310BF8}" {
+      HorizontalAlign 1
+      VerticalAlign 1
+      Padding 16 16 16 16
+     }
+     AllowWidthOverride 1
+     WidthOverride 64
+     AllowHeightOverride 1
+     HeightOverride 64
+     {
+      ImageWidgetClass "{695026F37774815B}" {
+       Name "KickImage"
+       Slot AlignableSlot "{69472DE78EE4CE2F}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+       }
+       Texture "{017A81F8B9559BEE}UI/Textures/Icons/tdl_close_x.edds"
+       Size 64 64
+      }
+     }
+    }
+   }
+  }
+ }
+}

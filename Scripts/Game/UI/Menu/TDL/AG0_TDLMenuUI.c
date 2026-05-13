@@ -12,7 +12,8 @@ enum ETDLPanelContent
     MEMBER_DETAIL,  // Selected member details
 	DIRECT_CHAT,
     SETTINGS,       // Future: settings/config
-    MARKER_TOOL     // Marker placement tool — type/subtype/colour/text picker; placement via PC click or console pan+confirm
+    MARKER_TOOL,    // Marker placement tool — type/subtype/colour/text picker; placement via PC click or console pan+confirm
+    PLUGIN_TOOL     // Plugin-owned side panel content (e.g. MPU5 management). Active plugin tracked by AG0_TDLMenuController.
 }
 
 //------------------------------------------------------------------------------------------------
@@ -20,11 +21,9 @@ enum ETDLPanelContent
 //! Uses AG0_TDLDisplayController for display, handles interactions
 class AG0_TDLMenuUI : ChimeraMenuBase
 {
-    // Persistent state for menu-specific things (panel state survives open/close)
-    static protected ETDLPanelContent s_eLastPanel = ETDLPanelContent.NETWORK_LIST;
-	static protected RplId s_LastSelectedDeviceId = RplId.Invalid();
-	static protected RplId s_LastChatContactRplId = RplId.Invalid();
-	static protected string s_sLastChatContactName;
+    // Persistent state and the panel state machine live on AG0_TDLMenuController
+    // — shared with TDL_WorldSpaceDisplayComponent so both frontends drive the
+    // same TDLMenuUI.layout from one source of truth.
     
     // ============================================
     // DISPLAY CONTROLLER - handles map, markers, self info, member cards
@@ -34,9 +33,19 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     // ============================================
     // MENU-ONLY STATE (interaction, not display)
     // ============================================
-    protected ETDLPanelContent m_eActivePanel = ETDLPanelContent.NETWORK_LIST;
+    // Shared menu controller — owns panel state machine and navigation handlers.
+    protected ref AG0_TDLMenuController m_MenuController;
     protected ref AG0_TDLMapCanvasDragHandler m_DragHandler;
     protected ref array<ref AG0_ATAKPluginBase> m_aActivePlugins = {};
+
+    // Plugin toolbar buttons — spawned dynamically into m_wToolbar from active
+    // plugins that return ProvidesToolbarTool() == true. Each button has a
+    // dedicated AG0_PluginButtonClickRelay that captures the plugin + menu
+    // root and exposes a zero-arg OnClick() bound to m_OnClicked (untyped
+    // ScriptInvoker, so the invoker can't pass a sender of its own).
+    protected ref array<Widget> m_aPluginToolbarButtons = {};
+    protected ref array<ref AG0_PluginButtonClickRelay> m_aPluginClickRelays = {};
+    protected const ResourceName PLUGIN_TOOLBAR_BUTTON_LAYOUT = "{7DEC0DEDA7AB1E01}UI/layouts/Menus/TDL/PluginToolbarButton.layout";
     
     // Core references
     protected AG0_TDLDeviceComponent m_ActiveDevice;
@@ -110,10 +119,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected Widget m_wCompassButton;
     protected Widget m_wTrackButton;
     
-    // Selected member for detail view
-    protected ref AG0_TDLNetworkMember m_SelectedMember;
-    protected RplId m_SelectedDeviceId;
-    
+    // Member selection lives on m_MenuController.
+
+
     // State tracking for card handlers
     protected int m_iFocusedCardIndex = -1;
     protected int m_iLastCardCount = 0;
@@ -158,8 +166,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	protected Widget m_wChatSendButton;
 	
 	// Chat state
-	protected RplId m_ChatContactRplId = RplId.Invalid();
-	protected string m_sChatContactName = "";
+	// Chat contact state lives on m_MenuController; query via GetChatContactRplId()/GetChatContactName().
 	protected ref array<Widget> m_aChatMessageWidgets = {};
 	// Parallel arrays per chat message card. Indexed in lockstep with m_aChatMessageWidgets.
 	// All four are cleared together in ClearChatMessages.
@@ -323,15 +330,20 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 		
 		SubscribeToMessageUpdates();
         
-        m_SelectedDeviceId = s_LastSelectedDeviceId;
-		m_ChatContactRplId = s_LastChatContactRplId;
-		m_sChatContactName = s_sLastChatContactName;
-		
-		// Re-fetch member data if we have a valid device ID
-		if (m_SelectedDeviceId != RplId.Invalid())
-		    m_SelectedMember = GetNetworkMemberById(m_SelectedDeviceId);
-		
-		SetPanelContent(s_eLastPanel);
+        // Create the shared menu controller and have it drive panel state on
+        // this layout. Subscribe to OnPanelChanged for menu-specific reactions
+        // (marker tool sub-panel, crosshair, chat repopulate, gamepad focus)
+        // and to OnDetailShown for view-feed button visibility refresh that
+        // depends on remote feed state the controller can't see.
+        m_MenuController = new AG0_TDLMenuController();
+        if (m_MenuController.Init(m_wRoot))
+        {
+            m_MenuController.m_OnPanelChanged.Insert(OnControllerPanelChanged);
+            // RestoreState reads s_LastSelectedDeviceId / s_sLastPanelPluginID
+            // / s_eLastPanel etc. and installs the active plugin if it's still
+            // enabled, then drives SetPanelContent(s_eLastPanel).
+            m_MenuController.RestoreState(m_aActivePlugins);
+        }
         
         // Hook button handlers
         HookButtonHandlers();
@@ -458,7 +470,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         // because the menu's focus chain consumes those actions before
         // listeners fire — but GetActionTriggered still works in this
         // context, same as the other actions polled in this loop.
-        if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL && m_MarkerToolPanel && m_InputManager)
+        if (m_MenuController.GetActivePanel() == ETDLPanelContent.MARKER_TOOL && m_MarkerToolPanel && m_InputManager)
             m_MarkerToolPanel.TickPlaceActionPoll(m_InputManager);
 
         // Process gamepad right stick pan input
@@ -501,9 +513,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             }
         }
         
-        // Update detail view if showing
-        if (m_eActivePanel == ETDLPanelContent.MEMBER_DETAIL)
-            PopulateDetailView();
+        // Update detail view if showing — controller owns the widget refs.
+        if (m_MenuController && m_MenuController.GetActivePanel() == ETDLPanelContent.MEMBER_DETAIL)
+            m_MenuController.PopulateDetailView();
         
 		if (m_bScrollToBottom && m_wChatScrollLayout)
 		{
@@ -534,9 +546,17 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             m_DragHandler.CancelDrag();
         }
         
-        // Save panel state
-        s_eLastPanel = m_eActivePanel;
-        
+        // Save panel state via the controller — it captures the active plugin
+        // ID (so a PLUGIN_TOOL panel can be restored if the plugin is still
+        // enabled next open) and clears the panel cleanly so OnPanelHidden
+        // fires while the plugin's still alive.
+        if (m_MenuController)
+            m_MenuController.SaveState();
+
+        // Tear down toolbar buttons before plugins are disabled — same
+        // ordering reason as RefreshPlugins().
+        ClearPluginToolbarButtons();
+
         // Notify and disable plugins
         foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
         {
@@ -614,22 +634,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void HookButtonHandlers()
     {
-        if (m_wBackButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wBackButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnBackClicked);
-        }
-        
-        if (m_wNetworkButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wNetworkButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnNetworkButtonClicked);
-        }
-        
+        // BackButton / NetworkButton / SettingsButton / SettingsBackButton /
+        // MarkerToolButton are hooked by AG0_TDLMenuController during its Init
+        // — don't double-hook here.
+
         if (m_wCameraButton)
         {
             SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
@@ -686,14 +694,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 comp.m_OnClicked.Insert(OnTrackClickedInternal);
         }
         
-        if (m_wSettingsButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wSettingsButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnSettingsClicked);
-        }
-        
         if (m_wCallsignSaveButton)
         {
             SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
@@ -702,14 +702,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 comp.m_OnClicked.Insert(OnCallsignSaveClicked);
         }
         
-        if (m_wSettingsBackButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wSettingsBackButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnSettingsBackClicked);
-        }
-		
 		if (m_wViewChatButton)
 		{
 		    SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
@@ -726,17 +718,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 		        comp.m_OnClicked.Insert(OnChatSendClicked);
 		}
 
-        // Marker tool — toolbar activation + side-panel back. Note the
-        // sub-form Cancel/Public/Private buttons inside the spawned
-        // edit-box layouts are wired by AG0_TDLMarkerToolPanel itself.
-        if (m_wMarkerToolButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wMarkerToolButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnMarkerToolButtonClicked);
-        }
-
+        // Marker tool — MarkerToolButton hooked by controller; we still hook
+        // the back button because cancel goes through the marker tool panel.
         if (m_wMarkerToolBackButton)
         {
             SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
@@ -762,18 +745,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected void OnMapDragStart()
     {
         AG0_TDLDisplayController.SetPlayerTracking(false);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void OnBackClicked()
-    {
-        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void OnNetworkButtonClicked()
-    {
-        ToggleSidePanel();
     }
     
     //------------------------------------------------------------------------------------------------
@@ -811,10 +782,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void OnViewLocationClickedInternal()
     {
-        if (!m_SelectedMember || !m_DisplayController)
+        if (!m_MenuController.GetSelectedMember() || !m_DisplayController)
             return;
         
-        vector pos = m_SelectedMember.GetPosition();
+        vector pos = m_MenuController.GetSelectedMember().GetPosition();
         AG0_TDLMapView mapView = m_DisplayController.GetMapView();
         if (mapView)
         {
@@ -824,14 +795,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
-    protected void OnSettingsClicked()
-    {
-        SetPanelContent(ETDLPanelContent.SETTINGS);
-        
-        if (m_CallsignEditBox && m_NetworkDevice)
-            m_CallsignEditBox.SetText(m_NetworkDevice.GetDisplayName());
-    }
-    
     //------------------------------------------------------------------------------------------------
     protected void OnCallsignSaveClicked()
     {
@@ -853,12 +816,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         SetPanelContent(ETDLPanelContent.NETWORK_LIST);
     }
     
-    //------------------------------------------------------------------------------------------------
-    protected void OnSettingsBackClicked()
-    {
-        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
-    }
-
     //! Crosshair is visible iff the marker tool panel is the active side
     //! panel. See the m_wMarkerCrosshair declaration comment for why the
     //! gamepad-only gating was dropped.
@@ -867,18 +824,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (!m_wMarkerCrosshair)
             return;
 
-        m_wMarkerCrosshair.SetVisible(m_eActivePanel == ETDLPanelContent.MARKER_TOOL);
+        m_wMarkerCrosshair.SetVisible(m_MenuController.GetActivePanel() == ETDLPanelContent.MARKER_TOOL);
     }
 
     //------------------------------------------------------------------------------------------------
     // MARKER TOOL HANDLERS
     //------------------------------------------------------------------------------------------------
-
-    //! Toolbar button — open the marker tool side panel.
-    protected void OnMarkerToolButtonClicked()
-    {
-        SetPanelContent(ETDLPanelContent.MARKER_TOOL);
-    }
 
     //! Fired by the marker-tool panel's Cancel/Back buttons (sub-form +
     //! side-panel back). Returns to the contacts list.
@@ -934,7 +885,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //! the visible side-panel — clicks elsewhere just pan the map.
     protected void OnMapClicked(int absMouseX, int absMouseY)
     {
-        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+        if (m_MenuController.GetActivePanel() != ETDLPanelContent.MARKER_TOOL)
             return;
         if (!m_MarkerToolPanel || !m_DisplayController)
             return;
@@ -963,87 +914,55 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
-    // PANEL MANAGEMENT
+    // PANEL MANAGEMENT — controller owns the state machine. This wrapper
+    // exists so internal callers and existing tests can keep using
+    // SetPanelContent without knowing about the controller.
     //------------------------------------------------------------------------------------------------
     protected void SetPanelContent(ETDLPanelContent content)
     {
-        m_eActivePanel = content;
+        if (m_MenuController)
+            m_MenuController.SetPanelContent(content);
+    }
 
-        bool showPanel = (content != ETDLPanelContent.NONE);
-        bool showNetwork = (content == ETDLPanelContent.NETWORK_LIST);
-        bool showDetail = (content == ETDLPanelContent.MEMBER_DETAIL);
-		bool showChat = (content == ETDLPanelContent.DIRECT_CHAT);
-        bool showSettings = (content == ETDLPanelContent.SETTINGS);
-        bool showMarkerTool = (content == ETDLPanelContent.MARKER_TOOL);
-
-        string title = "CONTACTS";
-        switch (content)
-        {
-            case ETDLPanelContent.MEMBER_DETAIL:
-                title = "CONTACT DETAILS";
-                break;
-            case ETDLPanelContent.SETTINGS:
-                title = "SETTINGS";
-                break;
-			case ETDLPanelContent.DIRECT_CHAT:
-			    title = m_sChatContactName;
-			    break;
-            case ETDLPanelContent.MARKER_TOOL:
-                title = "MARKER TOOL";
-                break;
-        }
-
-        // Update static state so device stays in sync
-        AG0_TDLDisplayController.SetPanelState(showPanel, showNetwork, showDetail, showSettings, showMarkerTool, title);
-
-        // Apply to local widgets immediately
-        if (m_wSidePanel)
-            m_wSidePanel.SetVisible(showPanel);
-
-        if (!showPanel)
+    //------------------------------------------------------------------------------------------------
+    //! Fired by AG0_TDLMenuController.m_OnPanelChanged after the panel state
+    //! has settled. Menu-specific reactions live here: marker tool sub-panel
+    //! lifecycle, crosshair visibility, chat repopulate, gamepad focus.
+    protected void OnControllerPanelChanged()
+    {
+        if (!m_MenuController)
             return;
 
-        if (m_wNetworkContent)
-            m_wNetworkContent.SetVisible(showNetwork);
+        ETDLPanelContent content = m_MenuController.GetActivePanel();
 
-        if (m_wDetailContent)
-            m_wDetailContent.SetVisible(showDetail);
+        // Marker tool sub-form layouts spawn lazily on first show.
+        bool showMarkerTool = (content == ETDLPanelContent.MARKER_TOOL);
+        if (m_MarkerToolPanel)
+        {
+            if (showMarkerTool)
+                m_MarkerToolPanel.OnPanelShown();
+            else
+                m_MarkerToolPanel.OnPanelHidden();
+        }
 
-        if (m_wSettingsContent)
-            m_wSettingsContent.SetVisible(showSettings);
-
-        if (m_wMarkerToolContent)
-            m_wMarkerToolContent.SetVisible(showMarkerTool);
-
-        // Lazy spawn of the sub-form layouts on first MARKER_TOOL show
-        if (showMarkerTool && m_MarkerToolPanel)
-            m_MarkerToolPanel.OnPanelShown();
-        else if (!showMarkerTool && m_MarkerToolPanel)
-            m_MarkerToolPanel.OnPanelHidden();
-
-        // Centre-screen crosshair lives outside MarkerToolContent (it's in
-        // MainView, not the side panel) so it has its own visibility hook —
-        // gated on both the panel state we just set and the cached input-device
-        // bool. Re-evaluate every panel transition.
+        // Centre-screen crosshair lives outside MarkerToolContent — own hook.
         UpdateMarkerCrosshairVisibility();
 
-        if (m_wPanelTitle)
-            m_wPanelTitle.SetText(title);
+        // Chat view repopulation: chat infra (message subscriptions, image
+        // renderers) lives on the menu, so we drive populate from here when
+        // the panel actually shows the chat content.
+        if (content == ETDLPanelContent.DIRECT_CHAT)
+            PopulateChatView();
 
-		if (m_wChatContent)
-		{
-		    m_wChatContent.SetVisible(showChat);
-		    if (showChat)
-		    {
-		        if (m_wChatContactName)
-		            m_wChatContactName.SetText(m_sChatContactName);
-		        PopulateChatView();
-		    }
-		}
+        // Settings panel needs the callsign edit box pre-populated with the
+        // current device name — m_NetworkDevice is menu-frontend state, so
+        // we drive this here instead of in the controller.
+        if (content == ETDLPanelContent.SETTINGS && m_CallsignEditBox && m_NetworkDevice)
+            m_CallsignEditBox.SetText(m_NetworkDevice.GetDisplayName());
 
         SetPanelFocus(content);
     }
-    
+
     //------------------------------------------------------------------------------------------------
     protected void SetPanelFocus(ETDLPanelContent content)
     {
@@ -1061,23 +980,23 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                     }
                 }
                 break;
-                
+
             case ETDLPanelContent.MEMBER_DETAIL:
                 if (m_wBackButton)
                     GetGame().GetWorkspace().SetFocusedWidget(m_wBackButton);
                 break;
-                
+
             case ETDLPanelContent.SETTINGS:
                 if (m_CallsignEditBox)
                     m_CallsignEditBox.Focus();
                 else if (m_wSettingsBackButton)
                     GetGame().GetWorkspace().SetFocusedWidget(m_wSettingsBackButton);
                 break;
-			
-			case ETDLPanelContent.DIRECT_CHAT:
-			    if (m_ChatEditBox)
-			        m_ChatEditBox.Focus();
-			    break;
+
+            case ETDLPanelContent.DIRECT_CHAT:
+                if (m_ChatEditBox)
+                    m_ChatEditBox.Focus();
+                break;
 
             case ETDLPanelContent.MARKER_TOOL:
                 // Focus the back button as a safe default until the panel
@@ -1095,82 +1014,19 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    // Thin wrappers — controller owns the real logic. Kept so internal call
+    // sites and plugin code (m_MenuUI.RequestPluginPanel etc.) keep working.
+    //------------------------------------------------------------------------------------------------
     protected void ToggleSidePanel()
     {
-        if (m_eActivePanel == ETDLPanelContent.NONE)
-            SetPanelContent(ETDLPanelContent.NETWORK_LIST);
-        else
-            SetPanelContent(ETDLPanelContent.NONE);
+        if (m_MenuController)
+            m_MenuController.ToggleSidePanel();
     }
-    
-    //------------------------------------------------------------------------------------------------
+
     protected void ShowDetailView(AG0_TDLNetworkMember member, RplId deviceId)
     {
-        m_SelectedMember = member;
-	    m_SelectedDeviceId = deviceId;
-	    s_LastSelectedDeviceId = deviceId;
-        
-        PopulateDetailView();
-        SetPanelContent(ETDLPanelContent.MEMBER_DETAIL);
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void PopulateDetailView()
-    {
-        if (m_SelectedDeviceId != RplId.Invalid())
-            m_SelectedMember = GetNetworkMemberById(m_SelectedDeviceId);
-        
-        if (!m_SelectedMember)
-            return;
-        
-        if (m_wDetailPlayerName)
-            m_wDetailPlayerName.SetText(m_SelectedMember.GetPlayerName());
-        
-        if (m_wDetailSignalStrength)
-            m_wDetailSignalStrength.SetTextFormat("%1 dBm", m_SelectedMember.GetSignalStrength().ToString());
-        
-        if (m_wDetailNetworkIP)
-            m_wDetailNetworkIP.SetText("192.168.0." + m_SelectedMember.GetNetworkIP().ToString());
-        
-        if (m_wDetailGrid)
-        {
-            vector memberPos = m_SelectedMember.GetPosition();
-            m_wDetailGrid.SetText(AG0_MGRSGridUtils.GetFullMGRS(memberPos, 5));
-        }
-        
-        if (m_wDetailDistance)
-        {
-            IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-            if (player)
-            {
-                float dist = vector.Distance(player.GetOrigin(), m_SelectedMember.GetPosition());
-                m_wDetailDistance.SetTextFormat("%1 m", Math.Round(dist).ToString());
-            }
-        }
-        
-        if (m_wDetailCapabilities)
-        {
-            string caps = BuildCapabilitiesString(m_SelectedMember.GetCapabilities());
-            m_wDetailCapabilities.SetText(caps);
-        }
-        
-        if (m_wViewFeedButton)
-        {
-            RplId videoSourceId = m_SelectedMember.GetVideoSourceRplId();
-            bool isBroadcasting = videoSourceId != RplId.Invalid();
-            m_wViewFeedButton.SetVisible(isBroadcasting);
-        }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected string BuildCapabilitiesString(int caps)
-    {
-        string result = "";
-        if ((caps & AG0_ETDLDeviceCapability.GPS_PROVIDER) != 0) result += "[GPS] ";
-        if ((caps & AG0_ETDLDeviceCapability.VIDEO_SOURCE) != 0) result += "[CAM] ";
-        if ((caps & AG0_ETDLDeviceCapability.DISPLAY_OUTPUT) != 0) result += "[DISP] ";
-        if ((caps & AG0_ETDLDeviceCapability.INFORMATION) != 0) result += "[INFO] ";
-        return result;
+        if (m_MenuController)
+            m_MenuController.ShowDetailView(member, deviceId);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1183,15 +1039,15 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         if (m_InputManager.GetActionTriggered("MenuBack"))
         {
-            if (m_eActivePanel == ETDLPanelContent.MEMBER_DETAIL)
+            if (m_MenuController.GetActivePanel() == ETDLPanelContent.MEMBER_DETAIL)
             {
                 SetPanelContent(ETDLPanelContent.NETWORK_LIST);
             }
-			if (m_eActivePanel == ETDLPanelContent.DIRECT_CHAT)
+			if (m_MenuController.GetActivePanel() == ETDLPanelContent.DIRECT_CHAT)
 			{
 				SetPanelContent(ETDLPanelContent.MEMBER_DETAIL);
 			}
-            else if (m_eActivePanel == ETDLPanelContent.SETTINGS)
+            else if (m_MenuController.GetActivePanel() == ETDLPanelContent.SETTINGS)
             {
                 SetPanelContent(ETDLPanelContent.NETWORK_LIST);
             }
@@ -1207,7 +1063,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     void OnDetailBackClicked()
     {
-        OnBackClicked();
+        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1380,6 +1236,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     void RefreshPlugins()
     {
+        // Tear down old toolbar buttons before the plugins behind them are
+        // disabled — the click handler dereferences the plugin via the map,
+        // so removing buttons first guarantees no stale dispatch.
+        ClearPluginToolbarButtons();
+
         foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
             plugin.Disable();
         m_aActivePlugins.Clear();
@@ -1409,14 +1270,19 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 continue;
             
             IEntity sourceDevice = FindSourceDeviceForPlugin(plugin.GetPluginID(), heldDevices);
-            plugin.Enable(m_ActiveDevice, sourceDevice);
+            plugin.Enable(m_ActiveDevice, sourceDevice, this);
             m_aActivePlugins.Insert(plugin);
         }
         
         foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
             plugin.OnMenuOpened(m_wRoot);
+
+        // Plugins are now Enabled and have their menu root — render their
+        // toolbar buttons. This runs after OnMenuOpened so plugins can finish
+        // any setup (e.g. cached widget refs) before their button is clickable.
+        BuildPluginToolbarButtons();
     }
-    
+
     //------------------------------------------------------------------------------------------------
     protected IEntity FindSourceDeviceForPlugin(string pluginID, array<AG0_TDLDeviceComponent> devices)
     {
@@ -1428,7 +1294,78 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         }
         return null;
     }
-    
+
+    //------------------------------------------------------------------------------------------------
+    // PLUGIN TOOLBAR BUTTONS
+    //
+    // Walks active plugins, spawns a PluginToolbarButton.layout into m_wToolbar
+    // for any plugin that returns ProvidesToolbarTool() == true, sets its icon
+    // from GetToolIcon(), and routes clicks to OnToolActivated(m_wRoot) via a
+    // per-button AG0_PluginButtonClickRelay (necessary because m_OnClicked is
+    // untyped — fires zero-arg, so the handler can't disambiguate by sender).
+    //------------------------------------------------------------------------------------------------
+    protected void BuildPluginToolbarButtons()
+    {
+        if (!m_wToolbar)
+            return;
+
+        foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
+        {
+            if (!plugin || !plugin.ProvidesToolbarTool())
+                continue;
+
+            Widget btnRoot = GetGame().GetWorkspace().CreateWidgets(PLUGIN_TOOLBAR_BUTTON_LAYOUT, m_wToolbar);
+            if (!btnRoot)
+            {
+                Print(string.Format("[TDLMenu] Failed to spawn toolbar button for plugin '%1'", plugin.GetPluginID()), LogLevel.WARNING);
+                continue;
+            }
+
+            // Set the icon. ResourceName carries the engine resource path
+            // already, so LoadImageTexture can consume it directly.
+            ImageWidget icon = ImageWidget.Cast(btnRoot.FindAnyWidget("PluginIcon"));
+            ResourceName toolIcon = plugin.GetToolIcon();
+            if (icon && !toolIcon.IsEmpty())
+                icon.LoadImageTexture(0, toolIcon);
+
+            // Hook the click via a per-button relay. The relay captures the
+            // plugin + menu root in its constructor and exposes a zero-arg
+            // OnClick() that dispatches OnToolActivated. Held in
+            // m_aPluginClickRelays so it lives as long as the button does.
+            SCR_ModularButtonComponent btnComp = SCR_ModularButtonComponent.FindComponent(btnRoot);
+            if (btnComp)
+            {
+                AG0_PluginButtonClickRelay relay = new AG0_PluginButtonClickRelay(plugin, m_wRoot);
+                m_aPluginClickRelays.Insert(relay);
+                btnComp.m_OnClicked.Insert(relay.OnClick);
+            }
+
+            m_aPluginToolbarButtons.Insert(btnRoot);
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void ClearPluginToolbarButtons()
+    {
+        foreach (Widget btn : m_aPluginToolbarButtons)
+        {
+            if (btn)
+                btn.RemoveFromHierarchy();
+        }
+        m_aPluginToolbarButtons.Clear();
+        m_aPluginClickRelays.Clear();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Plugin entry point — delegates to the shared controller. Plugin code
+    //! calls m_MenuUI.RequestPluginPanel(this); we route through the menu
+    //! controller which owns the toggle logic.
+    void RequestPluginPanel(AG0_ATAKPluginBase plugin)
+    {
+        if (m_MenuController)
+            m_MenuController.RequestPluginPanel(plugin);
+    }
+
     //------------------------------------------------------------------------------------------------
     // CAMERA BUTTON
     //------------------------------------------------------------------------------------------------
@@ -1495,10 +1432,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     protected void OnViewFeedClickedInternal()
     {
-        if (!m_SelectedMember)
+        if (!m_MenuController.GetSelectedMember())
             return;
         
-        RplId videoSourceId = m_SelectedMember.GetVideoSourceRplId();
+        RplId videoSourceId = m_MenuController.GetSelectedMember().GetVideoSourceRplId();
         if (videoSourceId == RplId.Invalid())
             return;
         
@@ -1572,21 +1509,21 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	            else
 	            {
 	                m_PendingFeedSourceId = sourceDeviceRplId;
-	                m_PendingFeedPosition = m_SelectedMember.GetPosition();
+	                m_PendingFeedPosition = m_MenuController.GetSelectedMember().GetPosition();
 	                m_fFeedAttachTimer = 0;
 	            }
 	        }
 	        else
 	        {
 	            m_PendingFeedSourceId = sourceDeviceRplId;
-	            m_PendingFeedPosition = m_SelectedMember.GetPosition();
+	            m_PendingFeedPosition = m_MenuController.GetSelectedMember().GetPosition();
 	            m_fFeedAttachTimer = 0;
 	        }
 	    }
 	    else
 	    {
 	        m_PendingFeedSourceId = sourceDeviceRplId;
-	        m_PendingFeedPosition = m_SelectedMember.GetPosition();
+	        m_PendingFeedPosition = m_MenuController.GetSelectedMember().GetPosition();
 	        m_fFeedAttachTimer = 0;
 	    }
 	    
@@ -1603,8 +1540,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    if (m_wFeedOverlay)
 	        m_wFeedOverlay.SetVisible(true);
 	    
-	    if (m_wFeedMemberName && m_SelectedMember)
-	        m_wFeedMemberName.SetText(m_SelectedMember.GetPlayerName());
+	    if (m_wFeedMemberName && m_MenuController.GetSelectedMember())
+	        m_wFeedMemberName.SetText(m_MenuController.GetSelectedMember().GetPlayerName());
 	}
 	
 	protected void HideMainMenuUI()
@@ -1737,10 +1674,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	
 	protected void OnViewDirectChatClicked()
 	{
-	    if (!m_SelectedMember)
+	    if (!m_MenuController.GetSelectedMember())
 	        return;
 	    
-	    OpenDirectChat(m_SelectedDeviceId, m_SelectedMember.GetPlayerName());
+	    OpenDirectChat(m_MenuController.GetSelectedDeviceId(), m_MenuController.GetSelectedMember().GetPlayerName());
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -1752,10 +1689,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	//------------------------------------------------------------------------------------------------
 	void OpenDirectChat(RplId contactRplId, string contactName)
 	{
-	    m_ChatContactRplId = contactRplId;
-	    m_sChatContactName = contactName;
-	    s_LastChatContactRplId = contactRplId;
-	    s_sLastChatContactName = contactName;
+	    if (m_MenuController)
+	        m_MenuController.SetChatContact(contactRplId, contactName);
 	    SetPanelContent(ETDLPanelContent.DIRECT_CHAT);
 	}
 	
@@ -1773,7 +1708,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    RplId myDeviceRplId = m_NetworkDevice.GetDeviceRplId();
 	    
 	    // Get direct messages with this contact
-	    array<ref AG0_TDLMessageClient> messages = controller.GetDirectMessages(networkId, myDeviceRplId, m_ChatContactRplId);
+	    array<ref AG0_TDLMessageClient> messages = controller.GetDirectMessages(networkId, myDeviceRplId, m_MenuController.GetChatContactRplId());
 	    
 	    // Clear existing message widgets
 	    ClearChatMessages();
@@ -2104,8 +2039,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 
 	    RplId senderDeviceRplId = m_NetworkDevice.GetDeviceRplId();
 
-	    if (m_ChatContactRplId != RplId.Invalid())
-	        SCR_PlayerController.RequestSendDirectMessage(controller, senderDeviceRplId, content, m_ChatContactRplId);
+	    if (m_MenuController.GetChatContactRplId() != RplId.Invalid())
+	        SCR_PlayerController.RequestSendDirectMessage(controller, senderDeviceRplId, content, m_MenuController.GetChatContactRplId());
 
 	    m_ChatEditBox.SetText("");
 	    m_bScrollToBottom = true;
@@ -2146,7 +2081,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	//------------------------------------------------------------------------------------------------
 	protected void OnMessagesUpdated(int networkId)
 	{
-	    if (m_eActivePanel == ETDLPanelContent.DIRECT_CHAT)
+	    if (m_MenuController.GetActivePanel() == ETDLPanelContent.DIRECT_CHAT)
 	    {
 	        if (m_NetworkDevice && m_NetworkDevice.GetCurrentNetworkID() == networkId)
 	            PopulateChatView();
@@ -2214,7 +2149,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	//------------------------------------------------------------------------------------------------
 	protected void OnNewMessageReceived(int networkId, int messageId)
 	{
-	    if (m_eActivePanel == ETDLPanelContent.DIRECT_CHAT)
+	    if (m_MenuController.GetActivePanel() == ETDLPanelContent.DIRECT_CHAT)
 	        m_bScrollToBottom = true;
 	}
 }

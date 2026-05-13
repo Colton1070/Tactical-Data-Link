@@ -23,7 +23,7 @@ FrameWidgetClass {
      }
      Color 0.1059 0.1059 0.1059 0.8562
      Texture "{7FE7439732AB00D0}UI/Textures/Icons/mpu5_plugin_panel.edds"
-     Size 192 96
+     Size 96 96
     }
     VerticalLayoutWidgetClass "{67288054F73D6AEF}" {
      Name "VerticalLayout0"

@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{7DEC0DEDA7AB1E01}UI/layouts/Menus/TDL/PluginToolbarButton.layout"
+ Configurations {
+  LayoutResourceClass PC {
+  }
+  LayoutResourceClass XBOX_ONE : PC {
+  }
+  LayoutResourceClass XBOX_SERIES : PC {
+  }
+  LayoutResourceClass PS4 : PC {
+  }
+  LayoutResourceClass PS5 : PC {
+  }
+  LayoutResourceClass HEADLESS : PC {
+  }
+ }
+}

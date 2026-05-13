@@ -1,0 +1,19 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ {
+  CanvasWidgetClass "{693204893AD9E3F1}" {
+   Name "RadarCanvas"
+   Slot FrameWidgetSlot "{6F8B2A1C3E4D5687}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX 0
+    OffsetRight 0
+    SizeY 0
+    OffsetBottom 0
+   }
+  }
+ }
+}

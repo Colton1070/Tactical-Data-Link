@@ -1,0 +1,50 @@
+ButtonWidgetClass "{ABCD000200000001}" {
+ Name "PluginToolbarButton"
+ Slot LayoutSlot "{ABCD000200000002}" {
+  Padding 5 5 5 5
+ }
+ components {
+  SCR_ModularButtonComponent "{ABCD000200000003}" {
+   m_aEffects {
+    SCR_ButtonEffectColor "{ABCD000200000004}" {
+     m_eEvents 6149
+     m_sWidgetName "PluginIcon"
+     m_fAnimationTime 0.08
+     m_cDefault 0.75 0.75 0.75 1
+     m_cHovered 0.2 0.8 0.8 1
+     m_cActivated 0.2 0.8 0.8 1
+     m_cActivatedHovered 0.3 1 1 1
+     m_cClicked 0.3 1 1 1
+     m_cFocusGained 0.2 0.8 0.8 1
+     m_cFocusLost 0.75 0.75 0.75 1
+    }
+   }
+   m_bFocusOnMouseEnter 1
+  }
+ }
+ style blank
+ {
+  SizeLayoutWidgetClass "{ABCD000200000005}" {
+   Name "SizeLayout0"
+   Slot ButtonWidgetSlot "{ABCD000200000006}" {
+   }
+   {
+    OverlayWidgetClass "{ABCD000200000007}" {
+     Name "Overlay0"
+     Slot AlignableSlot "{ABCD000200000008}" {
+     }
+     {
+      ImageWidgetClass "{ABCD000200000009}" {
+       Name "PluginIcon"
+       Slot OverlayWidgetSlot "{ABCD00020000000A}" {
+        Padding 5 5 5 5
+       }
+       Size 48 48
+       "Blend Mode" Additive
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -749,6 +749,19 @@ FrameWidgetClass {
             }
            }
           }
+          OverlayWidgetClass "{6958419428667684}" {
+           Name "PluginPanelRightSide"
+           Slot FrameWidgetSlot "{695841942866769B}" {
+            Anchor 1 0.5 1 0.5
+            OffsetLeft 0
+            OffsetTop 0
+            SizeX 300
+            OffsetRight -300
+            SizeY 200
+            OffsetBottom -200
+            Alignment 1 0
+           }
+          }
          }
         }
        }
@@ -1440,6 +1453,7 @@ FrameWidgetClass {
           VerticalAlign 3
           Padding 0 100 0 0
          }
+         "Is Visible" 0
          {
           ButtonWidgetClass "{69472DC70EE0AAD6}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
            Name "MarkerToolTypeSpinBox"
@@ -1573,6 +1587,15 @@ FrameWidgetClass {
            }
           }
          }
+        }
+        OverlayWidgetClass "{6958419428667702}" {
+         Name "PluginToolPanel"
+         Slot OverlayWidgetSlot "{672744B744EC4BC7}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+          Padding 0 100 0 0
+         }
+         "Is Visible" 0
         }
        }
       }

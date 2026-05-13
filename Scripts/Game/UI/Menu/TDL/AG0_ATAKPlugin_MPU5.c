@@ -12,7 +12,7 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     protected TextWidget m_wNetworkName;
     protected TextWidget m_wNodeCount;
     protected ref array<Widget> m_aNodeWidgets = {};
-    protected ref array<RplId> m_aNodeRplIds = {};
+    protected ref array<ref AG0_KickButtonClickRelay> m_aKickRelays = {};
     
     // Cached references
     protected AG0_TDLDeviceComponent m_MPU5Device;
@@ -24,9 +24,9 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     protected const float UPDATE_INTERVAL = 1.0;
     
     // Layouts
-    protected const ResourceName PTT_OVERLAY_LAYOUT = "{RESOURCE}UI/layouts/Menus/TDL/MPU5_PTTOverlay.layout";
-    protected const ResourceName MANAGEMENT_PANEL_LAYOUT = "{RESOURCE}UI/layouts/Menus/TDL/MPU5_ManagementPanel.layout";
-    protected const ResourceName NODE_ENTRY_LAYOUT = "{RESOURCE}UI/layouts/Menus/TDL/MPU5_NodeEntry.layout";
+    protected const ResourceName PTT_OVERLAY_LAYOUT = "{5AC27C972C60DF5B}UI/layouts/Menus/TDL/Plugins/MPU5/PTTOverlay.layout";
+    protected const ResourceName MANAGEMENT_PANEL_LAYOUT = "{DE93DDC86DC3A2D8}UI/layouts/Menus/TDL/Plugins/MPU5/MPU5_ManagementPanel.layout";
+    protected const ResourceName NODE_ENTRY_LAYOUT = "{B2FCF0951F439103}UI/layouts/Menus/TDL/Plugins/MPU5/MPU5_NodeEntry.layout";
     
     //------------------------------------------------------------------------------------------------
     // Lifecycle
@@ -55,10 +55,12 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     
     override void OnToolActivated(Widget menuRoot)
     {
-        if (m_wManagementPanel)
-            CloseManagementPanel();
-        else
-            OpenManagementPanel(menuRoot);
+        // The menu owns the toggle now — RequestPluginPanel(this) opens the
+        // side-panel slot the first time and closes it back to the map on a
+        // second click. Matches the Menu button's behaviour for consistency
+        // across all toolbar usage.
+        if (m_MenuUI)
+            m_MenuUI.RequestPluginPanel(this);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -85,14 +87,18 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     
     override void OnMenuClosed()
     {
-        CloseManagementPanel();
-        
+        // Defensive: if the panel is still up here, the menu didn't run its
+        // SetPanelContent(NONE) cleanup path first. Tear down ourselves so
+        // we don't leak widgets across menu opens.
+        if (m_wManagementPanel)
+            OnPanelHidden();
+
         if (m_wPTTOverlay)
         {
             m_wPTTOverlay.RemoveFromHierarchy();
             m_wPTTOverlay = null;
         }
-        
+
         m_MenuRoot = null;
     }
     
@@ -129,23 +135,28 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     
     //------------------------------------------------------------------------------------------------
     // Management Panel
+    //
+    // OnPanelShown / OnPanelHidden are driven by AG0_TDLMenuUI.SetPanelContent
+    // whenever this plugin enters / exits the PLUGIN_TOOL panel slot. The menu
+    // hands us the empty PluginToolPanel widget — we spawn our management
+    // layout into it and bind. The menu owns toggle-off; we just clean up.
     //------------------------------------------------------------------------------------------------
-    protected void OpenManagementPanel(Widget menuRoot)
+    override void OnPanelShown(Widget panelRoot)
     {
-        Widget panelArea = menuRoot.FindAnyWidget("PluginToolPanel");
-        if (!panelArea) 
+        if (!panelRoot)
             return;
-        
-        m_wManagementPanel = GetGame().GetWorkspace().CreateWidgets(MANAGEMENT_PANEL_LAYOUT, panelArea);
-        if (!m_wManagementPanel) 
+
+        m_wManagementPanel = GetGame().GetWorkspace().CreateWidgets(MANAGEMENT_PANEL_LAYOUT, panelRoot);
+        if (!m_wManagementPanel)
             return;
-        
+
         // Cache widget refs
         m_wNodeList = m_wManagementPanel.FindAnyWidget("NodeList");
         m_wNetworkName = TextWidget.Cast(m_wManagementPanel.FindAnyWidget("NetworkName"));
         m_wNodeCount = TextWidget.Cast(m_wManagementPanel.FindAnyWidget("NodeCount"));
-        
-        // Hook close button
+
+        // Hook close button. Routed through RequestPluginPanel so the close
+        // button shares the same toggle-off path as a second toolbar click.
         Widget closeBtn = m_wManagementPanel.FindAnyWidget("CloseButton");
         if (closeBtn)
         {
@@ -153,14 +164,14 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
             if (btnComp)
                 btnComp.m_OnClicked.Insert(OnCloseClicked);
         }
-        
+
         UpdateManagementPanel();
     }
-    
-    protected void CloseManagementPanel()
+
+    override void OnPanelHidden()
     {
         ClearNodeWidgets();
-        
+
         if (m_wManagementPanel)
         {
             m_wManagementPanel.RemoveFromHierarchy();
@@ -170,10 +181,11 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
             m_wNodeCount = null;
         }
     }
-    
+
     protected void OnCloseClicked()
     {
-        CloseManagementPanel();
+        if (m_MenuUI)
+            m_MenuUI.RequestPluginPanel(this);
     }
     
     protected void UpdateManagementPanel()
@@ -246,20 +258,25 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
         if (capsText)
             capsText.SetText(GetCapabilityString(member.GetCapabilities()));
         
-        // Kick button
-        Widget kickBtn = nodeEntry.FindAnyWidget("KickButton");
-        if (kickBtn)
+        // Kick button — bound via a per-row relay that captures the RplId.
+        // m_OnClicked is zero-arg-fire, so we can't recover the target from
+        // the sender; the relay is the cleanest dispatch.
+        //
+        // MPU5_NodeEntry.layout names its ROOT widget "KickButton" (i.e. the
+        // whole entry is the button), so FindAnyWidget("KickButton") wouldn't
+        // find anything — descendants only. Use nodeEntry directly.
+        SCR_ModularButtonComponent btnComp = SCR_ModularButtonComponent.FindComponent(nodeEntry);
+        if (btnComp)
         {
-            SCR_ModularButtonComponent btnComp = SCR_ModularButtonComponent.FindComponent(kickBtn);
-            if (btnComp)
-                btnComp.m_OnClicked.Insert(OnKickClicked);
+            AG0_KickButtonClickRelay relay = new AG0_KickButtonClickRelay(rplId);
+            m_aKickRelays.Insert(relay);
+            btnComp.m_OnClicked.Insert(relay.OnClick);
         }
-        
-        // Track for cleanup and kick lookup
+
+        // Track widget for cleanup
         m_aNodeWidgets.Insert(nodeEntry);
-        m_aNodeRplIds.Insert(rplId);
     }
-    
+
     protected void ClearNodeWidgets()
     {
         foreach (Widget w : m_aNodeWidgets)
@@ -268,7 +285,7 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
                 w.RemoveFromHierarchy();
         }
         m_aNodeWidgets.Clear();
-        m_aNodeRplIds.Clear();
+        m_aKickRelays.Clear();
     }
     
     protected string GetCapabilityString(int caps)
@@ -286,33 +303,6 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
             result = "[BASIC]";
         
         return result;
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    // Kick Action
-    //------------------------------------------------------------------------------------------------
-    protected void OnKickClicked(SCR_ModularButtonComponent btn)
-    {
-        Widget kickButton = btn.GetRootWidget();
-        if (!kickButton) 
-            return;
-        
-        Widget nodeEntry = kickButton.GetParent();
-        if (!nodeEntry) 
-            return;
-        
-        int idx = m_aNodeWidgets.Find(nodeEntry);
-        if (idx < 0 || idx >= m_aNodeRplIds.Count()) 
-            return;
-        
-        RplId targetRplId = m_aNodeRplIds[idx];
-        if (!targetRplId.IsValid()) 
-            return;
-        
-        // Request kick through player controller
-        SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (controller)
-            controller.RequestKickDevice(targetRplId);
     }
     
     //------------------------------------------------------------------------------------------------

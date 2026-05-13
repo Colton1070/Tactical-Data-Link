@@ -1,0 +1,125 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ Slot OverlayWidgetSlot "{695026F5C8EB9D56}" {
+  HorizontalAlign 3
+  VerticalAlign 3
+  Padding 8 8 8 8
+ }
+ {
+  FrameWidgetClass "{695026F5C8EB9D57}" {
+   Name "FrameWidget"
+   Slot FrameWidgetSlot "{695026F5C8EBAF64}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX 0
+    OffsetRight 0
+    SizeY 0
+    OffsetBottom 0
+   }
+   {
+    VerticalLayoutWidgetClass "{695026F25ED2DD1E}" {
+     Name "VerticalLayout0"
+     Slot FrameWidgetSlot "{695026F25ED2DD31}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 8
+      PositionY 0
+      OffsetTop 8
+      SizeX 0
+      OffsetRight 8
+      SizeY 0
+      OffsetBottom 8
+     }
+     {
+      HorizontalLayoutWidgetClass "{695026F5B8F7112E}" {
+       Name "Header"
+       Slot LayoutSlot "{695026F5B8F7112F}" {
+        Padding 4 4 4 8
+       }
+       {
+        TextWidgetClass "{695026F5C8EB9D58}" {
+         Name "NetworkName"
+         Slot LayoutSlot "{695026F5C8EB9D60}" {
+          SizeMode Fill
+         }
+         Text "Not Connected"
+         "Font Size" 24
+        }
+        TextWidgetClass "{695026F58FF4D47E}" {
+         Name "NodeCount"
+         Slot LayoutSlot "{695026F58FF4D465}" {
+          SizeMode Fill
+         }
+         Text "0 Nodes"
+         "Font Size" 24
+         "Horizontal Alignment" Right
+        }
+       }
+      }
+      ScrollLayoutWidgetClass "{695026F5C8EB9D59}" {
+       Name "ScrollLayout"
+       Slot LayoutSlot "{695026F5C8EB9D61}" {
+        Padding 4 4 4 4
+        SizeMode Fill
+       }
+       components {
+        SCR_GamepadScrollComponent "{672744B72963802E}" {
+        }
+       }
+       "Up rule" Explicit
+       "Up target" "CloseButton"
+       {
+        VerticalLayoutWidgetClass "{695026F5C8EB9D5A}" {
+         Name "NodeList"
+         Slot AlignableSlot "{672744B72240C235}" {
+          HorizontalAlign 3
+          VerticalAlign 0
+         }
+        }
+       }
+      }
+      ButtonWidgetClass "{695026F26FFD2097}" {
+       Name "CloseButton"
+       Slot LayoutSlot "{695026F26FFD2098}" {
+        Padding 4 8 4 4
+       }
+       components {
+        SCR_ModularButtonComponent "{695026F26FFD2100}" {
+         m_aEffects {
+          SCR_ButtonEffectColor "{695026F26FFD2101}" {
+           m_eEvents 6149
+           m_sWidgetName "Close"
+           m_fAnimationTime 0.08
+           m_cDefault 0.75 0.75 0.75 1
+           m_cHovered 0.2 0.8 0.8 1
+           m_cActivated 0.2 0.8 0.8 1
+           m_cActivatedHovered 0.3 1 1 1
+           m_cClicked 0.3 1 1 1
+           m_cFocusGained 0.2 0.8 0.8 1
+           m_cFocusLost 0.75 0.75 0.75 1
+          }
+         }
+         m_bFocusOnMouseEnter 1
+        }
+       }
+       style blank
+       {
+        TextWidgetClass "{695026F26FFD2099}" {
+         Name "Close"
+         Slot ButtonWidgetSlot "{672744B7C302E982}" {
+         }
+         Text "Close"
+         "Font Size" 22
+         "Horizontal Alignment" Center
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

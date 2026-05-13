@@ -117,6 +117,7 @@ modded class SCR_PlayerController
                 m_TDLInputManager.AddActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
 				m_TDLInputManager.AddActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
 	    		m_TDLInputManager.AddActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
+				m_TDLInputManager.AddActionListener("TDLFocusToggle", EActionTrigger.DOWN, OnTDLFocusToggle);
 			}
 		}
     }
@@ -128,6 +129,7 @@ modded class SCR_PlayerController
             m_TDLInputManager.RemoveActionListener("OpenTDLMenu", EActionTrigger.DOWN, OnTDLMenuToggle);
 			m_TDLInputManager.RemoveActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
 		    m_TDLInputManager.RemoveActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
+			m_TDLInputManager.RemoveActionListener("TDLFocusToggle", EActionTrigger.DOWN, OnTDLFocusToggle);
 		}
 	}
     
@@ -252,9 +254,79 @@ modded class SCR_PlayerController
     }
     
     // ============================================
+    // TDL FOCUS MODE
+    // ============================================
+
+    //------------------------------------------------------------------------------------------------
+    //! Routes the TDLFocusToggle action to the world-space display component of
+    //! whichever held device is currently looked-at. Per-device focus state lives
+    //! on the component itself (TDL_WorldSpaceDisplayComponent.m_eFocusState), so
+    //! this handler just dispatches — no global state is kept here.
+    //!
+    //! Behavior order: prefer the device whose component is already focus-active
+    //! (so the toggle is always an exit when something is focused, even if the
+    //! player is no longer looking at it). Otherwise pick the first device that
+    //! reports IsFocusEligible — that's the one the player is looking at right now.
+    protected void OnTDLFocusToggle()
+    {
+        // First pass — exit-priority. If any held device is already focused, that's the one.
+        foreach (AG0_TDLDeviceComponent device : m_aHeldDevicesCache)
+        {
+            if (!device)
+                continue;
+            IEntity owner = device.GetOwner();
+            if (!owner)
+                continue;
+            TDL_WorldSpaceDisplayComponent wsd = TDL_WorldSpaceDisplayComponent.Cast(
+                owner.FindComponent(TDL_WorldSpaceDisplayComponent));
+            if (wsd && wsd.IsFocusActive())
+            {
+                wsd.ToggleFocus();
+                return;
+            }
+        }
+
+        // Second pass — enter eligibility. First device the player is looking at wins.
+        // Track miss reasons so we can log a useful diagnostic if nothing matched.
+        int devicesChecked = 0;
+        int wsdComponentsFound = 0;
+        string lastReason = "no held devices";
+        foreach (AG0_TDLDeviceComponent device : m_aHeldDevicesCache)
+        {
+            if (!device)
+                continue;
+            devicesChecked++;
+            IEntity owner = device.GetOwner();
+            if (!owner)
+                continue;
+            TDL_WorldSpaceDisplayComponent wsd = TDL_WorldSpaceDisplayComponent.Cast(
+                owner.FindComponent(TDL_WorldSpaceDisplayComponent));
+            if (!wsd)
+            {
+                lastReason = "device has no TDL_WorldSpaceDisplayComponent";
+                continue;
+            }
+            wsdComponentsFound++;
+            string reason = wsd.GetFocusIneligibleReason();
+            if (reason == string.Empty)
+            {
+                wsd.ToggleFocus();
+                return;
+            }
+            lastReason = reason;
+        }
+
+        // Press reached us but no device accepted — emit one line so the
+        // Workbench console tells the author exactly which guard tripped.
+        Print(string.Format(
+            "[TDL_Focus] toggle pressed but no device was eligible. devicesChecked=%1 wsdComponentsFound=%2 lastReason=\"%3\"",
+            devicesChecked, wsdComponentsFound, lastReason), LogLevel.WARNING);
+    }
+
+    // ============================================
     // TDL MENU
     // ============================================
-    
+
     //------------------------------------------------------------------------------------------------
     protected void OnTDLMenuToggle()
     {	
