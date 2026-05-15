@@ -82,7 +82,6 @@ class TDL_TerrainExporter : WorldEditorPlugin
     [ButtonAttribute("Export Selected", true)]
     protected bool ButtonExport()
     {
-        // Initialize context
         m_Context = new TDL_ExportContext();
         if (!m_Context.Initialize())
         {

@@ -10,7 +10,6 @@ class AG0_MapMarkerTDL : SCR_MapMarkerEntity
 	[RplProp(onRplName: "OnDeviceRplIdChanged")]
     protected RplId m_DeviceRplId;
 	
-	// Server-only method to set the device RplId
     void SetDeviceRplId(RplId deviceRplId)
     {
 		PrintFormat("Setting deviceRplId for marker to %1", deviceRplId);
@@ -18,7 +17,6 @@ class AG0_MapMarkerTDL : SCR_MapMarkerEntity
         Replication.BumpMe(); // Trigger replication to clients
     }
 	
-	// Add callback that updates visibility
 	void OnDeviceRplIdChanged()
 	{
 		PrintFormat("Setting deviceRplId locally for marker to %1", m_DeviceRplId);
@@ -60,7 +58,6 @@ class AG0_MapMarkerTDL : SCR_MapMarkerEntity
 	    SetLocalVisible(shouldShow);
 	}
 
-    // Method to get the device RplId (accessible on server and client)
     RplId GetDeviceRplId()
     {
         return m_DeviceRplId;

@@ -8,16 +8,13 @@ class AG0_CameraToggleUserAction : SCR_InventoryAction
         if (!m_TdlDeviceComp)
             return false;
 
-        // Must have VIDEO_SOURCE capability
         if (!m_TdlDeviceComp.HasCapability(AG0_ETDLDeviceCapability.VIDEO_SOURCE))
             return false;
 
-        // Keep the inspect check
         CharacterControllerComponent charComp = CharacterControllerComponent.Cast(user.FindComponent(CharacterControllerComponent));
         if (charComp && !charComp.GetInspect())
             return false;
 
-        // Device must be powered and in network
         if (!m_TdlDeviceComp.IsPowered() || !m_TdlDeviceComp.IsInNetwork())
             return false;
 
@@ -33,7 +30,6 @@ class AG0_CameraToggleUserAction : SCR_InventoryAction
             return;
         }
 
-        // Toggle camera broadcasting state
         bool currentState = m_TdlDeviceComp.IsCameraBroadcasting();
         m_TdlDeviceComp.SetCameraBroadcasting(!currentState);
         

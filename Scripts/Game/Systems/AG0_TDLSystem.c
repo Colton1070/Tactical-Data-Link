@@ -964,7 +964,7 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
 	    
-	    // Check equipment slots using RHS pattern
+	    // Check equipment slots (vest, backpack, etc.) for any TDL devices stored on the character
 	    ChimeraCharacter character = ChimeraCharacter.Cast(playerEntity);
 	    if (character)
 	    {

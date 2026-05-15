@@ -7,7 +7,6 @@ modded class SCR_MapMarkerBase
     {
         super.OnCreateMarker(skipProfanityFilter);
         
-        // Check if this is a TDL marker
         if (m_eType == SCR_EMapMarkerType.PLACED_CUSTOM && m_ConfigEntry)
         {
             SCR_MapMarkerEntryPlaced placedEntry = SCR_MapMarkerEntryPlaced.Cast(m_ConfigEntry);
@@ -112,7 +111,6 @@ modded class SCR_MapMarkerBase
 	        if (m_iMarkerOwnerID == controller.GetPlayerId())
 	            return super.OnUpdate(visibleMin, visibleMax);
 	        
-	        // Check connectivity for other players' markers
 	        array<int> connectedPlayers = controller.GetTDLConnectedPlayers();
 	        bool isConnected = connectedPlayers.Contains(m_iMarkerOwnerID);
 	        

@@ -148,10 +148,9 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	override void OnPostInit(IEntity owner)
 	{
 	    super.OnPostInit(owner);
-	    
-	    // Register for events your component actually needs
+
 	    SetEventMask(owner, EntityEvent.INIT | EntityEvent.POSTFRAME);
-	    
+
 	}
 	
 	override void EOnInit(IEntity owner)
@@ -173,14 +172,13 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	override void EOnPostFrame(IEntity owner, float timeSlice)
 	{
 	    super.EOnPostFrame(owner, timeSlice);
-	    
+
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
 	        GetGame().GetPlayerController()
 	    );
 	    if (!controller || !controller.IsHoldingDevice(owner))
 	        return;
-	    
-	    // Video display logic stays the same
+
 	    RplId activeSource = GetActiveVideoSource();
 	    if (activeSource == RplId.Invalid())
 	        return;
@@ -294,9 +292,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    }
 	}
 	
-	array<RplId> GetAvailableVideoSources() 
-    { 
-        // Ask PC instead of maintaining local array
+	array<RplId> GetAvailableVideoSources()
+    {
         SCR_PlayerController controller = SCR_PlayerController.Cast(
 		    GetGame().GetPlayerController()
 		);
@@ -371,13 +368,12 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	protected void OnVideoSourcesChanged()
 	{
-	    //Print(string.Format("TDL_VIDEO: Video sources changed - now have %1 sources", m_aAvailableVideoSources.Count()), LogLevel.DEBUG);
 	}
-	
+
 	protected void OnActiveVideoSourceChanged()
 	{
-	    // This is called when the server replicates a change
-	    // We can ignore it since we're managing display locally
+	    // Called when the server replicates a change; safe to ignore because
+	    // display is managed locally.
 	    Print(string.Format("TDL_VIDEO: Server video source changed to %1 (ignored for local display)", m_ActiveVideoSourceRplId), LogLevel.DEBUG);
 	}
 	
@@ -439,10 +435,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 			world.SetCameraPostProcessEffect(cameraIndex, i, PostProcessEffectType.None, "");
 		}
 		
-		// Configure HDR for broadcast
-		//world.SetCameraHDRBrightness(cameraIndex, 5);
-		//This should be done with post process effect not with script.
-		
+		// HDR for broadcast must be done with a post-process effect, not via SetCameraHDRBrightness.
+
 		// Apply configured effects
 		foreach (AG0_PostProcessEffect effect : m_aCameraEffects) {
 			if (!effect.m_sMaterialPath.IsEmpty()) {
@@ -456,10 +450,10 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 			ApplyNightVisionEffects(cameraIndex);
 	}
 	
-	// Renamed for clarity - this applies effects to display cameras showing our broadcast
+	// Applies effects to display cameras showing our broadcast. Same implementation
+	// as ApplyBroadcastEffects, but semantically different.
 	void ApplyDisplayEffects(int displayCameraIndex)
 	{
-		// Same implementation as ApplyBroadcastEffects, but semantically different
 		ApplyBroadcastEffects(displayCameraIndex);
 	}
 	
@@ -467,10 +461,6 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	{
 		BaseWorld world = GetGame().GetWorld();
 		if (!world) return;
-		
-		// Basic NVG stack
-		//world.SetCameraPostProcessEffect(cameraIndex, 15, PostProcessEffectType.ColorGrading, "");
-		//world.SetCameraPostProcessEffect(cameraIndex, 16, PostProcessEffectType.FilmGrain, "");
 		
 		Print("TDL_VIDEO: Applied night vision effects", LogLevel.DEBUG);
 	}
@@ -484,9 +474,9 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	protected bool UpdateDisplayTransform()
 	{
-	    // Use local active source instead of replicated one
-	    RplId activeSource = GetActiveVideoSource(); // This now returns m_LocalActiveVideoSource
-	    
+	    // Use local active source instead of replicated one.
+	    RplId activeSource = GetActiveVideoSource();
+
 	    if (activeSource == RplId.Invalid())
 	    {
 	        Print("TDL_VIDEO: UpdateDisplayTransform - No active source", LogLevel.DEBUG);
@@ -548,16 +538,12 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    return true;
 	}
 
-//
-//
-// TDL NETWORK DIALOG - Now delegated to PlayerController for gamepad/console support
-//
-//
-	
-	
+// TDL NETWORK DIALOG - delegated to PlayerController for gamepad/console support
+
+
 	//------------------------------------------------------------------------------------------------
-	// Public methods to be called by the User Action
-	// These now route through PlayerController for proper gamepad input handling
+	// Public methods to be called by the User Action.
+	// Routed through PlayerController for proper gamepad input handling.
 	//------------------------------------------------------------------------------------------------
 	void CreateNetworkDialog(IEntity userEntity)
 	{
@@ -586,7 +572,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		}
 
 		if(!System.IsConsoleApp()) {
-			 // Route through player controller - we don't own this device
+			// Route through player controller - we don't own this device.
 	        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
 	        if (pc)
 	        {
@@ -614,23 +600,21 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	{
 	    if (!Replication.IsServer())
 	        return;
-	    
-	    // Get the player controller for this user
+
 	    PlayerManager playerManager = GetGame().GetPlayerManager();
 	    if (!playerManager)
 	        return;
-	    
+
 	    int userPlayerId = playerManager.GetPlayerIdFromControlledEntity(userEntity);
 	    SCR_PlayerController playerController = SCR_PlayerController.Cast(
 	        playerManager.GetPlayerController(userPlayerId));
-	    
+
 	    if (!playerController)
 	    {
 	        Print("TDL_DIALOG: Could not find PlayerController for user", LogLevel.WARNING);
 	        return;
 	    }
-	    
-	    // Get our device RplId
+
 	    RplId deviceRplId = GetDeviceRplId();
 	    if (deviceRplId == RplId.Invalid())
 	    {
@@ -638,10 +622,10 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	        return;
 	    }
 	    
-	    Print(string.Format("TDL_DIALOG: Requesting %1 dialog via PlayerController for device %2", 
+	    Print(string.Format("TDL_DIALOG: Requesting %1 dialog via PlayerController for device %2",
 	        createMode, deviceRplId), LogLevel.DEBUG);
-	    
-	    // Call public method which internally does the RPC to the owning client
+
+	    // Public method internally RPCs to the owning client.
 	    playerController.AskOpenNetworkDialog(deviceRplId, createMode);
 	}
 	
@@ -667,11 +651,9 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
 	protected void RpcDo_SetLocalNetworkMembers(array<ref AG0_TDLNetworkMember> members)
 	{
-	    // Initialize storage if needed
 	    if (!m_LocalNetworkMembers)
 	        m_LocalNetworkMembers = new AG0_TDLNetworkMembers();
-	    
-	    // Clear and repopulate
+
 	    m_LocalNetworkMembers.Clear();
 	    foreach (AG0_TDLNetworkMember member : members)
 	    {
@@ -688,27 +670,24 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	void OnNetworkJoined(int networkID, array<RplId> radioIDs)
 	{
 	    m_iCurrentNetworkID = networkID;
-	    
-	    // Debug logging
+
 	    string ownerName = "UNKNOWN";
 	    if (GetOwner())
 	        ownerName = GetOwner().ToString();
-	    
-	    Print(string.Format("TDL_NETWORK_JOIN: %1 (%2) joined network %3 with %4 members", 
+
+	    Print(string.Format("TDL_NETWORK_JOIN: %1 (%2) joined network %3 with %4 members",
 	        ownerName, GetOwnerPlayerName(), networkID, radioIDs.Count()), LogLevel.DEBUG);
-	    
+
 	    foreach (RplId radioId : radioIDs)
 	    {
 	        Print(string.Format("  Network member RplId: %1", radioId), LogLevel.DEBUG);
 	    }
-	    
-	    // RPC to client with serializable array
+
 	    Rpc(RpcDo_NotifyNetworkJoined, networkID, radioIDs);
 	}
-	
+
 	void OnNetworkLeft()
 	{
-	    // Debug logging
 	    string ownerName = "UNKNOWN";
 	    if (GetOwner())
 	        ownerName = GetOwner().ToString();
@@ -750,13 +729,10 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	void OnNetworkConnectivityUpdated(array<RplId> members)
 	{
 	    m_mConnectedMembers = members;
-	    // Debug logging
 	    string ownerName = "UNKNOWN";
 	    if (GetOwner())
 	        ownerName = GetOwner().ToString();
-	    
-	    //Print(string.Format("TDL_CONNECTIVITY_UPDATE: %1 now connected to %2 members", ownerName, members.Count()), LogLevel.DEBUG);
-	    
+
 	    foreach (RplId memberId : members)
 	    {
 	        Print(string.Format("  Connected to RplId: %1", memberId), LogLevel.DEBUG);
@@ -769,11 +745,9 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	{
 	    if (m_iCurrentNetworkID > 0)
 	    {
-	        //Print(string.Format("AG0_TDLRadioComponent: Network ID updated to %1", m_iCurrentNetworkID), LogLevel.DEBUG);
 	    }
 	    else
 	    {
-	        //Print("AG0_TDLRadioComponent: Not in a network", LogLevel.DEBUG);
 	    }
 	}
 	
@@ -813,10 +787,10 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	AG0_TDLRadioComponent FindRadioInInventory()
 	{
 	    if (!HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS)) return null;
-	    
+
 		AG0_TDLRadioComponent selfRadio = AG0_TDLRadioComponent.Cast(GetOwner().FindComponent(AG0_TDLRadioComponent));
 	    if (selfRadio) return selfRadio;
-		
+
 	    IEntity owner = GetOwner();
 	    SCR_InventoryStorageManagerComponent storage = SCR_InventoryStorageManagerComponent.Cast(owner.FindComponent(SCR_InventoryStorageManagerComponent));
 	    if (!storage) return null;

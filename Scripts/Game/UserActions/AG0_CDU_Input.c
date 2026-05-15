@@ -15,7 +15,6 @@ class AG0_CDU_CryptoAction : ScriptedUserAction
             }
         }
         
-        // Just delegate to the component
         if (m_bIsFill)
             m_CDUComponent.InitiateCryptoFill(pUserEntity);
         else

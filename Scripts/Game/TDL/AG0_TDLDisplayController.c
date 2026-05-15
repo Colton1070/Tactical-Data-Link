@@ -35,11 +35,10 @@ class AG0_TDLDisplayController
     // keyed by marker.GetMarkerID(). Each widget is built from the marker's
     // own SCR_MapMarkerEntryConfig.GetMarkerLayout() so the ATAK presentation
     // matches the vanilla M map exactly (same imagesets, same widget components).
-    // Source: SCR_MapMarkerManagerComponent's static + disabled lists, unioned
-    // (see project memory vanilla_marker_enum — the base game shuffles markers
-    // off m_aStaticMarkers when they leave the M map's visible frame, so the
-    // union is what frees the ATAK from the "open the map and zoom" workaround
-    // that bites the EnhancedNVG tactical overlay).
+    // Source: SCR_MapMarkerManagerComponent's static + disabled lists, unioned —
+    // the base game shuffles markers off m_aStaticMarkers when they leave the
+    // M map's visible frame, so the union is what frees the ATAK from the
+    // "open the map and zoom" workaround.
     //
     // Why ID-keyed instead of SCR_MapMarkerBase-keyed: when the server
     // auto-deletes a marker (e.g. SCR_MapMarkerSyncComponent's
@@ -397,7 +396,6 @@ class AG0_TDLDisplayController
         // Draw map
         m_MapView.Draw();
 
-        // Update markers
         UpdateSelfMapMarker(player);
         UpdateMemberMapMarkers();
         UpdateVanillaMarkers(controller);

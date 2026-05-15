@@ -57,6 +57,26 @@ class AG0_TDLMapView
     protected int m_iMemberMarkerColor = 0xFF00BFFF;    // Blue for network members
     protected int m_iMarkerOutlineColor = 0xFF000000;   // Black outline
     protected int m_iBuildingColor = 0xFF4A4A4A;        // Dark gray for buildings
+
+    //------------------------------------------------------------------------------------------------
+    // BLOODHOUND TOOL STATE
+    //
+    // When enabled, DrawBloodhound() renders a single solid stroke from the
+    // device's world position through the cursor's world position, extended
+    // outward in screen space to the canvas edge. A short perpendicular tick
+    // marks the cursor intersection. Both endpoints are clipped to the canvas
+    // rect so the line draws cleanly even when the device sits off-screen
+    // (e.g. zoomed-in player view with the cursor on the far side of the map).
+    //
+    // Lime/yellow-green is the classic measurement-tool callout in ATAK,
+    // distinct from the cyan map-network UI and the green self-marker so the
+    // measurement line doesn't get confused with own-position elements.
+    protected bool   m_bBloodhoundEnabled;
+    protected vector m_vBloodhoundCursor;
+    protected vector m_vBloodhoundDevice;
+    protected const int   BLOODHOUND_COLOR     = 0xFFC0FF4D; // ARGB lime
+    protected const float BLOODHOUND_WIDTH     = 2.0;
+    protected const float BLOODHOUND_TICK_SIZE = 12.0;       // half-length of the cursor tick, pixels
     
     // Shape label styling
     protected static const float SHAPE_LABEL_SIZE = 10;          // Font size in pixels
@@ -77,7 +97,6 @@ class AG0_TDLMapView
         m_pMapTexture = null;
         m_aDrawCommands = null;
         m_aMarkers = null;
-		// Add to destructor alongside existing cleanup:
     	m_aOverlayTextures = null;
     	m_aOverlayOpacities = null;
     	m_aOverlayNames = null;
@@ -96,28 +115,23 @@ class AG0_TDLMapView
         }
         
         m_wCanvas = canvas;
-        
-        // Get map dimensions from MapEntity
+
         if (!LoadMapData())
         {
             Print("[TDLMapView] Failed to load map data from MapEntity", LogLevel.WARNING);
             return false;
         }
         
-        // Load satellite texture
         if (!LoadMapTexture())
         {
             Print("[TDLMapView] Failed to load map texture", LogLevel.WARNING);
             // Continue anyway - we can still show markers without background
         }
-		
-		// Load overlay layers
+
     	LoadOverlays();
-        
-        // Cache canvas size
+
         m_wCanvas.GetScreenSize(m_fCanvasWidth, m_fCanvasHeight);
-        
-        // Default center to map center
+
         m_vCenterWorld = Vector(
             m_fMapOffsetX + m_fMapSizeX * 0.5,
             0,
@@ -277,7 +291,6 @@ class AG0_TDLMapView
 	// Fallback texture lookup for maps without proper prefab configuration
 	protected ResourceName GetFallbackSatelliteTexture()
 	{
-	    // Use the config helper for clean access
 	    AG0_MapSatelliteConfig config = AG0_MapSatelliteConfigHelper.GetConfig(MAP_SATELLITE_CONFIG);
 	    if (!config)
 	    {
@@ -344,10 +357,8 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     void Pan(float screenDeltaX, float screenDeltaY)
     {
-        // Convert screen delta to world delta based on current zoom
         float worldUnitsPerPixel = GetWorldUnitsPerPixel();
-        
-        // Account for rotation
+
         float rotRad = m_fRotation * Math.DEG2RAD;
         float cosR = Math.Cos(rotRad);
         float sinR = Math.Sin(rotRad);
@@ -357,8 +368,7 @@ class AG0_TDLMapView
         
         m_vCenterWorld[0] = m_vCenterWorld[0] - worldDeltaX;
         m_vCenterWorld[2] = m_vCenterWorld[2] - worldDeltaZ;
-        
-        // Clamp to map bounds
+
         ClampCenterToBounds();
     }
     
@@ -400,25 +410,21 @@ class AG0_TDLMapView
 	// World position to screen position (SCREEN PIXELS for canvas drawing)
 	void WorldToScreen(vector worldPos, out float screenX, out float screenY)
 	{
-	    // Offset from view center
 	    float offsetX = worldPos[0] - m_vCenterWorld[0];
 	    float offsetZ = worldPos[2] - m_vCenterWorld[2];
-	    
+
 	    // Apply rotation (negated to match texture rotation direction)
 	    float rotRad = -m_fRotation * Math.DEG2RAD;
 	    float cosR = Math.Cos(rotRad);
 	    float sinR = Math.Sin(rotRad);
-	    
+
 	    float rotatedX = offsetX * cosR - offsetZ * sinR;
 	    float rotatedZ = offsetX * sinR + offsetZ * cosR;
-	    
+
 	    // Use aspect-corrected view size (same as DrawMapTexture)
 	    float viewWorldSizeX = m_fMapSizeX * m_fZoom;
-	    
-	    // Scale to screen based on zoom and view width (SCREEN PIXELS)
 	    float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
-	    
-	    // Convert to screen coords (center of canvas is center of view)
+
 	    screenX = (m_fCanvasWidth * 0.5) + (rotatedX * pixelsPerWorldUnit);
 	    // Flip Y for screen coordinates
 	    screenY = (m_fCanvasHeight * 0.5) - (rotatedZ * pixelsPerWorldUnit);
@@ -428,11 +434,9 @@ class AG0_TDLMapView
 	// World position to LAYOUT coordinates (for widget positioning)
 	void WorldToLayout(vector worldPos, out float layoutX, out float layoutY)
 	{
-	    // Get screen pixel position first
 	    float screenX, screenY;
 	    WorldToScreen(worldPos, screenX, screenY);
-	    
-	    // Convert to layout coordinates
+
 	    WorkspaceWidget workspace = GetGame().GetWorkspace();
 	    layoutX = workspace.DPIUnscale(screenX);
 	    layoutY = workspace.DPIUnscale(screenY);
@@ -442,7 +446,6 @@ class AG0_TDLMapView
     // Screen position to world position
     void ScreenToWorld(float screenX, float screenY, out vector worldPos)
     {
-        // Convert from screen center
         float canvasCenterX = m_fCanvasWidth * 0.5;
         float canvasCenterY = m_fCanvasHeight * 0.5;
 
@@ -554,10 +557,8 @@ class AG0_TDLMapView
 	    if (m_fCanvasHeight <= 0 || m_fCanvasWidth <= 0)
 	        return;
 
-        // Clear previous commands
         m_aDrawCommands.Clear();
-        
-        // Draw map background
+
         if (m_bTextureLoaded && m_pMapTexture)
             DrawMapTexture();
         else
@@ -595,9 +596,162 @@ class AG0_TDLMapView
 
         // Draw markers (on top)
         DrawMarkers();
-        
+
+        // Bloodhound line — drawn after markers so the range/bearing stroke
+        // sits visibly above terrain features, structures, and member markers.
+        // No-op when the tool is disabled.
+        if (m_bBloodhoundEnabled)
+            DrawBloodhound();
+
+        // Scale bar — last so it always sits on top of every other canvas
+        // element. Screen-space only (does not rotate with track-up), which
+        // matches the standard military/ATAK affordance of "this is a property
+        // of the view, not the map".
+        DrawScaleBar();
+
         // Submit draw commands
         m_wCanvas.SetDrawCommands(m_aDrawCommands);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Push the bloodhound's per-frame state. The frontend computes the cursor
+    //! world position (menu = map center, world-space = ScreenToWorld of the
+    //! device cursor on the MapCanvas) and the device world position (player /
+    //! gadget origin). DrawBloodhound() reads these on the next Draw().
+    void SetBloodhound(bool enabled, vector cursorWorld, vector deviceWorld)
+    {
+        m_bBloodhoundEnabled = enabled;
+        m_vBloodhoundCursor  = cursorWorld;
+        m_vBloodhoundDevice  = deviceWorld;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Project device + cursor to screen, extend from the device through the
+    //! cursor to the canvas edge, and emit the line + endpoint tick.
+    //!
+    //! Why clip in screen space rather than at the world map boundary: the
+    //! canvas edge is what the player can actually see, so terminating there
+    //! gives a "line points off-screen toward the cursor's bearing" affordance
+    //! that's visually unambiguous at every zoom level. Clipping at the world
+    //! map AABB would either get hidden by the edge mask (DrawMapEdgeMask) or
+    //! disappear when the cursor is well inside the visible viewport.
+    protected void DrawBloodhound()
+    {
+        float dx, dy;
+        float cx, cy;
+        WorldToScreen(m_vBloodhoundDevice, dx, dy);
+        WorldToScreen(m_vBloodhoundCursor, cx, cy);
+
+        // Degenerate case — device == cursor (can happen on the menu when the
+        // map is centered exactly on the player and tracking is on). Nothing
+        // meaningful to draw; bail out.
+        float ddx = cx - dx;
+        float ddy = cy - dy;
+        if (Math.AbsFloat(ddx) < 0.5 && Math.AbsFloat(ddy) < 0.5)
+            return;
+
+        // Compute the line's screen-space exit point — extend from the cursor
+        // along (cursor - device) until we hit the canvas rect. Parameterise
+        // as P(t) = cursor + t * (cursor - device) and solve for the smallest
+        // positive t that intersects any of the four canvas edges.
+        float exitX, exitY;
+        ExtendLineToCanvasEdge(cx, cy, ddx, ddy, exitX, exitY);
+
+        // Clip the device-side endpoint to the canvas rect too — when the
+        // player is off-screen (zoomed in past the device's tile), starting
+        // the stroke at dx,dy would draw outside the canvas. CanvasWidget
+        // tolerates this but it costs a stroke segment that's not visible.
+        // Use the same parametric extension in the reverse direction.
+        float startX, startY;
+        ClipDeviceEndpointToCanvas(dx, dy, cx, cy, startX, startY);
+
+        // Main stroke: device → cursor → canvas edge (single segment so the
+        // line looks continuous through the cursor intersection).
+        LineDrawCommand mainLine = new LineDrawCommand();
+        mainLine.m_iColor = BLOODHOUND_COLOR;
+        mainLine.m_fWidth = BLOODHOUND_WIDTH;
+        mainLine.m_Vertices = {startX, startY, exitX, exitY};
+        m_aDrawCommands.Insert(mainLine);
+
+        // Perpendicular tick at the cursor intersection. Normal = (-ddy, ddx)
+        // normalised to BLOODHOUND_TICK_SIZE on each side.
+        float len = Math.Sqrt(ddx * ddx + ddy * ddy);
+        if (len <= 0)
+            return;
+        float nx = -ddy / len;
+        float ny =  ddx / len;
+        float tx0 = cx - nx * BLOODHOUND_TICK_SIZE;
+        float ty0 = cy - ny * BLOODHOUND_TICK_SIZE;
+        float tx1 = cx + nx * BLOODHOUND_TICK_SIZE;
+        float ty1 = cy + ny * BLOODHOUND_TICK_SIZE;
+
+        LineDrawCommand tick = new LineDrawCommand();
+        tick.m_iColor = BLOODHOUND_COLOR;
+        tick.m_fWidth = BLOODHOUND_WIDTH;
+        tick.m_Vertices = {tx0, ty0, tx1, ty1};
+        m_aDrawCommands.Insert(tick);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Extend P(t) = (cx,cy) + t * (dirX,dirY) outward (t >= 0) to the first
+    //! canvas-edge intersection. Returns the intersection point in outX,outY.
+    //! Assumes (dirX,dirY) is non-zero — the caller already guards against
+    //! the degenerate device==cursor case.
+    protected void ExtendLineToCanvasEdge(float cx, float cy, float dirX, float dirY, out float outX, out float outY)
+    {
+        // For each of the four edges, solve for the parametric t and keep the
+        // smallest positive one. A safety upper bound prevents runaway when
+        // the line is nearly parallel to an edge (zero or near-zero divisor).
+        float bestT = 1e9;
+        if (dirX > 0.0001)
+        {
+            float t = (m_fCanvasWidth - cx) / dirX;
+            if (t > 0 && t < bestT) bestT = t;
+        }
+        else if (dirX < -0.0001)
+        {
+            float t = (0 - cx) / dirX;
+            if (t > 0 && t < bestT) bestT = t;
+        }
+        if (dirY > 0.0001)
+        {
+            float t = (m_fCanvasHeight - cy) / dirY;
+            if (t > 0 && t < bestT) bestT = t;
+        }
+        else if (dirY < -0.0001)
+        {
+            float t = (0 - cy) / dirY;
+            if (t > 0 && t < bestT) bestT = t;
+        }
+        // Fallback for pathological cases — clamp to canvas diagonal length.
+        if (bestT >= 1e9)
+            bestT = 2.0;
+        outX = cx + dirX * bestT;
+        outY = cy + dirY * bestT;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! If the device-side endpoint (dx,dy) is inside the canvas, return it as-is.
+    //! Otherwise, walk backwards from the cursor along (device-cursor) until we
+    //! hit the canvas edge — that becomes the new start. Symmetric to
+    //! ExtendLineToCanvasEdge but in the opposite direction.
+    protected void ClipDeviceEndpointToCanvas(float dx, float dy, float cx, float cy, out float outX, out float outY)
+    {
+        if (dx >= 0 && dx <= m_fCanvasWidth && dy >= 0 && dy <= m_fCanvasHeight)
+        {
+            outX = dx;
+            outY = dy;
+            return;
+        }
+        float rdx = dx - cx;
+        float rdy = dy - cy;
+        if (Math.AbsFloat(rdx) < 0.5 && Math.AbsFloat(rdy) < 0.5)
+        {
+            outX = cx;
+            outY = cy;
+            return;
+        }
+        ExtendLineToCanvasEdge(cx, cy, rdx, rdy, outX, outY);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1020,7 +1174,12 @@ class AG0_TDLMapView
 	        float halfL = rec.m_fDepth * 0.5 * pixelsPerWorldUnit;
 
 	        // Skip sub-pixel buildings — keeps the canvas readable when zoomed out.
-	        if (halfW < 1 && halfL < 1)
+	        // Use OR (not AND): a building with one axis sub-pixel is a colinear
+	        // strip after rotation, which trips the engine's polygon triangulator
+	        // ("DrawPolygon triangulation failed" log spam every frame, FPS hit).
+	        // Tradeoff is invisible-at-zoom-out buildings cull a frame earlier; they
+	        // weren't readable at that scale anyway.
+	        if (halfW < 1 || halfL < 1)
 	            continue;
 
 	        // Total rotation: see comment above for the negation rationale.
@@ -1347,19 +1506,33 @@ class AG0_TDLMapView
 		int rawCount = shape.m_aVertices.Count();
 		if (rawCount < 4)
 			return; // Need at least 2 vertex pairs
-		
-		// Convert world vertices → screen
+
 		array<float> screenVerts = {};
+		float minX = float.MAX, minY = float.MAX;
+		float maxX = -float.MAX, maxY = -float.MAX;
 		for (int i = 0; i + 1 < rawCount; i += 2)
 		{
 			float sx, sy;
 			WorldToScreen(Vector(shape.m_aVertices[i], 0, shape.m_aVertices[i + 1]), sx, sy);
 			screenVerts.Insert(sx);
 			screenVerts.Insert(sy);
+			if (sx < minX) minX = sx;
+			if (sy < minY) minY = sy;
+			if (sx > maxX) maxX = sx;
+			if (sy > maxY) maxY = sy;
 		}
-		
-		// Fill (need 3+ vertices = 6+ floats for a meaningful polygon)
-		if (shape.m_iFillColor != 0 && screenVerts.Count() >= 6)
+
+		// Fill (need 3+ vertices = 6+ floats for a meaningful polygon).
+		// Also skip when the projected polygon collapses below ~1 pixel in either
+		// axis at the current zoom — at that point the vertices are effectively
+		// colinear in screen space and the engine's triangulator fails with
+		// "DrawPolygon triangulation failed, is the polygon degenerated?" spam.
+		// Threshold of 2 px gives a small safety margin; at this scale the fill
+		// would be invisible anyway, so dropping it costs nothing visually but
+		// stops the per-frame error log (which itself was costing FPS).
+		float spanX = maxX - minX;
+		float spanY = maxY - minY;
+		if (shape.m_iFillColor != 0 && screenVerts.Count() >= 6 && spanX >= 2.0 && spanY >= 2.0)
 		{
 			PolygonDrawCommand fill = new PolygonDrawCommand();
 			fill.m_iColor = shape.m_iFillColor;
@@ -1386,8 +1559,7 @@ class AG0_TDLMapView
 		int rawCount = shape.m_aVertices.Count();
 		if (rawCount < 4)
 			return;
-		
-		// Convert world vertices → screen
+
 		array<float> screenVerts = {};
 		for (int i = 0; i + 1 < rawCount; i += 2)
 		{
@@ -1396,7 +1568,7 @@ class AG0_TDLMapView
 			screenVerts.Insert(sx);
 			screenVerts.Insert(sy);
 		}
-		
+
 		// Route line — open (not closed)
 		DrawOpenStroke(screenVerts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
 		
@@ -1545,7 +1717,220 @@ class AG0_TDLMapView
 		cmd.m_fSize = fontSize;
 		m_aDrawCommands.Insert(cmd);
 	}
-	
+
+	// -----------------------------------------------------------------------
+	// SCALE BAR
+	// -----------------------------------------------------------------------
+	//
+	// Renders a dynamic distance scale in the bottom-left of the canvas. The
+	// bar length is chosen from a 1-2-5 sequence so the label is always a
+	// round number (200m, 500m, 1km, 2km, 5km, ...) regardless of zoom.
+	//
+	// Style: classic military/ATAK alternating black/white 4-segment bar with
+	// end ticks and a label below, on a semi-transparent dark backdrop so it
+	// stays legible over both bright satellite imagery and dark terrain.
+	//
+	// Screen-space — does not rotate with track-up mode. The bar represents
+	// pixels-on-screen-to-meters-on-the-ground, which is invariant under
+	// rotation but changes with zoom; matches what every paper map / nav
+	// system does and what operators expect.
+	//------------------------------------------------------------------------------------------------
+	protected void DrawScaleBar()
+	{
+		// Guard against the first frame before LoadMapData() populated the
+		// map extent, or a canvas that hasn't been laid out yet.
+		if (m_fMapSizeX <= 0 || m_fZoom <= 0 || m_fCanvasWidth <= 0 || m_fCanvasHeight <= 0)
+			return;
+
+		float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
+		if (pixelsPerWorldUnit <= 0)
+			return;
+
+		// Target on-screen length. ~225 px reads cleanly without crowding
+		// the ZoomControls (anchored left-center) or the SelfPanel (anchored
+		// bottom-right). The nice-number step will push the actual width up
+		// or down from here, so this is just the seed.
+		const float TARGET_PIXELS = 225.0;
+		float targetMeters = TARGET_PIXELS / pixelsPerWorldUnit;
+
+		float niceMeters = PickNiceScaleMeters(targetMeters);
+		float barPixels = niceMeters * pixelsPerWorldUnit;
+
+		// Position — anchored to bottom-left of the canvas. Left margin is
+		// pushed well inside the canvas so the bar clears the edge and any
+		// nearby UI cleanly; bottom margin sits 90px up for safe clearance
+		// from the canvas bottom edge / toolbar. Bar/label dimensions are
+		// 1.5x the original so it reads well from a normal seated distance.
+		const float MARGIN_LEFT = 120.0;
+		const float MARGIN_BOTTOM = 90.0;
+		const float BAR_HEIGHT = 12.0;
+		const float TICK_EXTRA = 6.0;     // end-tick extension above + below the bar
+		const float LABEL_GAP = 9.0;
+		const float LABEL_SIZE = 18.0;
+		const float LABEL_CHAR_WIDTH = 10.5; // rough px/char at LABEL_SIZE for backdrop width
+
+		float x0 = MARGIN_LEFT;
+		float y0 = m_fCanvasHeight - MARGIN_BOTTOM;
+		float x1 = x0 + barPixels;
+		float y1 = y0 + BAR_HEIGHT;
+
+		string label = FormatScaleLabel(niceMeters);
+		float labelTextW = label.Length() * LABEL_CHAR_WIDTH;
+
+		// Backdrop pill — wide enough to cover the bar AND the label, with a
+		// little padding so neither runs to the edge of the dark fill. Uses
+		// the same SHAPE_LABEL_BG_COLOR pattern as DrawTextLabel above.
+		const float BG_PAD_X = 12.0;
+		const float BG_PAD_TOP = 9.0;
+		const float BG_PAD_BOTTOM = 9.0;
+		float bgRight;
+		float barRightWithTick = x1 + BG_PAD_X;
+		float labelRightWithPad = x0 + labelTextW + BG_PAD_X;
+		if (barRightWithTick > labelRightWithPad)
+			bgRight = barRightWithTick;
+		else
+			bgRight = labelRightWithPad;
+
+		PolygonDrawCommand bg = new PolygonDrawCommand();
+		bg.m_iColor = SHAPE_LABEL_BG_COLOR;
+		bg.m_Vertices = {
+			x0 - BG_PAD_X, y0 - TICK_EXTRA - BG_PAD_TOP,
+			bgRight,        y0 - TICK_EXTRA - BG_PAD_TOP,
+			bgRight,        y1 + TICK_EXTRA + LABEL_GAP + LABEL_SIZE + BG_PAD_BOTTOM,
+			x0 - BG_PAD_X, y1 + TICK_EXTRA + LABEL_GAP + LABEL_SIZE + BG_PAD_BOTTOM
+		};
+		m_aDrawCommands.Insert(bg);
+
+		// 4 alternating black/white segments.
+		const int SEGMENTS = 4;
+		int black = 0xFF000000;
+		int white = 0xFFFFFFFF;
+		float segWidth = barPixels / SEGMENTS;
+		for (int i = 0; i < SEGMENTS; i = i + 1)
+		{
+			int segColor;
+			if (i % 2 == 0)
+				segColor = black;
+			else
+				segColor = white;
+
+			float sx0 = x0 + (i * segWidth);
+			float sx1 = sx0 + segWidth;
+
+			PolygonDrawCommand seg = new PolygonDrawCommand();
+			seg.m_iColor = segColor;
+			seg.m_Vertices = {
+				sx0, y0,
+				sx1, y0,
+				sx1, y1,
+				sx0, y1
+			};
+			m_aDrawCommands.Insert(seg);
+		}
+
+		// Bar outline (top + bottom) — gives the white segments a defined
+		// border against the dark backdrop.
+		LineDrawCommand topEdge = new LineDrawCommand();
+		topEdge.m_iColor = white;
+		topEdge.m_fWidth = 1;
+		topEdge.m_Vertices = {x0, y0, x1, y0};
+		m_aDrawCommands.Insert(topEdge);
+
+		LineDrawCommand botEdge = new LineDrawCommand();
+		botEdge.m_iColor = white;
+		botEdge.m_fWidth = 1;
+		botEdge.m_Vertices = {x0, y1, x1, y1};
+		m_aDrawCommands.Insert(botEdge);
+
+		// End ticks — vertical strokes at both ends of the bar.
+		LineDrawCommand leftTick = new LineDrawCommand();
+		leftTick.m_iColor = white;
+		leftTick.m_fWidth = 1;
+		leftTick.m_Vertices = {x0, y0 - TICK_EXTRA, x0, y1 + TICK_EXTRA};
+		m_aDrawCommands.Insert(leftTick);
+
+		LineDrawCommand rightTick = new LineDrawCommand();
+		rightTick.m_iColor = white;
+		rightTick.m_fWidth = 1;
+		rightTick.m_Vertices = {x1, y0 - TICK_EXTRA, x1, y1 + TICK_EXTRA};
+		m_aDrawCommands.Insert(rightTick);
+
+		// Label — below the bar, left-aligned with the bar's left edge.
+		TextDrawCommand text = new TextDrawCommand();
+		text.m_sText = label;
+		text.m_Position = Vector(x0, y1 + TICK_EXTRA + LABEL_GAP, 0);
+		text.m_Pivot = Vector(0, 0, 0);
+		text.m_iColor = 0xFFFFFFFF;
+		text.m_fSize = LABEL_SIZE;
+		m_aDrawCommands.Insert(text);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Round `targetMeters` to the NEAREST value in the 1-2-5 * 10^n sequence.
+	//! Returns a round number so the scale label is always something like
+	//! "500m" or "2km", never "473m".
+	//!
+	//! Why nearest-rounding and not floor: with floor, a target of ~900m
+	//! lands on "500m" even though km of terrain is plainly visible on the
+	//! canvas — looks wrong. Nearest-rounding lets values past the 7.5×
+	//! mantissa threshold roll into the next decade (so target 900m → 1km,
+	//! target 8km → 10km), matching the standard cartographic convention
+	//! used on paper military maps and in ATAK.
+	//!
+	//! Magnitude is found by walking powers of 10 rather than Math.Log10
+	//! to sidestep version-to-version variance in the engine's math lib
+	//! and avoid floating-point edge cases at decade boundaries.
+	protected float PickNiceScaleMeters(float targetMeters)
+	{
+		if (targetMeters <= 1)
+			return 1;
+
+		// Largest power of 10 not exceeding the target. Capped at 1e6 m
+		// (1000 km) — far beyond any realistic Arma map.
+		float magnitude = 1.0;
+		int safety = 0;
+		while (magnitude * 10 <= targetMeters && safety < 7)
+		{
+			magnitude = magnitude * 10;
+			safety = safety + 1;
+		}
+
+		// Mantissa in [1, 10). Standard 1-2-5-10 nearest-rounding bands —
+		// each threshold is the geometric midpoint of adjacent nice values
+		// (sqrt(1*2)≈1.41, sqrt(2*5)≈3.16, sqrt(5*10)≈7.07), rounded to
+		// readable cut-offs (1.5 / 3.5 / 7.5) so the behavior is obvious
+		// at a glance.
+		float mantissa = targetMeters / magnitude;
+		float nice;
+		if (mantissa < 1.5)
+			nice = 1.0;
+		else if (mantissa < 3.5)
+			nice = 2.0;
+		else if (mantissa < 7.5)
+			nice = 5.0;
+		else
+			nice = 10.0;
+
+		return nice * magnitude;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Format a scale value for display. Switches to km at 1000m. All values
+	//! we emit come from PickNiceScaleMeters's 1-2-5 sequence, so both the
+	//! meter and kilometre branches always print whole numbers — no decimals
+	//! to worry about. Matches the no-space "500m"/"1km" convention used by
+	//! the shape ring distance labels above.
+	protected string FormatScaleLabel(float meters)
+	{
+		if (meters >= 1000)
+		{
+			int km = Math.Floor(meters / 1000);
+			return string.Format("%1km", km);
+		}
+		int m = Math.Floor(meters);
+		return string.Format("%1m", m);
+	}
+
 	// -----------------------------------------------------------------------
 	// STROKE HELPERS
 	// -----------------------------------------------------------------------
@@ -1605,7 +1990,6 @@ class AG0_TDLMapView
             float screenX, screenY;
             WorldToScreen(marker.m_vWorldPos, screenX, screenY);
 
-            // Skip if outside canvas
             if (screenX < -20 || screenX > m_fCanvasWidth + 20 ||
                 screenY < -20 || screenY > m_fCanvasHeight + 20)
                 continue;
@@ -1647,7 +2031,6 @@ class AG0_TDLMapView
 	//------------------------------------------------------------------------------------------------
 	protected void DrawGridLines(float minX, float maxX, float minZ, float maxZ, float spacing, int color, float width)
 	{
-	    // Snap bounds to grid
 	    float startX = Math.Floor(minX / spacing) * spacing;
 	    float startZ = Math.Floor(minZ / spacing) * spacing;
 	    
@@ -1684,8 +2067,7 @@ class AG0_TDLMapView
     protected void DrawMarker(AG0_TDLMapMarker marker, float screenX, float screenY)
     {
         float size = marker.m_fSize;
-        
-        // Draw outline
+
         PolygonDrawCommand outline = new PolygonDrawCommand();
         outline.m_iColor = m_iMarkerOutlineColor;
         
@@ -1693,17 +2075,15 @@ class AG0_TDLMapView
         TessellateCircle(screenX, screenY, size + 2, 8, outlineVerts);
         outline.m_Vertices = outlineVerts;
         m_aDrawCommands.Insert(outline);
-        
-        // Draw filled circle
+
         PolygonDrawCommand fill = new PolygonDrawCommand();
         fill.m_iColor = marker.m_iColor;
-        
+
         array<float> fillVerts = {};
         TessellateCircle(screenX, screenY, size, 8, fillVerts);
         fill.m_Vertices = fillVerts;
         m_aDrawCommands.Insert(fill);
-        
-        // Draw heading indicator if applicable
+
         if (marker.m_bShowHeading)
         {
             DrawHeadingIndicator(screenX, screenY, marker.m_fHeading, size, marker.m_iColor);
@@ -1713,7 +2093,6 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     protected void DrawHeadingIndicator(float x, float y, float heading, float size, int color)
     {
-        // Arrow pointing in heading direction
         float rotRad = (heading + m_fRotation) * Math.DEG2RAD;
         float length = size * 2;
         

@@ -32,7 +32,6 @@ class AG0_TDL_NetworkNameDialog : SCR_ConfigurableDialogUi
         
         if (m_InputField)
         {
-            // Focus the component's root widget and activate write mode
             Widget inputWidget = m_InputField.GetRootWidget();
             if (inputWidget)
             {
@@ -58,7 +57,6 @@ class AG0_TDL_NetworkNameDialog : SCR_ConfigurableDialogUi
             m_EditBox = EditBoxWidget.Cast(m_wRoot.FindAnyWidget("NetworkNameInput"));
             if (!m_EditBox)
             {
-                // Try nested structure
                 Widget wrapper = m_wRoot.FindAnyWidget("NetworkNameInput");
                 if (wrapper)
                     m_EditBox = EditBoxWidget.Cast(wrapper.FindAnyWidget("EditBox"));
@@ -130,7 +128,6 @@ class AG0_TDL_NetworkPasswordDialog : SCR_ConfigurableDialogUi
         
         if (m_InputField)
         {
-            // Focus the component's root widget and activate write mode
             Widget inputWidget = m_InputField.GetRootWidget();
             if (inputWidget)
             {
@@ -156,7 +153,6 @@ class AG0_TDL_NetworkPasswordDialog : SCR_ConfigurableDialogUi
             m_EditBox = EditBoxWidget.Cast(m_wRoot.FindAnyWidget("NetworkPasswordInput"));
             if (!m_EditBox)
             {
-                // Try nested structure
                 Widget wrapper = m_wRoot.FindAnyWidget("NetworkPasswordInput");
                 if (wrapper)
                     m_EditBox = EditBoxWidget.Cast(wrapper.FindAnyWidget("EditBox"));

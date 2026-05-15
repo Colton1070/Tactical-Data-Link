@@ -44,6 +44,29 @@ class AG0_TDLMarkerToolPanel
     protected static const int TYPE_INDEX_PLACED   = 0;
     protected static const int TYPE_INDEX_MILITARY = 1;
 
+    // ============================================
+    // CROSS-FRONTEND CONFIG STATICS
+    //
+    // The marker tool panel lives once per AG0_TDLMenuController instance —
+    // one for the fullscreen menu, one for the world-space display. Their
+    // spinbox widgets are independent. To make "configure in menu, then
+    // place from world-space" work, we mirror every user-driven selection
+    // into class-level statics; OnPanelShown applies them back onto the
+    // local widgets so each panel re-enters with the most-recent picks.
+    //
+    // Sentinel value -1 = "no saved selection yet, use the spinbox default".
+    // Edit-box text statics start as empty strings.
+    // ============================================
+    static protected int    s_iLastType            = -1;
+    static protected int    s_iLastPlacedIcon      = -1;
+    static protected int    s_iLastPlacedColor     = -1;
+    static protected string s_sLastPlacedText      = "";
+    static protected int    s_iLastMilFaction      = -1;
+    static protected int    s_iLastMilDimension    = -1;
+    static protected int    s_iLastMilCombo1       = -1;
+    static protected int    s_iLastMilCombo2       = -1;
+    static protected string s_sLastMilText         = "";
+
     //------------------------------------------------------------------------------------------------
     // ROOT WIDGETS
     //------------------------------------------------------------------------------------------------
@@ -220,12 +243,65 @@ class AG0_TDLMarkerToolPanel
         // the panel — markers may have been added/removed by other paths
         // (other players' deletions, API edits, etc.) since we last showed.
         RefreshMarkerList();
+
+        // Restore cross-frontend selection from statics. Must run after the
+        // sub-form spawns above so the spinboxes have their item lists in
+        // place — SetCurrentItem on an empty spinbox is a no-op.
+        ApplyPersistedState();
     }
 
     //------------------------------------------------------------------------------------------------
-    //! Called when panel is hidden — v1 keeps state alive, no-op.
+    //! Called when panel is hidden. Capture edit-box text into the cross-
+    //! frontend statics so the other frontend's panel re-enters with the
+    //! same custom-text values. Spinbox indices are already captured in
+    //! their own m_OnChanged handlers; only the edit boxes need this
+    //! catch-on-hide path since SCR_EditBoxComponent doesn't have a
+    //! per-keystroke invoker we subscribe to.
     void OnPanelHidden()
     {
+        CapturePersistedText();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Apply remembered spinbox / edit-box state from the cross-frontend
+    //! statics. Sentinel -1 = "no saved value yet, leave the spinbox on its
+    //! default". Order matters: type spinbox first so its section-visibility
+    //! handler runs before we touch sub-section selectors that depend on
+    //! the active section being shown.
+    protected void ApplyPersistedState()
+    {
+        if (m_TypeSpinBox && s_iLastType != -1)
+            m_TypeSpinBox.SetCurrentItem(s_iLastType);
+
+        if (m_PlacedIconSpinBox && s_iLastPlacedIcon != -1)
+            m_PlacedIconSpinBox.SetCurrentItem(s_iLastPlacedIcon);
+        if (m_PlacedColorSpinBox && s_iLastPlacedColor != -1)
+            m_PlacedColorSpinBox.SetCurrentItem(s_iLastPlacedColor);
+        if (m_PlacedEditBox && !s_sLastPlacedText.IsEmpty())
+            m_PlacedEditBox.SetValue(s_sLastPlacedText);
+
+        if (m_MilFactionSpinBox && s_iLastMilFaction != -1)
+            m_MilFactionSpinBox.SetCurrentItem(s_iLastMilFaction);
+        if (m_MilDimensionSpinBox && s_iLastMilDimension != -1)
+            m_MilDimensionSpinBox.SetCurrentItem(s_iLastMilDimension);
+        if (m_MilCombo1 && s_iLastMilCombo1 != -1)
+            m_MilCombo1.SetCurrentItem(s_iLastMilCombo1);
+        if (m_MilCombo2 && s_iLastMilCombo2 != -1)
+            m_MilCombo2.SetCurrentItem(s_iLastMilCombo2);
+        if (m_MilEditBox && !s_sLastMilText.IsEmpty())
+            m_MilEditBox.SetValue(s_sLastMilText);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Snapshot the live edit-box values into the cross-frontend statics.
+    //! Called on panel hide and just before placing a marker (so place-then-
+    //! switch carries the text the user actually placed with).
+    protected void CapturePersistedText()
+    {
+        if (m_PlacedEditBox)
+            s_sLastPlacedText = m_PlacedEditBox.GetValue();
+        if (m_MilEditBox)
+            s_sLastMilText = m_MilEditBox.GetValue();
     }
 
     //------------------------------------------------------------------------------------------------
@@ -893,6 +969,9 @@ class AG0_TDLMarkerToolPanel
             m_wPlacedSection.SetVisible(index == TYPE_INDEX_PLACED);
         if (m_wMilitarySection)
             m_wMilitarySection.SetVisible(index == TYPE_INDEX_MILITARY);
+
+        // Mirror to static for cross-frontend persistence.
+        s_iLastType = index;
     }
 
     //------------------------------------------------------------------------------------------------
@@ -906,6 +985,14 @@ class AG0_TDLMarkerToolPanel
     protected void OnPlacedIconChanged()
     {
         UpdatePlacedPreview();
+
+        // Mirror to statics — both icon and color update through this same
+        // handler (the placed preview reflects both together), so capture
+        // both indices regardless of which spinbox changed.
+        if (m_PlacedIconSpinBox)
+            s_iLastPlacedIcon = m_PlacedIconSpinBox.GetCurrentIndex();
+        if (m_PlacedColorSpinBox)
+            s_iLastPlacedColor = m_PlacedColorSpinBox.GetCurrentIndex();
     }
 
     //------------------------------------------------------------------------------------------------
@@ -965,6 +1052,18 @@ class AG0_TDLMarkerToolPanel
     protected void OnMilitarySelectorChanged()
     {
         UpdateMilitaryPreview();
+
+        // Mirror to statics. All four military selectors share this handler
+        // so we capture the lot at once — cheap, and keeps the statics in
+        // a consistent snapshot regardless of which one changed.
+        if (m_MilFactionSpinBox)
+            s_iLastMilFaction = m_MilFactionSpinBox.GetCurrentIndex();
+        if (m_MilDimensionSpinBox)
+            s_iLastMilDimension = m_MilDimensionSpinBox.GetCurrentIndex();
+        if (m_MilCombo1)
+            s_iLastMilCombo1 = m_MilCombo1.GetCurrentIndex();
+        if (m_MilCombo2)
+            s_iLastMilCombo2 = m_MilCombo2.GetCurrentIndex();
     }
 
     //------------------------------------------------------------------------------------------------
@@ -983,6 +1082,10 @@ class AG0_TDLMarkerToolPanel
 
         marker.SetWorldPos((int)worldPos[0], (int)worldPos[2]);
         markerMgr.InsertStaticMarker(marker, isLocal);
+
+        // Snapshot edit-box text into cross-frontend statics so a follow-up
+        // place from the other frontend defaults to the same custom label.
+        CapturePersistedText();
 
         // The newly-placed marker is owned by us, so refresh the scroll list
         // so the player can see (and delete) the entry without re-opening the

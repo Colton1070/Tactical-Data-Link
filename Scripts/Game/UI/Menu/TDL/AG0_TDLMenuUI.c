@@ -33,19 +33,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     // ============================================
     // MENU-ONLY STATE (interaction, not display)
     // ============================================
-    // Shared menu controller — owns panel state machine and navigation handlers.
+    // Shared menu controller — owns panel state machine, navigation handlers,
+    // and (post Phase 2 refactor) plugin lifecycle, chat infra, callsign save,
+    // camera broadcast toggle, and marker tool panel. The menu pushes device
+    // refs onto it and drives Tick from OnMenuUpdate.
     protected ref AG0_TDLMenuController m_MenuController;
     protected ref AG0_TDLMapCanvasDragHandler m_DragHandler;
-    protected ref array<ref AG0_ATAKPluginBase> m_aActivePlugins = {};
-
-    // Plugin toolbar buttons — spawned dynamically into m_wToolbar from active
-    // plugins that return ProvidesToolbarTool() == true. Each button has a
-    // dedicated AG0_PluginButtonClickRelay that captures the plugin + menu
-    // root and exposes a zero-arg OnClick() bound to m_OnClicked (untyped
-    // ScriptInvoker, so the invoker can't pass a sender of its own).
-    protected ref array<Widget> m_aPluginToolbarButtons = {};
-    protected ref array<ref AG0_PluginButtonClickRelay> m_aPluginClickRelays = {};
-    protected const ResourceName PLUGIN_TOOLBAR_BUTTON_LAYOUT = "{7DEC0DEDA7AB1E01}UI/layouts/Menus/TDL/PluginToolbarButton.layout";
     
     // Core references
     protected AG0_TDLDeviceComponent m_ActiveDevice;
@@ -73,45 +66,20 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected Widget m_wViewLocationButton;
     protected Widget m_wBackButton;
     
-    // Settings content widgets
+    // SettingsBackButton kept for gamepad-fallback focus only; the real
+    // CallsignSaveButton + CallsignEditBox now cached on the controller.
     protected Widget m_wSettingsButton;
-    protected Widget m_wCallsignEditBoxRoot;
-    protected ref AG0_EditBoxComponent m_CallsignEditBox;
-    protected Widget m_wCallsignSaveButton;
     protected Widget m_wSettingsBackButton;
 
-    // Marker tool — side-tray panel + activation button. Panel content widgets
-    // (type picker, subtype area, colour row, text field, place button) are
-    // owned by AG0_TDLMarkerToolPanel and looked up off m_wMarkerToolContent
-    // when the controller is constructed. Lookups tolerate a missing layout
-    // section so the script compiles + runs even before the layout is authored.
-    protected Widget m_wMarkerToolContent;
-    protected Widget m_wMarkerToolButton;
+    // Marker tool widgets / panel instance / crosshair — all moved to
+    // AG0_TDLMenuController. Menu only needs m_wMarkerToolBackButton for
+    // gamepad-fallback focus.
     protected Widget m_wMarkerToolBackButton;
-    protected Widget m_wMarkerToolPlaceButton;
-    protected ref AG0_TDLMarkerToolPanel m_MarkerToolPanel;
-
-    // Crosshair shown at the centre of the map view while the marker tool
-    // panel is active. Pairs with mapView.GetCenter() being the place-position
-    // for both gamepad (TDLPlaceMarker action) and KB+M (the panel-level Place
-    // button) — both place at canvas centre, so a visible centre marker helps
-    // both modes line up the placement. Direct map-clicks place at the cursor
-    // (not centre), so the crosshair is just informational, not authoritative.
-    //
-    // Note on gamepad-only gating: we tried branching on
-    // ArmaReforgerScripted.OnInputDeviceIsGamepadInvoker, but it only fires on
-    // *changes* between KB+M and pad — meaning the cached value stays at its
-    // (potentially wrong) default until the player flips devices. The public
-    // API has no synchronous "is currently using gamepad" getter, so rather
-    // than ship a feature that's invisible to most players on first open, we
-    // show the crosshair unconditionally while MARKER_TOOL is the active panel.
-    protected Widget m_wMarkerCrosshair;
     
     // Toolbar widgets
-    protected Widget m_wToolbar;
-    protected Widget m_wMenuButton;
+    // m_wToolbar / m_wMenuButton / m_wCameraButton cached on controller —
+    // menu still needs m_wNetworkButton for gamepad initial-focus.
     protected Widget m_wNetworkButton;
-    protected Widget m_wCameraButton;
     
     // Zoom/compass controls - menu handles button clicks
     protected Widget m_wZoomInButton;
@@ -122,9 +90,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     // Member selection lives on m_MenuController.
 
 
-    // State tracking for card handlers
+    // Gamepad focused-card index — tracked via controller's m_OnMemberCardFocused
+    // subscription so SetPanelFocus(NETWORK_LIST) can restore the last focused
+    // card after navigating away and back. m_iLastCardCount moved to controller.
     protected int m_iFocusedCardIndex = -1;
-    protected int m_iLastCardCount = 0;
     
     // Gamepad map pan settings
     // Top speed at full stick deflection — pixels/second of pan in screen space.
@@ -155,45 +124,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected float m_fFeedAttachTimer;
     protected const float FEED_ATTACH_TIMEOUT = 5.0;
 	
-	// Chat panel widgets
-	protected Widget m_wViewChatButton;
-	protected Widget m_wChatContent;
-	protected TextWidget m_wChatContactName;
-	protected ScrollLayoutWidget m_wChatScrollLayout;
-	protected Widget m_wChatMessageList;
-	protected Widget m_wChatEditBoxRoot;
-	protected ref AG0_EditBoxComponent m_ChatEditBox;
-	protected Widget m_wChatSendButton;
-	
-	// Chat state
-	// Chat contact state lives on m_MenuController; query via GetChatContactRplId()/GetChatContactName().
-	protected ref array<Widget> m_aChatMessageWidgets = {};
-	// Parallel arrays per chat message card. Indexed in lockstep with m_aChatMessageWidgets.
-	// All four are cleared together in ClearChatMessages.
-	//   * m_aChatMessageRenderers[i] — non-null iff the image at index i has been drawn.
-	//                                  Text messages and not-yet-drawn images: null.
-	//   * m_aChatMessageDeliveryIds[i] — image-message's deliveryId for cache lookup;
-	//                                    "" for text messages.
-	//   * m_aChatMessageImageCanvases[i] — the ImageCanvas widget on the card; null for
-	//                                      text messages.
-	// On every OnMenuUpdate tick we walk these arrays and, for each entry where the
-	// renderer is null but the deliveryId resolves to a cached photo, render the image
-	// in-place. This bypasses the OnDecodedPhotoArrived invoker chain (which doesn't
-	// reach the menu in MP) and avoids full PopulateChatView repaints.
-	protected ref array<ref AG0_TDLPhotoRenderer> m_aChatMessageRenderers = {};
-	protected ref array<string>                   m_aChatMessageDeliveryIds = {};
-	protected ref array<CanvasWidget>             m_aChatMessageImageCanvases = {};
-	protected bool m_bScrollToBottom = false;
-
-	// Periodic image-canvas refresh accumulator. Image canvases lose their draw commands
-	// after several minutes of idle time (engine-side cleanup of CanvasWidgetCommand
-	// arrays — symptom is blank canvases on otherwise-still-alive image-messages).
-	// We re-Draw() each renderer every IMAGE_REDRAW_INTERVAL seconds; the commands
-	// rebuild from the live m_PhotoData and get re-set on the canvas.
-	protected float m_fImageRedrawAccum = 0;
-	protected const float IMAGE_REDRAW_INTERVAL = 30.0;
-	
-	protected const ResourceName MESSAGE_CARD_LAYOUT = "{2507AC45B21BBC57}UI/layouts/Menus/TDL/TDLMessageUI.layout";
+	// Chat panel widgets / state / image-card rendering / MESSAGE_CARD_LAYOUT
+	// — all moved to AG0_TDLMenuController. The menu's only remaining link
+	// is the OpenDirectChat wrapper that AG0_TDLDetailButtonHandler still
+	// calls into by name.
     
     protected const ResourceName FEED_CAMERA_PREFAB = "{F3CDC6E4F329E496}Prefabs/Characters/Core/TDLDevicePlayerCamera.et";
     
@@ -202,8 +136,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     {
         m_wRoot = GetRootWidget();
         m_InputManager = GetGame().GetInputManager();
-        
-        // Setup drag handler for map pan
+
         Widget dragSurface = m_wRoot.FindAnyWidget("MapDragSurface");
         if (dragSurface)
         {
@@ -211,7 +144,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             m_DragHandler = new AG0_TDLMapCanvasDragHandler();
             dragSurface.AddHandler(m_DragHandler);
             m_DragHandler.m_OnDragStart.Insert(OnMapDragStart);
-            m_DragHandler.m_OnClick.Insert(OnMapClicked);
+            // Route map clicks to the controller — marker placement (KBM)
+            // is shared between frontends.
+            m_DragHandler.m_OnClick.Insert(OnMapClickedDelegated);
         }
         
         // Side panel structure
@@ -234,30 +169,20 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         m_wViewLocationButton = m_wRoot.FindAnyWidget("ViewLocationButton");
         m_wBackButton = m_wRoot.FindAnyWidget("BackButton");
         
-        // Settings widgets
+        // Callsign / SettingsButton + CallsignSaveButton widgets cached by
+        // AG0_TDLMenuController.Init. Menu still caches SettingsBackButton
+        // for gamepad-fallback focus when the edit box isn't reachable.
         m_wSettingsButton = m_wRoot.FindAnyWidget("SettingsButton");
-        m_wCallsignEditBoxRoot = m_wRoot.FindAnyWidget("CallsignEditBox");
-        if (m_wCallsignEditBoxRoot)
-            m_CallsignEditBox = AG0_EditBoxComponent.FindComponent(m_wCallsignEditBoxRoot);
-        m_wCallsignSaveButton = m_wRoot.FindAnyWidget("CallsignSaveButton");
         m_wSettingsBackButton = m_wRoot.FindAnyWidget("SettingsBackButton");
 
-        // Marker tool widgets — null-tolerant lookup so the script runs cleanly
-        // even before the layout section exists. Activation button lives in the
-        // toolbar/side-panel button row alongside MenuButton/NetworkButton/etc.
-        m_wMarkerToolContent = m_wRoot.FindAnyWidget("MarkerToolContent");
-        m_wMarkerToolButton = m_wRoot.FindAnyWidget("MarkerToolButton");
+        // Marker tool widgets cached by AG0_TDLMenuController.Init (which
+        // also constructs the AG0_TDLMarkerToolPanel instance). Menu still
+        // caches MarkerToolBackButton for gamepad-fallback focus.
         m_wMarkerToolBackButton = m_wRoot.FindAnyWidget("MarkerToolBackButton");
-        m_wMarkerToolPlaceButton = m_wRoot.FindAnyWidget("MarkerToolPlaceButton");
-        m_wMarkerCrosshair = m_wRoot.FindAnyWidget("MarkerCrosshair");
-        if (!m_wMarkerCrosshair)
-            Print("[TDLMenu] MarkerCrosshair widget not found in layout — crosshair will not appear", LogLevel.WARNING);
         
-        // Toolbar widgets
-        m_wToolbar = m_wRoot.FindAnyWidget("Toolbar");
-        m_wMenuButton = m_wRoot.FindAnyWidget("MenuButton");
+        // Toolbar widgets — most cached by controller. Menu only needs
+        // NetworkButton for its OnMenuOpen initial-focus call below.
         m_wNetworkButton = m_wRoot.FindAnyWidget("NetworkButton");
-        m_wCameraButton = m_wRoot.FindAnyWidget("CameraButton");
         
         // Zoom/compass controls
         m_wZoomInButton = m_wRoot.FindAnyWidget("ZoomInButton");
@@ -270,19 +195,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         m_wFeedMemberName = TextWidget.Cast(m_wRoot.FindAnyWidget("FeedMemberName"));
         m_wFeedBackButton = m_wRoot.FindAnyWidget("FeedBackButton");
 		
-		// Chat content widgets
-		m_wViewChatButton = m_wRoot.FindAnyWidget("ViewChatButton");
-		m_wChatContent = m_wRoot.FindAnyWidget("ChatContent");
-		m_wChatContactName = TextWidget.Cast(m_wRoot.FindAnyWidget("ContactName"));
-		m_wChatMessageList = m_wRoot.FindAnyWidget("MessageList");
-		m_wChatEditBoxRoot = m_wRoot.FindAnyWidget("MessageEditBox");
-		if (m_wChatEditBoxRoot)
-		    m_ChatEditBox = AG0_EditBoxComponent.FindComponent(m_wChatEditBoxRoot);
-		m_wChatSendButton = m_wRoot.FindAnyWidget("ChatSendButton");
-		
-		// Find scroll layout inside chat content
-		if (m_wChatContent)
-		    m_wChatScrollLayout = ScrollLayoutWidget.Cast(m_wChatContent.FindAnyWidget("ScrollLayout"));
+		// Chat widgets (ViewChat, ChatContent, MessageList, MessageEditBox,
+		// ChatSendButton, scroll layout) cached by AG0_TDLMenuController.Init.
         
         if (m_wFeedBackButton)
         {
@@ -301,55 +215,52 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             Print("[TDLMenu] Failed to initialize display controller", LogLevel.ERROR);
         }
 
-        // ============================================
-        // INITIALIZE MARKER TOOL PANEL
-        // ============================================
-        // Built lazily — sub-form layouts spawn on first OnPanelShown so we
-        // don't pay creation cost when the player never opens the tool.
-        // Cancel/place events route back through the menu so the menu can
-        // own panel-state and (later) cursor-vs-centre place-position math.
-        if (m_wMarkerToolContent)
-        {
-            m_MarkerToolPanel = new AG0_TDLMarkerToolPanel();
-            if (m_MarkerToolPanel.Init(m_wMarkerToolContent))
-            {
-                m_MarkerToolPanel.m_OnCancelRequested.Insert(OnMarkerToolCancelRequested);
-                m_MarkerToolPanel.m_OnPlaceRequested.Insert(OnMarkerToolPlaceRequested);
-                m_MarkerToolPanel.m_OnMarkerDeleted.Insert(OnMarkerToolMarkerDeleted);
-            }
-            else
-            {
-                m_MarkerToolPanel = null;
-            }
-        }
-        
-        // Get active devices
+        // Marker tool panel construction moved to AG0_TDLMenuController.Init.
+
+
+        // Get active devices — found by walking the player controller's held
+        // devices. Cached on the menu (still referenced by chat/callsign code
+        // that hasn't migrated yet) AND pushed onto the controller so the
+        // shared plugin lifecycle / etc. can read them.
         FindActiveDevice();
         FindNetworkDevice();
-        RefreshPlugins();
-		
-		SubscribeToMessageUpdates();
-        
+
         // Create the shared menu controller and have it drive panel state on
         // this layout. Subscribe to OnPanelChanged for menu-specific reactions
         // (marker tool sub-panel, crosshair, chat repopulate, gamepad focus)
         // and to OnDetailShown for view-feed button visibility refresh that
         // depends on remote feed state the controller can't see.
+        //
+        // Order matters: Init caches widgets and hooks nav handlers; we then
+        // push devices in so RefreshPlugins has what it needs; then refresh
+        // plugins so RestoreState's plugin lookup finds a live active list.
         m_MenuController = new AG0_TDLMenuController();
         if (m_MenuController.Init(m_wRoot))
         {
             m_MenuController.m_OnPanelChanged.Insert(OnControllerPanelChanged);
+            m_MenuController.SetActiveDevice(m_ActiveDevice);
+            m_MenuController.SetNetworkDevice(m_NetworkDevice);
+            // Display controller ref — needed for marker placement
+            // (mapView.GetCenter) and marker delete (DropVanillaMarkerWidgetById).
+            m_MenuController.SetDisplayController(m_DisplayController);
+            m_MenuController.RefreshPlugins();
             // RestoreState reads s_LastSelectedDeviceId / s_sLastPanelPluginID
             // / s_eLastPanel etc. and installs the active plugin if it's still
             // enabled, then drives SetPanelContent(s_eLastPanel).
-            m_MenuController.RestoreState(m_aActivePlugins);
+            m_MenuController.RestoreState();
+            // Subscribe via the controller — message infra now lives there so
+            // both frontends own their subscribe lifecycle independently
+            // (menu open/close vs world-space mount/unmount).
+            m_MenuController.SubscribeToMessageUpdates();
         }
         
         // Hook button handlers
         HookButtonHandlers();
-        
-        // Attach click handlers to cards
-        AttachCardHandlers();
+        // Card handler attachment is driven by controller.Tick — no explicit
+        // call needed here. Subscribe to focus invoker so we can remember
+        // the gamepad-focused card index for restore on panel return.
+        if (m_MenuController)
+            m_MenuController.m_OnMemberCardFocused.Insert(OnMemberCardFocused);
 		
 		if (m_wNetworkButton)
 	    {
@@ -364,31 +275,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     {
         super.OnMenuUpdate(tDelta);
 
-        // Per-frame image card walk: for each image-message card that hasn't been
-        // rendered yet, look up its photo and render in-place if it's now available.
-        // This is the deterministic path for image-message UI refresh. No invokers,
-        // no PopulateChatView repaints, no panel/network gates — just inspects each
-        // card's state and acts on it.
-        DriveImageCardRendering();
-
-        // Periodic re-Draw of already-rendered canvases — see m_fImageRedrawAccum comment.
-        if (m_aChatMessageRenderers && m_aChatMessageRenderers.Count() > 0)
-        {
-            m_fImageRedrawAccum += tDelta;
-            if (m_fImageRedrawAccum >= IMAGE_REDRAW_INTERVAL)
-            {
-                m_fImageRedrawAccum = 0;
-                foreach (AG0_TDLPhotoRenderer r : m_aChatMessageRenderers)
-                {
-                    if (r)
-                        r.Draw();
-                }
-            }
-        }
-        else
-        {
-            m_fImageRedrawAccum = 0;
-        }
+        // Image-card rendering / periodic canvas redraw / scroll-to-bottom
+        // moved into AG0_TDLMenuController.Tick — see the m_MenuController.Tick
+        // call near the bottom of this method.
 
         if (m_bViewingRemoteFeed)
 	    {
@@ -465,13 +354,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             }
         }
         
-        // Marker tool placement actions (gamepad A / keyboard Enter / X / R).
-        // Polled here rather than registered as InputManager listeners
-        // because the menu's focus chain consumes those actions before
-        // listeners fire — but GetActionTriggered still works in this
-        // context, same as the other actions polled in this loop.
-        if (m_MenuController.GetActivePanel() == ETDLPanelContent.MARKER_TOOL && m_MarkerToolPanel && m_InputManager)
-            m_MarkerToolPanel.TickPlaceActionPoll(m_InputManager);
+        // Marker tool action poll folded into controller.Tick.
 
         // Process gamepad right stick pan input
         if (m_DisplayController && m_InputManager)
@@ -502,36 +385,17 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (m_DisplayController)
             m_DisplayController.Update(tDelta);
         
-        // Check if cards were rebuilt and need handlers
-        if (m_DisplayController)
-        {
-            array<Widget> cards = m_DisplayController.GetMemberCards();
-            if (cards && cards.Count() != m_iLastCardCount)
-            {
-                AttachCardHandlers();
-                m_iLastCardCount = cards.Count();
-            }
-        }
-        
-        // Update detail view if showing — controller owns the widget refs.
-        if (m_MenuController && m_MenuController.GetActivePanel() == ETDLPanelContent.MEMBER_DETAIL)
-            m_MenuController.PopulateDetailView();
-        
-		if (m_bScrollToBottom && m_wChatScrollLayout)
-		{
-		    m_wChatScrollLayout.SetSliderPos(0, 1.0);
-		    m_bScrollToBottom = false;
-		}
-		
-        // Update camera button state
-        UpdateCameraButtonState();
+        // Card handler re-attachment on rebuild folded into controller.Tick.
+        // Detail-view refresh + camera button state likewise.
         
         // Handle input
         HandleInput();
-        
-        // Update plugins
-        foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
-            plugin.OnMenuUpdate(tDelta);
+
+        // Controller tick — drives plugin OnMenuUpdate (post Phase 2) and
+        // later phases will fold image-card rendering / camera button /
+        // marker action poll into this same call. Shared with world-space.
+        if (m_MenuController)
+            m_MenuController.Tick(tDelta, m_InputManager);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -551,21 +415,27 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         // enabled next open) and clears the panel cleanly so OnPanelHidden
         // fires while the plugin's still alive.
         if (m_MenuController)
-            m_MenuController.SaveState();
-
-        // Tear down toolbar buttons before plugins are disabled — same
-        // ordering reason as RefreshPlugins().
-        ClearPluginToolbarButtons();
-
-        // Notify and disable plugins
-        foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
         {
-            plugin.OnMenuClosed();
-            plugin.Disable();
+            m_MenuController.SaveState();
+            // Disable plugins (fires OnMenuClosed + tears down toolbar buttons)
+            // — controller owns plugin lifecycle now. Cleanup() below would
+            // also do this, but doing it explicitly first keeps the close
+            // ordering symmetric with OnMenuOpen.
+            m_MenuController.DisablePlugins();
         }
-        m_aActivePlugins.Clear();
-        
-		UnsubscribeFromMessageUpdates();
+
+        // Unsubscribe via controller — pairs with SubscribeToMessageUpdates
+        // in OnMenuOpen. Other frontends (world-space) maintain their own
+        // subscription independently so this unsubscribe is per-menu.
+        if (m_MenuController)
+            m_MenuController.UnsubscribeFromMessageUpdates();
+
+        // Drop the menu controller's widget refs / plugin slot so it doesn't
+        // hold dangling pointers if the same controller instance somehow
+        // survives. DisablePlugins above ran the plugin-side teardown first;
+        // Cleanup is idempotent on plugins (empty array no-op).
+        if (m_MenuController)
+            m_MenuController.Cleanup();
 
         // ============================================
         // CLEANUP DISPLAY CONTROLLER
@@ -579,55 +449,8 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         super.OnMenuClose();
     }
     
-    //------------------------------------------------------------------------------------------------
-    // CARD HANDLER ATTACHMENT
-    //------------------------------------------------------------------------------------------------
-    protected void AttachCardHandlers()
-    {
-        if (!m_DisplayController)
-            return;
-        
-        array<Widget> cards = m_DisplayController.GetMemberCards();
-        array<RplId> cardIds = m_DisplayController.GetMemberCardIds();
-        
-        if (!cards || !cardIds)
-            return;
-        
-        for (int i = 0; i < cards.Count(); i++)
-        {
-            Widget card = cards[i];
-            if (!card || i >= cardIds.Count())
-                continue;
-            
-            RplId memberId = cardIds[i];
-            
-            ButtonWidget button = ButtonWidget.Cast(card);
-            if (!button)
-                continue;
-            
-            // Check if handler already exists
-            AG0_TDLMemberCardHandler existingHandler = AG0_TDLMemberCardHandler.Cast(
-                button.FindHandler(AG0_TDLMemberCardHandler));
-            if (existingHandler)
-                continue;
-            
-            // Get member data for handler
-            AG0_TDLNetworkMember member = GetNetworkMemberById(memberId);
-            
-            AG0_TDLMemberCardHandler handler = new AG0_TDLMemberCardHandler();
-            handler.Init(this, memberId, member);
-            button.AddHandler(handler);
-
-            // First card: set UP navigation to settings button
-            if (i == 0)
-                button.SetNavigation(WidgetNavigationDirection.UP, WidgetNavigationRuleType.EXPLICIT, "SettingsButton");
-        }
-
-        // Set initial notification badges. Cards may have been created with stale state
-        // (NotificationDot visible from layout default, NotificationNumberText showing "0");
-        // this call hides badges with no unread and populates counts where there are.
-        UpdateMemberCardBadges();
-    }
+    // AttachCardHandlers moved to AG0_TDLMenuController. Driven from
+    // controller.Tick on card-list rebuild — no per-frontend wiring needed.
     
     //------------------------------------------------------------------------------------------------
     // BUTTON HANDLERS
@@ -638,14 +461,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         // MarkerToolButton are hooked by AG0_TDLMenuController during its Init
         // — don't double-hook here.
 
-        if (m_wCameraButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wCameraButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnCameraButtonClicked);
-        }
-        
+        // CameraButton hooked by AG0_TDLMenuController.HookButtonHandlers
+        // — don't double-hook.
+
         if (m_wViewFeedButton)
         {
             SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
@@ -694,51 +512,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 comp.m_OnClicked.Insert(OnTrackClickedInternal);
         }
         
-        if (m_wCallsignSaveButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wCallsignSaveButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnCallsignSaveClicked);
-        }
-        
-		if (m_wViewChatButton)
-		{
-		    SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-		        m_wViewChatButton.FindHandler(SCR_ModularButtonComponent));
-		    if (comp)
-		        comp.m_OnClicked.Insert(OnViewDirectChatClicked);
-		}
-		
-		if (m_wChatSendButton)
-		{
-		    SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-		        m_wChatSendButton.FindHandler(SCR_ModularButtonComponent));
-		    if (comp)
-		        comp.m_OnClicked.Insert(OnChatSendClicked);
-		}
+        // CallsignSaveButton hooked by AG0_TDLMenuController.HookButtonHandlers.
 
-        // Marker tool — MarkerToolButton hooked by controller; we still hook
-        // the back button because cancel goes through the marker tool panel.
-        if (m_wMarkerToolBackButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wMarkerToolBackButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnMarkerToolCancelRequested);
-        }
+		// ChatSendButton / ViewChatButton hooked by AG0_TDLMenuController.HookButtonHandlers
+		// — don't double-hook.
 
-        // Dedicated panel-level Place button — separate from the in-edit-box
-        // ButtonPublic widgets so pressing A while navigating spinboxes /
-        // combos doesn't accidentally place. Mouse click on this button
-        // routes through the place-requested path.
-        if (m_wMarkerToolPlaceButton)
-        {
-            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
-                m_wMarkerToolPlaceButton.FindHandler(SCR_ModularButtonComponent));
-            if (comp)
-                comp.m_OnClicked.Insert(OnMarkerToolPlaceButtonClicked);
-        }
+        // MarkerToolBackButton + MarkerToolPlaceButton hooked by controller.
     }
     
     //------------------------------------------------------------------------------------------------
@@ -794,123 +573,21 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         }
     }
     
-    //------------------------------------------------------------------------------------------------
-    //------------------------------------------------------------------------------------------------
-    protected void OnCallsignSaveClicked()
-    {
-        if (!m_CallsignEditBox || !m_NetworkDevice)
-            return;
-
-        string newCallsign = m_CallsignEditBox.GetText();
-        if (newCallsign.IsEmpty())
-            return;
-
-        SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (!controller)
-            return;
-
-        RplId deviceId = m_NetworkDevice.GetDeviceRplId();
-        if (deviceId != RplId.Invalid())
-            controller.RequestSetDeviceCallsign(deviceId, newCallsign);
-
-        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
-    }
+    // OnCallsignSaveClicked moved to AG0_TDLMenuController.
     
-    //! Crosshair is visible iff the marker tool panel is the active side
-    //! panel. See the m_wMarkerCrosshair declaration comment for why the
-    //! gamepad-only gating was dropped.
-    protected void UpdateMarkerCrosshairVisibility()
+    // Marker tool handlers + crosshair update moved to AG0_TDLMenuController.
+
+    //! Map click delegate — routes the drag-handler's click event into the
+    //! controller's marker placement path AND the bloodhound pin/unpin path.
+    //! Each handler internally gates on whether its tool is active, so only
+    //! one will act per click. Drag-handler m_OnClick only fires on
+    //! click-without-drag, so panning the map never reaches here.
+    protected void OnMapClickedDelegated(int absMouseX, int absMouseY)
     {
-        if (!m_wMarkerCrosshair)
+        if (!m_MenuController)
             return;
-
-        m_wMarkerCrosshair.SetVisible(m_MenuController.GetActivePanel() == ETDLPanelContent.MARKER_TOOL);
-    }
-
-    //------------------------------------------------------------------------------------------------
-    // MARKER TOOL HANDLERS
-    //------------------------------------------------------------------------------------------------
-
-    //! Fired by the marker-tool panel's Cancel/Back buttons (sub-form +
-    //! side-panel back). Returns to the contacts list.
-    protected void OnMarkerToolCancelRequested()
-    {
-        SetPanelContent(ETDLPanelContent.NETWORK_LIST);
-    }
-
-    //! Fired by the marker-tool panel's Place Public/Private buttons + the
-    //! action-poll path (gamepad A / keyboard Enter / X / R). Always places
-    //! at the map view's centre — the player has already framed the map
-    //! to where they want the marker via pan, and the centre is the
-    //! "crosshair" the ghost widget aligns to on console.
-    protected void OnMarkerToolPlaceRequested(bool isLocal)
-    {
-        if (!m_MarkerToolPanel || !m_DisplayController)
-            return;
-
-        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
-        if (!mapView)
-            return;
-
-        m_MarkerToolPanel.PlaceCurrentMarker(mapView.GetCenter(), isLocal);
-    }
-
-    //! Mouse click on the dedicated panel-level Place button. Always a
-    //! public placement at canvas centre — mirrors the gamepad
-    //! TDLPlaceMarker action's behaviour. The user has already framed
-    //! the desired location with map pan, so centre = intended drop.
-    protected void OnMarkerToolPlaceButtonClicked()
-    {
-        OnMarkerToolPlaceRequested(false);
-    }
-
-    //! Forwarded from AG0_TDLMarkerToolPanel.m_OnMarkerDeleted right after
-    //! the AskRemoveStaticMarker RPC fires. The display controller's
-    //! 3D widget map is keyed by SCR_MapMarkerBase reference and only
-    //! prunes during UpdateVanillaMarkers — which happens next frame and
-    //! sees the manager's *current* state, which still has the marker
-    //! until the server's broadcast back. Kicking the prune now removes
-    //! the on-map icon the same frame as the scroll card.
-    protected void OnMarkerToolMarkerDeleted(int markerId)
-    {
-        if (m_DisplayController)
-            m_DisplayController.DropVanillaMarkerWidgetById(markerId);
-    }
-
-    //! Fired by AG0_TDLMapCanvasDragHandler when the user left-clicks
-    //! MapDragSurface without significant drag (KBM placement path).
-    //! Converts the absolute workspace mouse coords into canvas-local
-    //! pixels, runs them through AG0_TDLMapView.ScreenToWorld, and places
-    //! the marker there. Only active while the marker tool panel is
-    //! the visible side-panel — clicks elsewhere just pan the map.
-    protected void OnMapClicked(int absMouseX, int absMouseY)
-    {
-        if (m_MenuController.GetActivePanel() != ETDLPanelContent.MARKER_TOOL)
-            return;
-        if (!m_MarkerToolPanel || !m_DisplayController)
-            return;
-
-        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
-        if (!mapView)
-            return;
-
-        // Resolve canvas widget's absolute screen position so we can
-        // translate the absolute mouse pos into canvas-local pixels —
-        // ScreenToWorld expects canvas-local, not workspace-absolute.
-        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
-        if (!canvasWidget)
-            return;
-
-        float canvasScreenX, canvasScreenY;
-        canvasWidget.GetScreenPos(canvasScreenX, canvasScreenY);
-
-        float localX = absMouseX - canvasScreenX;
-        float localY = absMouseY - canvasScreenY;
-
-        vector worldPos;
-        mapView.ScreenToWorld(localX, localY, worldPos);
-
-        m_MarkerToolPanel.PlaceCurrentMarker(worldPos, false);
+        m_MenuController.OnMapClickedForMarkerPlacement(absMouseX, absMouseY);
+        m_MenuController.OnMapClickedForBloodhound(absMouseX, absMouseY);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -935,30 +612,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 
         ETDLPanelContent content = m_MenuController.GetActivePanel();
 
-        // Marker tool sub-form layouts spawn lazily on first show.
-        bool showMarkerTool = (content == ETDLPanelContent.MARKER_TOOL);
-        if (m_MarkerToolPanel)
-        {
-            if (showMarkerTool)
-                m_MarkerToolPanel.OnPanelShown();
-            else
-                m_MarkerToolPanel.OnPanelHidden();
-        }
-
-        // Centre-screen crosshair lives outside MarkerToolContent — own hook.
-        UpdateMarkerCrosshairVisibility();
-
-        // Chat view repopulation: chat infra (message subscriptions, image
-        // renderers) lives on the menu, so we drive populate from here when
-        // the panel actually shows the chat content.
-        if (content == ETDLPanelContent.DIRECT_CHAT)
-            PopulateChatView();
-
-        // Settings panel needs the callsign edit box pre-populated with the
-        // current device name — m_NetworkDevice is menu-frontend state, so
-        // we drive this here instead of in the controller.
-        if (content == ETDLPanelContent.SETTINGS && m_CallsignEditBox && m_NetworkDevice)
-            m_CallsignEditBox.SetText(m_NetworkDevice.GetDisplayName());
+        // Marker tool sub-form lifecycle + crosshair / chat repopulate /
+        // callsign pre-populate all moved into controller.SetPanelContent.
+        // Menu only reacts here for gamepad focus.
 
         SetPanelFocus(content);
     }
@@ -987,16 +643,22 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 break;
 
             case ETDLPanelContent.SETTINGS:
-                if (m_CallsignEditBox)
-                    m_CallsignEditBox.Focus();
+            {
+                AG0_EditBoxComponent callsignBox = m_MenuController.GetCallsignEditBox();
+                if (callsignBox)
+                    callsignBox.Focus();
                 else if (m_wSettingsBackButton)
                     GetGame().GetWorkspace().SetFocusedWidget(m_wSettingsBackButton);
                 break;
+            }
 
             case ETDLPanelContent.DIRECT_CHAT:
-                if (m_ChatEditBox)
-                    m_ChatEditBox.Focus();
+            {
+                AG0_EditBoxComponent chatBox = m_MenuController.GetChatEditBox();
+                if (chatBox)
+                    chatBox.Focus();
                 break;
+            }
 
             case ETDLPanelContent.MARKER_TOOL:
                 // Focus the back button as a safe default until the panel
@@ -1014,8 +676,9 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
-    // Thin wrappers — controller owns the real logic. Kept so internal call
-    // sites and plugin code (m_MenuUI.RequestPluginPanel etc.) keep working.
+    // Thin wrappers — controller owns the real logic. Kept so internal menu
+    // call sites continue to use these short-form names. Plugin code routes
+    // directly through m_Controller.RequestPluginPanel(this).
     //------------------------------------------------------------------------------------------------
     protected void ToggleSidePanel()
     {
@@ -1135,15 +798,19 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     //------------------------------------------------------------------------------------------------
     // MEMBER CARD CALLBACKS
     //------------------------------------------------------------------------------------------------
-    void OnMemberCardFocused(RplId memberId)
+    //! Subscribed to AG0_TDLMenuController.m_OnMemberCardFocused. Used only to
+    //! remember the gamepad-focused card index so SetPanelFocus(NETWORK_LIST)
+    //! can restore the same card on panel return. Click handling and detail
+    //! navigation happen entirely on the controller side.
+    protected void OnMemberCardFocused(RplId memberId)
     {
         if (!m_DisplayController)
             return;
-        
+
         array<RplId> cardIds = m_DisplayController.GetMemberCardIds();
         if (!cardIds)
             return;
-        
+
         for (int i = 0; i < cardIds.Count(); i++)
         {
             if (cardIds[i] == memberId)
@@ -1152,16 +819,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                 break;
             }
         }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    void OnMemberCardClicked(RplId memberId, int button)
-    {
-        AG0_TDLNetworkMember member = GetNetworkMemberById(memberId);
-        if (!member)
-            return;
-        
-        ShowDetailView(member, memberId);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1233,199 +890,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         }
     }
     
-    //------------------------------------------------------------------------------------------------
-    void RefreshPlugins()
-    {
-        // Tear down old toolbar buttons before the plugins behind them are
-        // disabled — the click handler dereferences the plugin via the map,
-        // so removing buttons first guarantees no stale dispatch.
-        ClearPluginToolbarButtons();
+    // Plugin lifecycle / toolbar buttons / RequestPluginPanel moved to
+    // AG0_TDLMenuController as part of the world-space parity refactor.
+    // Plugins call m_Controller.RequestPluginPanel(this) directly now.
 
-        foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
-            plugin.Disable();
-        m_aActivePlugins.Clear();
-        
-        if (!m_ActiveDevice || !m_ActiveDevice.HasCapability(AG0_ETDLDeviceCapability.ATAK_DEVICE))
-            return;
-        
-        SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (!controller) return;
-        
-        array<AG0_TDLDeviceComponent> heldDevices = controller.GetHeldDevicesCached();
-        
-        set<string> supportedPluginIDs = new set<string>();
-        foreach (AG0_TDLDeviceComponent device : heldDevices)
-        {
-            array<string> devicePlugins = device.GetSupportedATAKPlugins();
-            if (!devicePlugins) continue;
-            
-            foreach (string pluginID : devicePlugins)
-                supportedPluginIDs.Insert(pluginID);
-        }
-        
-        array<ref AG0_ATAKPluginBase> availablePlugins = m_ActiveDevice.GetAvailablePlugins();
-        foreach (AG0_ATAKPluginBase plugin : availablePlugins)
-        {
-            if (!supportedPluginIDs.Contains(plugin.GetPluginID())) 
-                continue;
-            
-            IEntity sourceDevice = FindSourceDeviceForPlugin(plugin.GetPluginID(), heldDevices);
-            plugin.Enable(m_ActiveDevice, sourceDevice, this);
-            m_aActivePlugins.Insert(plugin);
-        }
-        
-        foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
-            plugin.OnMenuOpened(m_wRoot);
-
-        // Plugins are now Enabled and have their menu root — render their
-        // toolbar buttons. This runs after OnMenuOpened so plugins can finish
-        // any setup (e.g. cached widget refs) before their button is clickable.
-        BuildPluginToolbarButtons();
-    }
-
-    //------------------------------------------------------------------------------------------------
-    protected IEntity FindSourceDeviceForPlugin(string pluginID, array<AG0_TDLDeviceComponent> devices)
-    {
-        foreach (AG0_TDLDeviceComponent device : devices)
-        {
-            array<string> supported = device.GetSupportedATAKPlugins();
-            if (supported && supported.Contains(pluginID))
-                return device.GetOwner();
-        }
-        return null;
-    }
-
-    //------------------------------------------------------------------------------------------------
-    // PLUGIN TOOLBAR BUTTONS
-    //
-    // Walks active plugins, spawns a PluginToolbarButton.layout into m_wToolbar
-    // for any plugin that returns ProvidesToolbarTool() == true, sets its icon
-    // from GetToolIcon(), and routes clicks to OnToolActivated(m_wRoot) via a
-    // per-button AG0_PluginButtonClickRelay (necessary because m_OnClicked is
-    // untyped — fires zero-arg, so the handler can't disambiguate by sender).
-    //------------------------------------------------------------------------------------------------
-    protected void BuildPluginToolbarButtons()
-    {
-        if (!m_wToolbar)
-            return;
-
-        foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
-        {
-            if (!plugin || !plugin.ProvidesToolbarTool())
-                continue;
-
-            Widget btnRoot = GetGame().GetWorkspace().CreateWidgets(PLUGIN_TOOLBAR_BUTTON_LAYOUT, m_wToolbar);
-            if (!btnRoot)
-            {
-                Print(string.Format("[TDLMenu] Failed to spawn toolbar button for plugin '%1'", plugin.GetPluginID()), LogLevel.WARNING);
-                continue;
-            }
-
-            // Set the icon. ResourceName carries the engine resource path
-            // already, so LoadImageTexture can consume it directly.
-            ImageWidget icon = ImageWidget.Cast(btnRoot.FindAnyWidget("PluginIcon"));
-            ResourceName toolIcon = plugin.GetToolIcon();
-            if (icon && !toolIcon.IsEmpty())
-                icon.LoadImageTexture(0, toolIcon);
-
-            // Hook the click via a per-button relay. The relay captures the
-            // plugin + menu root in its constructor and exposes a zero-arg
-            // OnClick() that dispatches OnToolActivated. Held in
-            // m_aPluginClickRelays so it lives as long as the button does.
-            SCR_ModularButtonComponent btnComp = SCR_ModularButtonComponent.FindComponent(btnRoot);
-            if (btnComp)
-            {
-                AG0_PluginButtonClickRelay relay = new AG0_PluginButtonClickRelay(plugin, m_wRoot);
-                m_aPluginClickRelays.Insert(relay);
-                btnComp.m_OnClicked.Insert(relay.OnClick);
-            }
-
-            m_aPluginToolbarButtons.Insert(btnRoot);
-        }
-    }
-
-    //------------------------------------------------------------------------------------------------
-    protected void ClearPluginToolbarButtons()
-    {
-        foreach (Widget btn : m_aPluginToolbarButtons)
-        {
-            if (btn)
-                btn.RemoveFromHierarchy();
-        }
-        m_aPluginToolbarButtons.Clear();
-        m_aPluginClickRelays.Clear();
-    }
-
-    //------------------------------------------------------------------------------------------------
-    //! Plugin entry point — delegates to the shared controller. Plugin code
-    //! calls m_MenuUI.RequestPluginPanel(this); we route through the menu
-    //! controller which owns the toggle logic.
-    void RequestPluginPanel(AG0_ATAKPluginBase plugin)
-    {
-        if (m_MenuController)
-            m_MenuController.RequestPluginPanel(plugin);
-    }
-
-    //------------------------------------------------------------------------------------------------
-    // CAMERA BUTTON
-    //------------------------------------------------------------------------------------------------
-    protected void OnCameraButtonClicked()
-    {
-        AG0_TDLDeviceComponent cameraDevice = GetLocalCameraDevice();
-        if (!cameraDevice)
-            return;
-        
-        bool newState = !cameraDevice.IsCameraBroadcasting();
-        
-        SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (controller)
-        {
-            RplId deviceRplId = cameraDevice.GetDeviceRplId();
-            if (deviceRplId != RplId.Invalid())
-                controller.RequestSetCameraBroadcasting(deviceRplId, newState);
-        }
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected AG0_TDLDeviceComponent GetLocalCameraDevice()
-    {
-        SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (!controller)
-            return null;
-        
-        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
-        foreach (AG0_TDLDeviceComponent device : devices)
-        {
-            if (device.HasCapability(AG0_ETDLDeviceCapability.VIDEO_SOURCE))
-                return device;
-        }
-        return null;
-    }
-    
-    //------------------------------------------------------------------------------------------------
-    protected void UpdateCameraButtonState()
-    {
-        if (!m_wCameraButton)
-            return;
-        
-        AG0_TDLDeviceComponent cameraDevice = GetLocalCameraDevice();
-        bool hasCamera = cameraDevice != null;
-        
-        m_wCameraButton.SetVisible(hasCamera);
-        
-        if (hasCamera)
-        {
-            bool isBroadcasting = cameraDevice.IsCameraBroadcasting();
-            ImageWidget icon = ImageWidget.Cast(m_wCameraButton.FindAnyWidget("CameraImage"));
-            if (icon)
-            {
-                if (isBroadcasting)
-                    icon.SetColor(Color.FromRGBA(255, 100, 100, 255));
-                else
-                    icon.SetColor(Color.FromRGBA(255, 255, 255, 255));
-            }
-        }
-    }
+    // OnCameraButtonClicked, GetLocalCameraDevice, UpdateCameraButtonState
+    // moved to AG0_TDLMenuController. Remote feed view (EnterRemoteFeedView,
+    // OnViewFeedClickedInternal, m_SpawnedFeedCamera, render-camera swap)
+    // intentionally remains on the menu — it stays menu-only.
     
     //------------------------------------------------------------------------------------------------
     // REMOTE FEED VIEWING
@@ -1464,7 +936,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    if (!player)
 	        return;
 	    
-	    // Spawn camera
 	    vector spawnTransform[4];
 	    player.GetWorldTransform(spawnTransform);
 	    
@@ -1488,7 +959,6 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        return;
 	    }
 	    
-	    // Try to find the remote device and position camera
 	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(sourceDeviceRplId));
 	    if (rpl)
 	    {
@@ -1527,16 +997,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	        m_fFeedAttachTimer = 0;
 	    }
 	    
-	    // Activate camera
 	    camMgr.SetCamera(feedCamera);
 	    m_bViewingRemoteFeed = true;
-	    
-	    // ========================================
+
 	    // FIX: Hide main menu UI when viewing feed
-	    // ========================================
 	    HideMainMenuUI();
-	    
-	    // Show overlay
+
 	    if (m_wFeedOverlay)
 	        m_wFeedOverlay.SetVisible(true);
 	    
@@ -1572,12 +1038,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    if (!m_bViewingRemoteFeed)
 	        return;
 	    
-	    // Restore original camera
 	    CameraManager camMgr = GetGame().GetCameraManager();
 	    if (camMgr && m_OriginalCamera)
 	        camMgr.SetCamera(m_OriginalCamera);
-	    
-	    // Delete spawned camera
+
 	    if (m_SpawnedFeedCamera)
 	    {
 	        SCR_EntityHelper.DeleteEntityAndChildren(m_SpawnedFeedCamera);
@@ -1588,14 +1052,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    m_PendingFeedSourceId = RplId.Invalid();
 	    m_AttachedFeedSourceId = RplId.Invalid();
 	    m_OriginalCamera = null;
-	    
-	    // Hide overlay
+
 	    if (m_wFeedOverlay)
 	        m_wFeedOverlay.SetVisible(false);
-	    
-	    // ========================================
+
 	    // FIX: Restore main menu UI after exiting feed view
-	    // ========================================
 	    ShowMainMenuUI();
 	}
     
@@ -1641,16 +1102,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	//------------------------------------------------------------------------------------------------
 	protected bool IsVideoSourceStillValid(RplId sourceId)
 	{
-	    // Check if source is still in our available sources
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
 	    if (!controller)
 	        return false;
-	    
-	    // Check local streaming devices
+
 	    if (!controller.IsVideoSourceAvailable(sourceId))
 	        return false;
-	    
-	    // Optionally verify device is still broadcasting
+
+	    // Verify device is still broadcasting
 	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(sourceId));
 	    if (rpl)
 	    {
@@ -1668,488 +1127,21 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 	    return true;
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	// CHAT METHODS
-	//------------------------------------------------------------------------------------------------
-	
-	protected void OnViewDirectChatClicked()
-	{
-	    if (!m_MenuController.GetSelectedMember())
-	        return;
-	    
-	    OpenDirectChat(m_MenuController.GetSelectedDeviceId(), m_MenuController.GetSelectedMember().GetPlayerName());
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void OnChatSendClicked()
-	{
-	    SendChatMessage();
-	}
-	
-	//------------------------------------------------------------------------------------------------
+	// Chat methods (subscribe, send, populate, image-card rendering,
+	// badges, etc.) moved to AG0_TDLMenuController in the world-space parity
+	// refactor. Thin wrapper kept below for OpenDirectChat which external
+	// handlers (AG0_TDLDetailButtonHandler) call into the menu by name.
 	void OpenDirectChat(RplId contactRplId, string contactName)
 	{
 	    if (m_MenuController)
-	        m_MenuController.SetChatContact(contactRplId, contactName);
-	    SetPanelContent(ETDLPanelContent.DIRECT_CHAT);
+	        m_MenuController.OpenDirectChat(contactRplId, contactName);
 	}
 	
-	//------------------------------------------------------------------------------------------------
-	protected void PopulateChatView()
-	{
-	    if (!m_wChatMessageList)
-	        return;
-	    
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-	    if (!controller || !m_NetworkDevice)
-	        return;
-	    
-	    int networkId = m_NetworkDevice.GetCurrentNetworkID();
-	    RplId myDeviceRplId = m_NetworkDevice.GetDeviceRplId();
-	    
-	    // Get direct messages with this contact
-	    array<ref AG0_TDLMessageClient> messages = controller.GetDirectMessages(networkId, myDeviceRplId, m_MenuController.GetChatContactRplId());
-	    
-	    // Clear existing message widgets
-	    ClearChatMessages();
-	    
-	    // Create widgets for each message
-	    foreach (AG0_TDLMessageClient msg : messages)
-	    {
-	        CreateMessageWidget(msg, myDeviceRplId);
-	    }
-	    
-	    // Mark messages as read
-	    foreach (AG0_TDLMessageClient msg : messages)
-	    {
-	        if (!msg.IsOutgoing(myDeviceRplId) && !controller.IsMessageLocallyRead(msg.messageId))
-	        {
-	            controller.MarkMessageLocallyRead(msg.messageId);
-	            SCR_PlayerController.RequestMarkMessageRead(controller, myDeviceRplId, msg.messageId);
-	        }
-	    }
-
-	    // Marking-as-read above changed the unread count for the active contact;
-	    // refresh badges so the dot clears (or count decrements) without waiting
-	    // for the next OnMessagesUpdated tick.
-	    UpdateMemberCardBadges();
-	    
-	    m_bScrollToBottom = true;
-	}
+	// PopulateChatView, ClearChatMessages, CreateMessageWidget,
+	// DriveImageCardRendering, SizePhotoCanvas, InitAndDrawPhotoRenderer,
+	// FormatTimestamp, SendChatMessage, SubscribeToMessageUpdates,
+	// UnsubscribeFromMessageUpdates, OnMessagesUpdated, OnNewMessageReceived,
+	// UpdateMemberCardBadges — moved to AG0_TDLMenuController.
 	
-	//------------------------------------------------------------------------------------------------
-	protected void ClearChatMessages()
-	{
-	    foreach (Widget w : m_aChatMessageWidgets)
-	    {
-	        if (w)
-	            w.RemoveFromHierarchy();
-	    }
-	    m_aChatMessageWidgets.Clear();
-	    // Renderers are ref-counted; clearing the array drops the last ref so they
-	    // release their CanvasWidget references. Their canvases are destroyed by the
-	    // RemoveFromHierarchy() pass above, so we rely on this ordering — never the
-	    // other way around.
-	    m_aChatMessageRenderers.Clear();
-	    m_aChatMessageDeliveryIds.Clear();
-	    m_aChatMessageImageCanvases.Clear();
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void CreateMessageWidget(AG0_TDLMessageClient msg, RplId viewerRplId)
-	{
-	    if (!m_wChatMessageList)
-	        return;
 
-	    Widget card = GetGame().GetWorkspace().CreateWidgets(MESSAGE_CARD_LAYOUT, m_wChatMessageList);
-	    if (!card)
-	        return;
-
-	    m_aChatMessageWidgets.Insert(card);
-
-	    TextWidget playerName = TextWidget.Cast(card.FindAnyWidget("PlayerName"));
-	    TextWidget messageContent = TextWidget.Cast(card.FindAnyWidget("MessageContent"));
-	    TextWidget timeWidget = TextWidget.Cast(card.FindAnyWidget("Time"));
-	    ImageWidget statusDot = ImageWidget.Cast(card.FindAnyWidget("StatusDot"));
-
-	    // Debug logging
-	    Print(string.Format("TDL_CHAT: Creating message widget - timestamp: %1", msg.timestamp), LogLevel.DEBUG);
-	    Print(string.Format("TDL_CHAT: timeWidget found: %1", timeWidget != null), LogLevel.DEBUG);
-
-	    if (playerName)
-	        playerName.SetText(msg.senderCallsign);
-
-	    // Default the message body to the message content (caption for image-messages).
-	    // Image-message rendering below may overwrite this with a transferring/failed status string.
-	    if (messageContent)
-	        messageContent.SetText(msg.content);
-
-	    if (timeWidget)
-	    {
-	        string formatted = FormatTimestamp(msg.timestamp);
-	        Print(string.Format("TDL_CHAT: Setting time to: %1", formatted), LogLevel.DEBUG);
-	        timeWidget.SetText(formatted);
-	    }
-
-	    bool isOutgoing = msg.IsOutgoing(viewerRplId);
-	    if (statusDot)
-	    {
-	        if (isOutgoing)
-	        {
-	            switch (msg.status)
-	            {
-	                case ETDLMessageStatus.PENDING:
-	                    statusDot.SetColor(Color.Gray);
-	                    break;
-	                case ETDLMessageStatus.DELIVERED:
-	                    statusDot.SetColor(Color.FromInt(0xFF33CCCC));
-	                    break;
-	                case ETDLMessageStatus.READ:
-	                    statusDot.SetColor(Color.FromInt(0xFF00FF00));
-	                    break;
-	            }
-	        }
-	        else
-	        {
-	            statusDot.SetVisible(false);
-	        }
-	    }
-
-	    // ----- Image-message setup -----
-	    // For TEXT messages: remove ImageOverlay so the card collapses to header+content.
-	    // For IMAGE messages: stash the canvas + deliveryId in the parallel arrays. The
-	    // actual rendering happens in DriveImageCardRendering on the next OnMenuUpdate
-	    // tick (or any subsequent tick once the photo lands in the manager's cache).
-	    // Show a placeholder caption in the meantime.
-	    string trackedDeliveryId = "";
-	    CanvasWidget trackedCanvas = null;
-
-	    if (msg.contentType != ETDLMessageContentType.IMAGE)
-	    {
-	        Widget imageOverlayKill = card.FindAnyWidget("ImageOverlay");
-	        if (imageOverlayKill)
-	            imageOverlayKill.RemoveFromHierarchy();
-	    }
-	    else
-	    {
-	        Widget imageOverlay = card.FindAnyWidget("ImageOverlay");
-	        CanvasWidget imageCanvas = CanvasWidget.Cast(card.FindAnyWidget("ImageCanvas"));
-
-	        if (imageOverlay && imageCanvas)
-	        {
-	            imageOverlay.SetVisible(true);
-	            // Keep the canvas hidden until DriveImageCardRendering successfully renders;
-	            // it'll flip back to visible right before scheduling Init+Draw.
-	            imageCanvas.SetVisible(false);
-
-	            trackedDeliveryId = msg.imageDeliveryId;
-	            trackedCanvas = imageCanvas;
-
-	            // Set placeholder text. If the photo's already cached (sender-side, or a
-	            // late chat-open), DriveImageCardRendering will swap the placeholder out
-	            // when it draws on the next tick — so the placeholder is only ever visible
-	            // for at most one frame in the cached case.
-	            string statusText;
-	            if (msg.imageTransferState == ETDLImageTransferState.FAILED)
-	                statusText = "[image — transfer failed]";
-	            else
-	                statusText = "[image — incoming…]";
-
-	            if (messageContent)
-	            {
-	                string combined = msg.content;
-	                if (!combined.IsEmpty())
-	                    combined = combined + " ";
-	                combined = combined + statusText;
-	                messageContent.SetText(combined);
-	            }
-	        }
-	    }
-
-	    // Append to all four parallel arrays in lockstep. Renderer starts null;
-	    // DriveImageCardRendering will populate it once the photo is available.
-	    m_aChatMessageRenderers.Insert(null);
-	    m_aChatMessageDeliveryIds.Insert(trackedDeliveryId);
-	    m_aChatMessageImageCanvases.Insert(trackedCanvas);
-	}
-
-	//------------------------------------------------------------------------------------------------
-	//! Polling check: are there image-messages in the visible network's store whose photos
-	//! have been cached by the photo manager but whose chat cards aren't currently rendering
-	//! them? Counts decoded image-messages and compares to the number of non-null renderers
-	//! in m_aChatMessageRenderers — a mismatch means at least one image is ready to draw
-	//! but is still showing the "[image — incoming…]" placeholder.
-	//!
-	//! Used as a fallback path when the OnDecodedPhotoArrived invoker chain doesn't reach
-	//! us (observed intermittently in MP). The check is cheap — small store iteration plus
-	//! a renderer-array count.
-	//------------------------------------------------------------------------------------------------
-	//! Walk the per-card parallel arrays. For each image-message card that still has a
-	//! null renderer, look up its photo by deliveryId. If the photo is in the manager's
-	//! decoded cache, render it into the card's canvas in-place — size the SizeLayout to
-	//! the photo's aspect, instantiate the renderer, defer Init+Draw to next frame so the
-	//! layout pass settles. Mark the card rendered by storing the renderer in the parallel
-	//! array.
-	//!
-	//! This is the only code path that turns a "[image — incoming…]" placeholder into a
-	//! rendered image. It runs every OnMenuUpdate tick and is cheap when nothing's pending
-	//! (a few null/empty checks per visible message).
-	protected void DriveImageCardRendering()
-	{
-	    int n = m_aChatMessageWidgets.Count();
-	    if (n == 0)
-	        return;
-	    // Guard the parallel arrays against length skew (shouldn't happen, but defensive).
-	    if (m_aChatMessageRenderers.Count() != n) return;
-	    if (m_aChatMessageDeliveryIds.Count() != n) return;
-	    if (m_aChatMessageImageCanvases.Count() != n) return;
-
-	    // Photo manager lives on the local player controller (NOT on AG0_TDLSystem,
-	    // which is server-only and doesn't exist on remote clients). GetActiveInstance
-	    // tries the server system first, then falls back to the local PC's per-PC manager.
-	    AG0_TDLPhotoManager photoMgr = AG0_TDLPhotoManager.GetActiveInstance();
-	    if (!photoMgr) return;
-
-	    for (int i = 0; i < n; i++)
-	    {
-	        // Skip if already rendered, or not an image-message, or canvas missing.
-	        if (m_aChatMessageRenderers[i] != null) continue;
-
-	        string deliveryId = m_aChatMessageDeliveryIds[i];
-	        if (deliveryId.IsEmpty()) continue;
-
-	        CanvasWidget canvas = m_aChatMessageImageCanvases[i];
-	        if (!canvas) continue;
-
-	        AG0_TDLPhotoData photo = photoMgr.GetDecodedPhoto(deliveryId);
-	        if (!photo) continue;  // bytes haven't arrived yet — try again next tick.
-
-	        // Photo is ready. Size the wrapping SizeLayout to the photo's aspect, then
-	        // defer Init+Draw to next frame so the layout pass applies before the
-	        // renderer queries the canvas's screen size.
-	        Widget card = m_aChatMessageWidgets[i];
-	        if (card)
-	        {
-	            SizeLayoutWidget sizeLayout = SizeLayoutWidget.Cast(card.FindAnyWidget("ImageContainer"));
-	            if (sizeLayout && photo.m_iWidth > 0 && photo.m_iHeight > 0)
-	                SizePhotoCanvas(sizeLayout, photo.m_iWidth, photo.m_iHeight);
-	        }
-
-	        canvas.SetVisible(true);
-
-	        AG0_TDLPhotoRenderer renderer = new AG0_TDLPhotoRenderer();
-	        m_aChatMessageRenderers[i] = renderer;
-	        GetGame().GetCallqueue().CallLater(InitAndDrawPhotoRenderer, 0, false,
-	            renderer, canvas, photo);
-	    }
-	}
-
-	//------------------------------------------------------------------------------------------------
-	//! Pin the ImageContainer SizeLayout to a width/height matching the photo's natural
-	//! aspect ratio, clamped to layout-friendly bounds. Setting Min == Max on both axes
-	//! removes the slack the SizeLayout normally has — the canvas inside (HorizontalAlign
-	//! 3 / VerticalAlign 3) fills exactly to those dims, and the renderer's CONTAIN fit
-	//! mode is then drawing into a canvas with the right shape so there's no letterboxing.
-	//!
-	//! Bounds:
-	//!   MAX_W: fits inside parent "SizeLayout" (`MaxDesiredWidth 400`) minus content padding
-	//!   MAX_H: caps card height so portraits don't blow up the chat list scroll
-	//!   MIN_DIM: floor so tiny / extremely wide / extremely tall photos still register
-	//!
-	//! Extreme aspect ratios (very wide or very tall) fall through the bounds and end up
-	//! in a clipped box; the renderer's CONTAIN fit mode letterboxes inside that.
-	protected void SizePhotoCanvas(SizeLayoutWidget sizeLayout, int photoW, int photoH)
-	{
-	    const float MAX_W = 384.0;
-	    const float MAX_H = 384.0;
-	    const float MIN_DIM = 96.0;
-
-	    float pw = photoW;
-	    float ph = photoH;
-	    float aspect = pw / ph;
-
-	    // Start by maximizing width; if that overshoots the height cap, switch to height-driven.
-	    float targetW = MAX_W;
-	    float targetH = targetW / aspect;
-	    if (targetH > MAX_H)
-	    {
-	        targetH = MAX_H;
-	        targetW = targetH * aspect;
-	    }
-	    // Independent floor on both axes — extreme aspects degrade into letterboxing rather
-	    // than producing a 16x600 sliver of canvas.
-	    if (targetW < MIN_DIM) targetW = MIN_DIM;
-	    if (targetH < MIN_DIM) targetH = MIN_DIM;
-
-	    sizeLayout.SetMinDesiredWidth(targetW);
-	    sizeLayout.SetMaxDesiredWidth(targetW);
-	    sizeLayout.SetMinDesiredHeight(targetH);
-	    sizeLayout.SetMaxDesiredHeight(targetH);
-	}
-
-	//------------------------------------------------------------------------------------------------
-	//! Run after the one-frame defer from CreateMessageWidget so the canvas has its final
-	//! dimensions from the layout pass following SizePhotoCanvas's SetMin/MaxDesired* calls.
-	//! AG0_TDLPhotoRenderer.Init reads GetSizeInUnits() inside the call — without the defer
-	//! it would read pre-layout (often zero) dims and the rendered image would only
-	//! occupy the corner of the canvas.
-	//!
-	//! If the message-card widget has been removed from the hierarchy in the interval
-	//! (ClearChatMessages ran while we were waiting), the canvas may be invalid;
-	//! Init returns false on null/destroyed widgets and we bail without drawing.
-	protected void InitAndDrawPhotoRenderer(AG0_TDLPhotoRenderer renderer, CanvasWidget canvas, AG0_TDLPhotoData photo)
-	{
-	    if (!renderer || !canvas || !photo)
-	        return;
-	    if (!renderer.Init(canvas))
-	        return;
-	    renderer.SetPhotoData(photo);
-	    renderer.Draw();
-	}
-
-	//------------------------------------------------------------------------------------------------
-	protected string FormatTimestamp(int timestamp)
-	{
-	    int now = System.GetUnixTime();
-	    int diff = now - timestamp;
-	    
-	    if (diff < 60)
-	        return "Just now";
-	    else if (diff < 3600)
-	        return string.Format("%1m ago", diff / 60);
-	    else if (diff < 86400)
-	        return string.Format("%1h ago", diff / 3600);
-	    else
-	        return string.Format("%1d ago", diff / 86400);
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void SendChatMessage()
-	{
-	    if (!m_ChatEditBox || !m_NetworkDevice)
-	        return;
-
-	    string content = m_ChatEditBox.GetText();
-	    if (content.IsEmpty())
-	        return;
-
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-	    if (!controller)
-	        return;
-
-	    RplId senderDeviceRplId = m_NetworkDevice.GetDeviceRplId();
-
-	    if (m_MenuController.GetChatContactRplId() != RplId.Invalid())
-	        SCR_PlayerController.RequestSendDirectMessage(controller, senderDeviceRplId, content, m_MenuController.GetChatContactRplId());
-
-	    m_ChatEditBox.SetText("");
-	    m_bScrollToBottom = true;
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void SubscribeToMessageUpdates()
-	{
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-	    if (!controller)
-	        return;
-
-	    controller.GetOnMessagesUpdated().Insert(OnMessagesUpdated);
-	    controller.GetOnNewMessageReceived().Insert(OnNewMessageReceived);
-
-	    // Image-message refresh: when a chunked image transfer completes (or fails) for
-	    // any deliveryId, re-render the chat view if it's the visible panel. The photo
-	    // manager fires these once per delivery; cheap to handle redundantly.
-	    // Image-message rendering doesn't subscribe to the photo manager invokers.
-	    // DriveImageCardRendering (called every OnMenuUpdate tick) is the deterministic
-	    // path. Invokers were unreliable across the MP replication boundary.
-	}
-
-	//------------------------------------------------------------------------------------------------
-	protected void UnsubscribeFromMessageUpdates()
-	{
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-	    if (!controller)
-	        return;
-
-	    controller.GetOnMessagesUpdated().Remove(OnMessagesUpdated);
-	    controller.GetOnNewMessageReceived().Remove(OnNewMessageReceived);
-
-	    // Image-message rendering is driven by DriveImageCardRendering, not by photo-manager
-	    // invokers. Nothing to unsubscribe on the photo-manager side.
-	}
-
-	//------------------------------------------------------------------------------------------------
-	protected void OnMessagesUpdated(int networkId)
-	{
-	    if (m_MenuController.GetActivePanel() == ETDLPanelContent.DIRECT_CHAT)
-	    {
-	        if (m_NetworkDevice && m_NetworkDevice.GetCurrentNetworkID() == networkId)
-	            PopulateChatView();
-	    }
-	    // Badges refresh regardless of active panel — the contact list is visible on
-	    // the network/member panels, and we want unread counters to reflect new
-	    // arrivals even when the user isn't in chat view.
-	    UpdateMemberCardBadges();
-	}
-
-	//------------------------------------------------------------------------------------------------
-	//! Update each member-card's notification dot + count based on per-contact unread
-	//! direct messages. Called on initial card attach, when new messages arrive, and
-	//! after PopulateChatView marks the active conversation read.
-	//!
-	//! Pulls cards from m_DisplayController (which owns the lifecycle — cards are
-	//! created/destroyed as the network membership changes) and reads unread counts
-	//! from SCR_PlayerController.GetDirectChatUnreadCount. Per-contact tracking lives
-	//! in m_LocallyReadMessages on the controller; this just renders that state.
-	protected void UpdateMemberCardBadges()
-	{
-	    if (!m_DisplayController || !m_NetworkDevice)
-	        return;
-
-	    SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-	    if (!controller)
-	        return;
-
-	    int networkId = m_NetworkDevice.GetCurrentNetworkID();
-	    RplId myDeviceRplId = m_NetworkDevice.GetDeviceRplId();
-
-	    array<Widget> cards = m_DisplayController.GetMemberCards();
-	    array<RplId> cardIds = m_DisplayController.GetMemberCardIds();
-	    if (!cards || !cardIds)
-	        return;
-
-	    for (int i = 0; i < cards.Count(); i++)
-	    {
-	        Widget card = cards[i];
-	        if (!card || i >= cardIds.Count())
-	            continue;
-
-	        RplId contactId = cardIds[i];
-	        int unread = controller.GetDirectChatUnreadCount(networkId, myDeviceRplId, contactId);
-
-	        Widget notifDot = card.FindAnyWidget("NotificationDot");
-	        if (!notifDot)
-	            continue;
-
-	        if (unread <= 0)
-	        {
-	            notifDot.SetVisible(false);
-	            continue;
-	        }
-
-	        notifDot.SetVisible(true);
-	        // RichTextWidget extends TextWidget — TextWidget.Cast still resolves the layout's
-	        // RichTextWidgetClass entry. SetText accepts the count formatted as a string.
-	        TextWidget numText = TextWidget.Cast(card.FindAnyWidget("NotificationNumberText"));
-	        if (numText)
-	            numText.SetText(unread.ToString());
-	    }
-	}
-	
-	//------------------------------------------------------------------------------------------------
-	protected void OnNewMessageReceived(int networkId, int messageId)
-	{
-	    if (m_MenuController.GetActivePanel() == ETDLPanelContent.DIRECT_CHAT)
-	        m_bScrollToBottom = true;
-	}
 }

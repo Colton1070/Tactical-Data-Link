@@ -55,12 +55,13 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     
     override void OnToolActivated(Widget menuRoot)
     {
-        // The menu owns the toggle now — RequestPluginPanel(this) opens the
-        // side-panel slot the first time and closes it back to the map on a
-        // second click. Matches the Menu button's behaviour for consistency
-        // across all toolbar usage.
-        if (m_MenuUI)
-            m_MenuUI.RequestPluginPanel(this);
+        // The controller owns the toggle now — RequestPluginPanel(this) opens
+        // the side-panel slot the first time and closes it back to the map on
+        // a second click. Matches the Menu button's behaviour for consistency
+        // across all toolbar usage. Routed through the controller so the same
+        // plugin works on both the fullscreen menu and the world-space display.
+        if (m_Controller)
+            m_Controller.RequestPluginPanel(this);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -69,8 +70,7 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     override void OnMenuOpened(Widget menuRoot)
     {
         m_MenuRoot = menuRoot;
-        
-        // Create PTT overlay
+
         Widget overlayArea = menuRoot.FindAnyWidget("PluginPanelRightSide");
         if (overlayArea)
         {
@@ -136,10 +136,11 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     //------------------------------------------------------------------------------------------------
     // Management Panel
     //
-    // OnPanelShown / OnPanelHidden are driven by AG0_TDLMenuUI.SetPanelContent
-    // whenever this plugin enters / exits the PLUGIN_TOOL panel slot. The menu
-    // hands us the empty PluginToolPanel widget — we spawn our management
-    // layout into it and bind. The menu owns toggle-off; we just clean up.
+    // OnPanelShown / OnPanelHidden are driven by AG0_TDLMenuController.SetPanelContent
+    // whenever this plugin enters / exits the PLUGIN_TOOL panel slot. The
+    // controller hands us the empty PluginToolPanel widget — we spawn our
+    // management layout into it and bind. The controller owns toggle-off; we
+    // just clean up.
     //------------------------------------------------------------------------------------------------
     override void OnPanelShown(Widget panelRoot)
     {
@@ -150,7 +151,6 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
         if (!m_wManagementPanel)
             return;
 
-        // Cache widget refs
         m_wNodeList = m_wManagementPanel.FindAnyWidget("NodeList");
         m_wNetworkName = TextWidget.Cast(m_wManagementPanel.FindAnyWidget("NetworkName"));
         m_wNodeCount = TextWidget.Cast(m_wManagementPanel.FindAnyWidget("NodeCount"));
@@ -184,8 +184,8 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
 
     protected void OnCloseClicked()
     {
-        if (m_MenuUI)
-            m_MenuUI.RequestPluginPanel(this);
+        if (m_Controller)
+            m_Controller.RequestPluginPanel(this);
     }
     
     protected void UpdateManagementPanel()
@@ -193,7 +193,6 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
         if (!m_wManagementPanel || !m_MPU5Device) 
             return;
         
-        // Update header info
         if (m_wNetworkName)
         {
             if (m_MPU5Device.IsInNetwork())
@@ -202,10 +201,8 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
                 m_wNetworkName.SetText("Not Connected");
         }
         
-        // Rebuild node list
         BuildNodeList();
-        
-        // Update node count
+
         if (m_wNodeCount)
             m_wNodeCount.SetText(string.Format("%1 Nodes", m_aNodeWidgets.Count()));
     }
@@ -238,22 +235,18 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
         if (!nodeEntry) 
             return;
         
-        // Name
         TextWidget nameText = TextWidget.Cast(nodeEntry.FindAnyWidget("NodeName"));
         if (nameText)
             nameText.SetText(member.GetPlayerName());
-        
-        // IP
+
         TextWidget ipText = TextWidget.Cast(nodeEntry.FindAnyWidget("NodeIP"));
         if (ipText)
             ipText.SetText(string.Format("IP: %1", member.GetNetworkIP()));
-        
-        // Signal
+
         TextWidget signalText = TextWidget.Cast(nodeEntry.FindAnyWidget("NodeSignal"));
         if (signalText)
             signalText.SetText(string.Format("%1%%", member.GetSignalStrength()));
-        
-        // Capabilities
+
         TextWidget capsText = TextWidget.Cast(nodeEntry.FindAnyWidget("NodeCaps"));
         if (capsText)
             capsText.SetText(GetCapabilityString(member.GetCapabilities()));
@@ -273,7 +266,6 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
             btnComp.m_OnClicked.Insert(relay.OnClick);
         }
 
-        // Track widget for cleanup
         m_aNodeWidgets.Insert(nodeEntry);
     }
 

@@ -11,12 +11,10 @@ class AG0_DeviceTDLNetworkAction : SCR_InventoryAction
         if (!m_TdlDeviceComp)
             return false;
 
-        // Keep the inspect check
         CharacterControllerComponent charComp = CharacterControllerComponent.Cast(user.FindComponent(CharacterControllerComponent));
         if (charComp && !charComp.GetInspect())
             return false;
 
-        // Only show if device is powered and has network capability
         if (!m_TdlDeviceComp.IsPowered() || !m_TdlDeviceComp.CanAccessNetwork())
             return false;
 		

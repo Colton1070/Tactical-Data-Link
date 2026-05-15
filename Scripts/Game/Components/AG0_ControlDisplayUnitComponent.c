@@ -86,7 +86,6 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
             return;
         }
         
-        // Initialize layout
         InitializeLayout();
         
         if (!m_wRoot || !m_wRTTexture)
@@ -190,11 +189,7 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
     {
         if (!m_IsDisplayOn)
             return;
-        
-        // Update display content if needed
-        // This would be where we update any text widgets with current state
-        
-        // Example: Update cypher key display
+
         UpdateCypherKeyDisplay();
     }
     
@@ -574,7 +569,6 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	{
 	    if (m_inputDialog)
 	    {
-	        // Optional: Explicitly clear button listeners
 	        m_inputDialog = null;
 	    }
 	    m_editBox = null;
@@ -726,13 +720,6 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    // Apply the key
 	    Print(string.Format("AG0_ControlDisplayUnitComponent: Applying key '%1' to radio", m_CurrentCypherKey), LogLevel.DEBUG);
 	    tdlRadioComp.SetCryptoKeyDirectly(m_CurrentCypherKey);
-	    
-	    // Notify original user - if applicable
-	    if (m_TargetUserEntity)
-	    {
-	        // Could send notification RPC to user
-	        // This would be for client-side UI feedback
-	    }
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -748,7 +735,6 @@ class AG0_ControlDisplayUnitComponent : ScriptComponent
 	    // Remove any pending callbacks
 	    GetGame().GetCallqueue().Remove(CheckListenTimeout);
 	    
-	    // Cleanup dialog
 	    CleanupDialog();
 	    
 	    // Destroy widgets

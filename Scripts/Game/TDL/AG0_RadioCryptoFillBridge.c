@@ -6,7 +6,7 @@
  * without creating a compile-time dependency in either direction.
  *
  * Usage:
- *   Subscriber (e.g. SCR_VehicleRadioComponent in Vehicle Intercom mod):
+ *   Subscriber (e.g. an external radio component):
  *     AG0_RadioCryptoFillBridge.s_OnKeyReceived.Insert(OnBridgeKeyReceived);
  *
  *   Invoker (AG0_PlayerController_TDL):

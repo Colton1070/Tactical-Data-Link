@@ -4,7 +4,6 @@ class AG0_TDL_KeyDialog : SCR_ConfigurableDialogUi
     
     protected SCR_EditBoxComponent m_InputField;
     
-    // Static factory - this is how you create instances
     static AG0_TDL_KeyDialog CreateKeyDialog(string message, string title = "")
     {
         AG0_TDL_KeyDialog dialog = new AG0_TDL_KeyDialog();

@@ -73,14 +73,12 @@ class AG0_TDLToggleFrequencyHopAction : ScriptedUserAction
         if (!owner)
             return false;
         
-        // Only show for TDL radios
         AG0_TDLRadioComponent tdlRadio = AG0_TDLRadioComponent.Cast(
             owner.FindComponent(AG0_TDLRadioComponent));
-        
+
         if (!tdlRadio)
             return false;
-        
-        // Check transceiver exists
+
         BaseRadioComponent baseRadio = tdlRadio.GetRadioComponent();
         if (!baseRadio || m_iTransceiverIndex >= baseRadio.TransceiversCount())
             return false;

@@ -1,8 +1,5 @@
-// AG0_TDLNetworkMemberData.c - Mario-style codec implementation
-
 class AG0_TDLNetworkMember
 {
-    // Define our data sizes
     static const int MAX_PLAYER_NAME_LENGTH = 32;  // Fixed size for player name
     static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1 + 4 + 4 + 1 + 4;
 	// RplId(4) + PlayerName(32) + Position(12) + Signal(4) + NetworkIP(4) + Capabilities(4) +
@@ -50,7 +47,6 @@ class AG0_TDLNetworkMember
 	void SetIsBridged(bool bridged) { m_bIsBridged = bridged; }
 	void SetSourceNetworkId(int networkId) { m_iSourceNetworkId = networkId; }
 
-    // Extract - following Mario's pattern exactly
     static bool Extract(AG0_TDLNetworkMember instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
         // RplId - 4 bytes
@@ -169,13 +165,11 @@ class AG0_TDLNetworkMember
         return true;
     }
 
-    // Encode - Mario's way: one simple serialize call
     static void Encode(SSnapSerializerBase snapshot, ScriptCtx ctx, ScriptBitSerializer packet)
     {
         snapshot.Serialize(packet, AG0_TDLNetworkMember.DATA_SIZE);
     }
 
-    // Decode - Mario's way: one simple serialize call
     static bool Decode(ScriptBitSerializer packet, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
         return snapshot.Serialize(packet, AG0_TDLNetworkMember.DATA_SIZE);

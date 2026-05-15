@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{C7D06838F17777DB}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox_dupe.layout"
+ Configurations {
+  LayoutResourceClass PC {
+  }
+  LayoutResourceClass XBOX_ONE : PC {
+  }
+  LayoutResourceClass XBOX_SERIES : PC {
+  }
+  LayoutResourceClass PS4 : PC {
+  }
+  LayoutResourceClass PS5 : PC {
+  }
+  LayoutResourceClass HEADLESS : PC {
+  }
+ }
+}

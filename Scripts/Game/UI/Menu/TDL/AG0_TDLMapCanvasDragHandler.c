@@ -64,7 +64,6 @@ class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
     //------------------------------------------------------------------------------------------------
     override bool OnMouseLeave(Widget w, Widget enterW, int x, int y)
     {
-        // Stop dragging if mouse leaves canvas
         m_bDragging = false;
         return false;
     }

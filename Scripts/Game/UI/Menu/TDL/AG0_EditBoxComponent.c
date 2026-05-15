@@ -38,7 +38,6 @@ class AG0_EditBoxComponent : ScriptedWidgetComponent
 	    if (m_wOutline)
 	        m_wOutline.SetColor(m_cOutlineDefault);
 	    
-	    // Hook into modular button for gamepad click
 	    SCR_ModularButtonComponent modBtn = SCR_ModularButtonComponent.Cast(
 	        w.FindHandler(SCR_ModularButtonComponent)
 	    );
@@ -47,7 +46,6 @@ class AG0_EditBoxComponent : ScriptedWidgetComponent
 	        modBtn.m_OnClicked.Insert(OnButtonClicked);
 	    }
 	    
-	    // Hook into EditBox events
 	    if (m_wEditBox)
 	    {
 	        SCR_EventHandlerComponent evh = SCR_EventHandlerComponent.Cast(
@@ -104,8 +102,7 @@ class AG0_EditBoxComponent : ScriptedWidgetComponent
     override bool OnFocusLost(Widget w, int x, int y)
     {
         m_bWrapperFocused = false;
-        
-        // If we're in edit mode and focus left, exit edit mode
+
         if (m_bEditMode)
             ExitEditMode();
         
@@ -117,7 +114,7 @@ class AG0_EditBoxComponent : ScriptedWidgetComponent
     // A button or click on wrapper - NOW enter edit mode
     override bool OnClick(Widget w, int x, int y, int button)
     {
-        if (button == 0)  // Left click / A button
+        if (button == 0)
         {
             EnterEditMode();
             return true;
@@ -137,11 +134,9 @@ class AG0_EditBoxComponent : ScriptedWidgetComponent
         if (m_wRoot)
             m_wRoot.SetFlags(WidgetFlags.NOFOCUS);
         
-        // Now redirect to EditBox
         GetGame().GetWorkspace().SetFocusedWidget(m_wEditBox);
         m_wEditBox.ActivateWriteMode();
-        
-        // Tell menu system we're in an interaction
+
         SCR_MenuHelper.SetActiveWidgetInteractionState(true);
         
         UpdateOutline();
@@ -151,12 +146,10 @@ class AG0_EditBoxComponent : ScriptedWidgetComponent
     protected void ExitEditMode()
     {
         m_bEditMode = false;
-        
-        // Make wrapper focusable again
+
         if (m_wRoot)
             m_wRoot.ClearFlags(WidgetFlags.NOFOCUS);
-        
-        // Release interaction state
+
         SCR_MenuHelper.SetActiveWidgetInteractionState(false);
         
         UpdateOutline();

@@ -37,10 +37,21 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     // Display controller - handles all the ATAK logic
     protected ref AG0_TDLDisplayController m_DisplayController;
 
-    // Shared menu controller - drives panel state machine (Network/Detail/
-    // Settings/MarkerTool/Plugin Tool switching). Same class the full-screen
-    // menu uses, instantiated against this layout instance so the world-space
-    // display gets the same panel interactivity.
+    // Shared menu controller — drives panel state machine, plugin lifecycle,
+    // chat, callsign save, camera broadcast toggle, and marker tool panel.
+    //
+    // Lifecycle is gated on the local player holding *this* device, not on
+    // the component's mount: there's at most one active world-space
+    // controller per local player, even though every device in the world has
+    // a TDL_WorldSpaceDisplayComponent on every client. Constructed when the
+    // device becomes held (EnsureControllerForHeld); torn down when it stops
+    // being held (TeardownControllerForUnheld). Other players' devices never
+    // construct one on this client, so:
+    //   * no N× fan-out on SCR_PlayerController message invokers
+    //   * no plugin overlays spawning into remote devices' RT layouts
+    //   * no chat-card or marker-tool widgets allocated for them
+    // The RT widget + m_DisplayController are still set up eagerly so remote
+    // players see a basic map on the screen mesh.
     protected ref AG0_TDLMenuController m_MenuController;
     
     // Layout paths
@@ -87,14 +98,29 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     [Attribute("2.0", UIWidgets.Slider, "Hard exit distance — focus drops if pivot moves further than this from saved entry camera origin (meters)", "0.5 10.0 0.1", category: "Focus Mode")]
     protected float m_fFocusMaxRange;
 
-    [Attribute("15.0", UIWidgets.EditBox, "PC mouse cursor sensitivity (pixels per raw delta unit)", category: "Focus Mode")]
+    //! PC mouse cursor sensitivity — multiplier on raw mouse:[xy]_rel deltas.
+    //! Now normalised against CURSOR_REF_FRAME_WIDTH inside DriveCursorFromInput
+    //! so the same value feels the same regardless of the RT's internal
+    //! resolution (a higher-resolution RT no longer needs proportionally
+    //! more cursor pixels to traverse the screen).
+    //!
+    //! Bumped from the old 15.0 default after live-server feedback (the
+    //! cursor required multiple mouse swipes to cross the ATAK display).
+    [Attribute("80.0", UIWidgets.EditBox, "PC mouse cursor sensitivity (pixels per raw delta unit, normalised to 1920px reference RT width)", category: "Focus Mode")]
     protected float m_fCursorSensitivityMouse;
 
-    [Attribute("1200.0", UIWidgets.EditBox, "Gamepad cursor speed (pixels per second at full stick deflection)", category: "Focus Mode")]
+    //! Gamepad cursor speed — same normalisation as mouse. Bumped from the
+    //! old 1200 default for the same reason; full stick deflection now
+    //! traverses the cursor across the screen in ~0.5s at the reference
+    //! frame width.
+    [Attribute("3500.0", UIWidgets.EditBox, "Gamepad cursor speed (pixels per second at full stick deflection, normalised to 1920px reference RT width)", category: "Focus Mode")]
     protected float m_fCursorSensitivityGamepad;
 
     [Attribute("0.15", UIWidgets.Slider, "Gamepad stick deadzone (0-1)", "0.0 0.5 0.01", category: "Focus Mode")]
     protected float m_fGamepadDeadzone;
+
+    [Attribute("2.0", UIWidgets.Slider, "Focus eligibility hit-zone expansion — raycast box multiplied by this for the focus prompt, so players can trigger focus looking at the bezel/edge of the device, not just the screen surface itself. 1.0 = exact screen, 2.0 = double-size zone.", "1.0 5.0 0.1", category: "Focus Mode")]
+    protected float m_fFocusEligibilityScale;
 
     // ============================================
     // DEBUG
@@ -114,7 +140,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     protected Widget m_wCursorHighlight;
     protected float m_fCursorX;
     protected float m_fCursorY;
-    protected bool m_bLookingAtScreen;
+    protected bool m_bLookingAtScreen;             //!< Raycast hits the exact screen surface — drives cursor visibility.
+    protected bool m_bNearScreen;                  //!< Raycast hits the expanded eligibility zone (screen + bezel) — drives focus prompt only.
     protected bool m_bInteractionEnabled;
     protected Widget m_wHoveredWidget;
     protected InputManager m_InputManager;
@@ -124,6 +151,25 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     protected bool m_bClickHandled;
     protected float m_fLastDragX;
     protected float m_fLastDragY;
+    //! Set on first frame of a click that lands on the brightness slider.
+    //! While non-null, HandleClickAndDrag drives the slider value from
+    //! m_fCursorX every frame (instead of single-fire TriggerClick), since
+    //! SliderWidget needs continuous mouse-move events to update its thumb
+    //! and the custom cursor doesn't synthesize those. Cleared on release.
+    protected Widget m_wSliderDragTarget;
+    //! Cursor position at the moment HandleClickAndDrag started a drag on the
+    //! map surface. Used on release to distinguish a real pan (significant
+    //! displacement) from a click-without-drag — the latter is the KBM marker-
+    //! placement path on world-space, mirroring the menu's drag handler's
+    //! m_OnClick event. Threshold below.
+    protected float m_fDragStartX;
+    protected float m_fDragStartY;
+    //! Pixel threshold below which a press+release counts as a click rather
+    //! than a drag. Tuned for an RT-rendered cursor at the world-space's
+    //! ContentFrame pixel density — small enough to catch deliberate clicks,
+    //! large enough to ignore sub-pixel jitter from gamepad-stick cursor
+    //! movement during press.
+    protected const float MAP_CLICK_DRAG_THRESHOLD = 4.0;
     protected Widget m_wMapDragSurface;
 
     // ============================================
@@ -145,6 +191,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     protected bool m_bDOFWasEnabledOnEntry;        //!< Tracks whether we toggled the DOF info display, so we only restore if we suppressed
     protected float m_fEntryPlayerFOV;             //!< Player camera vertical FOV at the moment of focus entry — start frame of ENTERING tween, end frame target of EXITING tween (re-sampled live during exit)
     protected float m_fFocusNativeFOV;             //!< Focus camera prefab's natural vertical FOV — end frame target of ENTERING tween, start frame of EXITING tween
+    protected float m_fCachedFrameW;               //!< ContentFrame screen width captured once after layout settles — used for cursor clamp + raycast UV scaling. Per-frame GetScreenSize fluctuates when the MapCanvas re-lays out on zoom, which made the cursor speed feel tied to map zoom.
+    protected float m_fCachedFrameH;               //!< ContentFrame screen height, same caching reason as above.
     
     // ============================================
     // LIFECYCLE
@@ -155,8 +203,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     override void OnPostInit(IEntity owner)
     {
         super.OnPostInit(owner);
-        
-        // Only setup on local machine where we need visuals
+
+        // Visuals only on the local machine.
         if (!System.IsConsoleApp())
         {
             SetEventMask(owner, EntityEvent.INIT | EntityEvent.FRAME);
@@ -181,10 +229,30 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
 		if (owner.GetWorld() != GetGame().GetWorld()) //Bacon fix?
         	return;
 		
-        // MULTIPLAYER OPTIMIZATION: Only process if this device is held by local player
-        // Other players' devices simulate locally but we skip expensive raycast/UI work
+        // MULTIPLAYER OPTIMIZATION: Only process if this device is held by local player.
+        // Other players' devices simulate locally but we skip expensive raycast/UI work.
         SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
-        if (!pc || !pc.IsHeldDevice(owner))
+        bool isHeld = pc && pc.IsHeldDevice(owner);
+
+        // Held-state transition: spin the menu controller up when the local
+        // player picks this device up, tear it down when they drop it. There
+        // should be at most one active controller per local player — and
+        // here, since every device in the world hosts a
+        // TDL_WorldSpaceDisplayComponent on every client, we gate construction
+        // on hold rather than on component mount.
+        //
+        // Gate is `isHeld vs controller-existence` rather than tracking the
+        // previous frame's isHeld separately: this auto-retries Ensure if
+        // m_wRoot wasn't ready yet (CreateRenderTarget is deferred 100ms via
+        // CallLater on EOnInit, so a fast pickup before that callback fires
+        // would otherwise lose the transition).
+        bool controllerActive = m_MenuController != null;
+        if (isHeld && !controllerActive)
+            EnsureControllerForHeld(owner);
+        else if (!isHeld && controllerActive)
+            TeardownControllerForUnheld();
+
+        if (!isHeld)
         {
             // Not our device - ensure clean state and bail.
             // Includes auto-cleanup of focus if we were focused when the device
@@ -196,6 +264,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
 
             if (m_bLookingAtScreen)
                 SetLookingAtScreen(false);
+            m_bNearScreen = false;
             return;
         }
 
@@ -207,6 +276,37 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // Update the display controller each frame
         if (m_DisplayController)
             m_DisplayController.Update(timeSlice);
+
+        // Bloodhound — push this frame's cursor world position to the
+        // controller BEFORE its Tick() runs so UpdateBloodhound sees a
+        // fresh override. On world-space the cursor's world position is
+        // m_fCursorX/Y (in ContentFrame screen pixels) projected through
+        // the MapView's ScreenToWorld after subtracting the MapCanvas's
+        // screen offset. Menu doesn't push — its UpdateBloodhound falls
+        // back to mapView.GetCenter().
+        if (m_MenuController)
+        {
+            if (AG0_TDLMenuController.GetBloodhoundEnabled())
+            {
+                vector cursorWorld;
+                if (TryGetBloodhoundCursorWorld(cursorWorld))
+                    m_MenuController.SetBloodhoundCursorWorld(cursorWorld);
+                else
+                    m_MenuController.ClearBloodhoundCursorWorld();
+            }
+            else
+            {
+                m_MenuController.ClearBloodhoundCursorWorld();
+            }
+        }
+
+        // Tick the shared menu controller — drives plugins' OnMenuUpdate,
+        // image-card rendering, periodic canvas redraw, scroll-to-bottom.
+        // Marker tool action poll + camera button state are folded in too
+        // (post Phase 4/5). InputManager is the local player's; safe even
+        // when the player isn't focused on the device (Tick is cheap).
+        if (m_MenuController)
+            m_MenuController.Tick(timeSlice, m_InputManager);
 
         // Re-apply NOFOCUS to catch widgets spawned this frame by the display
         // controller (member cards on 1Hz refresh, markers, etc.) or by plugins
@@ -330,7 +430,17 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             Print("[TDL_WorldSpaceDisplay] FAIL: Could not create ATAK layout", LogLevel.ERROR);
             return;
         }
-        
+
+        // If we fell back to the RT widget as our content frame, re-point at the
+        // spawned ATAK layout root now that it exists. m_wRoot is a proper
+        // FrameWidget; the RT widget is not. FrameSlot.SetPos behavior on a
+        // non-Frame parent is unreliable — observed symptom: cursor speed scaled
+        // by map-zoom-driven layout reflows. Routing both the cursor's parent
+        // AND TransformWorldToUI's screen-size source through a real FrameWidget
+        // gives the cursor a stable coordinate space.
+        if (m_wContentFrame == m_RTWidget)
+            m_wContentFrame = m_wRoot;
+
         // CRITICAL: Disable focus on all widgets to prevent interference with other menus
         // We handle interaction via raycasting, not the normal focus system
         DisableFocusRecursive(m_wRTContainer);
@@ -349,21 +459,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             return;
         }
 
-        // Initialize the shared menu controller so the panel state machine
-        // works on this layout instance. The controller wires up the nav
-        // button handlers (Network/Back/Settings/MarkerTool) — which is what
-        // makes Contacts/Detail/Settings/Marker panels interactive on the
-        // world-space display, matching the full-screen menu's behaviour.
-        //
-        // Plugins are menu-lifecycle-scoped (Enable/Disable happens via the
-        // menu UI), so the world-space's RestoreState gets an empty plugin
-        // array — PLUGIN_TOOL won't restore here, falls back to NETWORK_LIST.
-        m_MenuController = new AG0_TDLMenuController();
-        if (m_MenuController.Init(m_wRoot))
-        {
-            ref array<ref AG0_ATAKPluginBase> noPlugins = {};
-            m_MenuController.RestoreState(noPlugins);
-        }
+        // Menu controller construction is held-state-gated — see
+        // EnsureControllerForHeld(). The display controller above is eagerly
+        // set up so the screen mesh has *something* to render (basic map)
+        // even on remote players' devices that this client doesn't drive,
+        // but plugins / chat subscriptions / callsign / marker tool wiring
+        // only spin up when the local player picks the device up.
 
         // Setup interaction system
         SetupInteraction();
@@ -380,17 +481,82 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     {
         if (!m_wRoot)
             return;
-        
+
         // Create cursor widgets
         CreateCursor();
-        
+
         // Hook button callbacks on this layout instance
         HookButtonHandlers();
-        
+
         // Find drag surface for map panning
         m_wMapDragSurface = m_wRoot.FindAnyWidget("MapDragSurface");
-        
+
         m_bInteractionEnabled = true;
+    }
+
+    // ============================================
+    // CONTROLLER LIFECYCLE — held-state-gated
+    // ============================================
+
+    //------------------------------------------------------------------------------------------------
+    //! Spin up the menu controller for this device. Idempotent: if a
+    //! controller already exists, this is a no-op. Bails silently if the RT
+    //! widget tree isn't ready yet (CreateRenderTarget is deferred 100ms on
+    //! EOnInit) — the next held-transition check will retry.
+    //!
+    //! Owner is the device entity. We use it to find this gadget's own ATAK
+    //! device component for SetActiveDevice / SetNetworkDevice — the world-
+    //! space controller represents *this* device, unlike the menu which
+    //! picks the player's currently-active held ATAK device.
+    protected void EnsureControllerForHeld(IEntity owner)
+    {
+        if (m_MenuController)
+            return;
+        if (!m_wRoot)
+            return;
+
+        m_MenuController = new AG0_TDLMenuController();
+        if (!m_MenuController.Init(m_wRoot))
+        {
+            // Init failed — drop the ref so the next transition can retry
+            // from scratch instead of holding a half-built controller.
+            m_MenuController = null;
+            return;
+        }
+
+        AG0_TDLDeviceComponent ownDevice = AG0_TDLDeviceComponent.Cast(owner.FindComponent(AG0_TDLDeviceComponent));
+        m_MenuController.SetActiveDevice(ownDevice);
+        m_MenuController.SetNetworkDevice(ownDevice);
+        m_MenuController.SetDisplayController(m_DisplayController);
+        // World-space frontend owns the device screen — opt into the
+        // brightness overlay so the slider in the settings panel actually
+        // dims this RT layout. Fullscreen menu deliberately doesn't opt in:
+        // it's already its own dark UI and dimming it would just obscure the
+        // controls. SetApplyBrightness applies the current persisted value
+        // immediately, so swapping to a held device picks up the last
+        // brightness the player set.
+        m_MenuController.SetApplyBrightness(true);
+        m_MenuController.RefreshPlugins();
+        m_MenuController.RestoreState();
+        // Subscribe to message updates so chat / badge state stays live for
+        // the duration of the player holding this device. Per-instance
+        // subscription — paired with TeardownControllerForUnheld below.
+        m_MenuController.SubscribeToMessageUpdates();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Tear down the menu controller when the local player drops / swaps off
+    //! this device. Idempotent: no-op if no controller exists. Plugins fire
+    //! OnMenuClosed via DisablePlugins inside Cleanup so any spawned overlays
+    //! (PTT etc.) are removed from this device's RT layout cleanly.
+    protected void TeardownControllerForUnheld()
+    {
+        if (!m_MenuController)
+            return;
+
+        m_MenuController.UnsubscribeFromMessageUpdates();
+        m_MenuController.Cleanup();
+        m_MenuController = null;
     }
     
     //------------------------------------------------------------------------------------------------
@@ -553,6 +719,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         {
             if (m_bLookingAtScreen)
                 SetLookingAtScreen(false);
+            m_bNearScreen = false;
             m_bDragging = false;
             m_bClickHandled = false;
             return;
@@ -610,12 +777,13 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         if (!GetCameraRay(camOrigin, camDir))
         {
             SetLookingAtScreen(false);
+            m_bNearScreen = false;
             m_bDragging = false;
             m_bClickHandled = false;
             return;
         }
 
-        // Test intersection with screen
+        // Test intersection with screen — exact size for cursor / click logic.
         float hitFraction = TraceToScreen(camOrigin, camDir);
 
         if (hitFraction >= 0 && hitFraction <= 1)
@@ -639,6 +807,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             }
 
             SetLookingAtScreen(true);
+            // Inner hit always implies near hit — same physical region.
+            m_bNearScreen = true;
             UpdateHoveredWidget();
 
             // Click/drag input handling — extracted to HandleClickAndDrag so the
@@ -656,6 +826,21 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             SetLookingAtScreen(false);
             m_bDragging = false;
             m_bClickHandled = false;
+
+            // Second trace against the expanded eligibility box. Only used for
+            // the focus prompt — players can trigger focus when looking at the
+            // device bezel without needing pixel-accurate aim on the screen
+            // itself. No cursor here, so the cost is just an AABB test.
+            // Skip the second trace if the scale is effectively 1.0 (no expansion).
+            if (m_fFocusEligibilityScale > 1.001)
+            {
+                float nearHit = TraceToScreen(camOrigin, camDir, m_fFocusEligibilityScale);
+                m_bNearScreen = (nearHit >= 0 && nearHit <= 1);
+            }
+            else
+            {
+                m_bNearScreen = false;
+            }
         }
     }
     
@@ -701,46 +886,52 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     }
     
     //------------------------------------------------------------------------------------------------
-    //! Returns hit fraction (0-1) if ray intersects screen box, -1 otherwise
-    protected float TraceToScreen(vector origin, vector direction)
+    //! Returns hit fraction (0-1) if ray intersects screen box, -1 otherwise.
+    //! Default behavior unchanged — scale==1.0 tests against the exact screen size.
+    //! Larger scales expand the height + width of the test box for the focus
+    //! eligibility check, letting the player trigger focus when looking at the
+    //! device's bezel rather than only the screen surface. Depth is NOT scaled —
+    //! we still want a thin slab so glancing rays parallel to the screen plane
+    //! don't register.
+    protected float TraceToScreen(vector origin, vector direction, float scale = 1.0)
     {
         // Get adjusted screen transform with rotation offset applied
         vector screenMat[4];
         GetAdjustedScreenTransform(screenMat);
-        
+
         // Convert to quaternion for rotation
         float screenQuat[4];
         Math3D.MatrixToQuat(screenMat, screenQuat);
-        
+
         // Inverse quaternion for world-to-local
         float screenQuatInv[4];
         Math3D.QuatInverse(screenQuatInv, screenQuat);
-        
+
         vector screenOrigin = screenMat[3];
-        
+
         // Transform ray to screen local space
         vector rayStart = origin - screenOrigin;
         vector rayEnd = (origin + direction * m_fMaxInteractionDistance) - screenOrigin;
-        
+
         rayStart = SCR_Math3D.QuatMultiply(screenQuatInv, rayStart);
         rayEnd = SCR_Math3D.QuatMultiply(screenQuatInv, rayEnd);
-        
+
         // Apply screen offset (in local space)
         rayStart = rayStart - m_vScreenWorldOffset;
         rayEnd = rayEnd - m_vScreenWorldOffset;
-        
+
         // Screen bounding box (X = normal/depth, Y = height, Z = width)
         vector boxMin = Vector(
             -0.001,
-            -m_vScreenWorldSize[1] * 0.5,
-            -m_vScreenWorldSize[2] * 0.5
+            -m_vScreenWorldSize[1] * 0.5 * scale,
+            -m_vScreenWorldSize[2] * 0.5 * scale
         );
         vector boxMax = Vector(
             0.001,
-            m_vScreenWorldSize[1] * 0.5,
-            m_vScreenWorldSize[2] * 0.5
+            m_vScreenWorldSize[1] * 0.5 * scale,
+            m_vScreenWorldSize[2] * 0.5 * scale
         );
-        
+
         return Math3D.IntersectionRayBox(rayStart, rayEnd, boxMin, boxMax);
     }
     
@@ -795,9 +986,10 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         localHit = SCR_Math3D.QuatMultiply(screenQuatInv, localHit);
         localHit = localHit - m_vScreenWorldOffset;
         
-        // Get ContentFrame size for pixel scaling (cursor lives in ContentFrame's coordinate space)
+        // Get ContentFrame size for pixel scaling (cursor lives in ContentFrame's coordinate space).
+        // Cached — see GetCachedFrameSize doc for why we don't query GetScreenSize per-frame.
         float frameW, frameH;
-        m_wContentFrame.GetScreenSize(frameW, frameH);
+        GetCachedFrameSize(frameW, frameH);
         
         // Normalize to 0-1 UV (Z = horizontal, Y = vertical)
         float u = (localHit[2] / m_vScreenWorldSize[2]) + 0.5;
@@ -981,32 +1173,47 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     protected void UpdateHoveredWidget()
     {
         Widget newHovered = FindClickableAt(m_fCursorX, m_fCursorY);
-        
+
         if (newHovered != m_wHoveredWidget)
         {
-            // Fire focus lost on old widget
+            // Fire mouse-leave + focus-lost on the old widget. Order matches
+            // the engine's hover-exit pair so components that drive
+            // animation state off either event (e.g. SCR_ButtonBaseComponent
+            // .OnMouseLeave de-tints the background, OnFocusLost clears the
+            // border) update consistently.
             if (m_wHoveredWidget)
             {
                 ScriptedWidgetEventHandler handler = ScriptedWidgetEventHandler.Cast(
                     m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler)
                 );
                 if (handler)
+                {
+                    handler.OnMouseLeave(m_wHoveredWidget, newHovered, 0, 0);
                     handler.OnFocusLost(m_wHoveredWidget, 0, 0);
+                }
             }
-            
+
             m_wHoveredWidget = newHovered;
-            
-            // Fire focus gained on new widget
+
+            // Fire mouse-enter + focus on the new widget. SCR_PagingButtonComponent
+            // (spinbox arrows) and other WLib button components track a
+            // "is hovered" state via OnMouseEnter / OnMouseLeave, and some
+            // bail out of OnClick when they don't think they're hovered —
+            // firing both events keeps the world-space cursor behaviourally
+            // equivalent to the engine's normal mouse pointer.
             if (m_wHoveredWidget)
             {
                 ScriptedWidgetEventHandler handler = ScriptedWidgetEventHandler.Cast(
                     m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler)
                 );
                 if (handler)
+                {
                     handler.OnFocus(m_wHoveredWidget, m_fCursorX, m_fCursorY);
+                    handler.OnMouseEnter(m_wHoveredWidget, m_fCursorX, m_fCursorY);
+                }
             }
         }
-        
+
         // Update highlight visibility
         if (m_wCursorHighlight)
             m_wCursorHighlight.SetVisible(m_wHoveredWidget != null);
@@ -1021,11 +1228,14 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                 m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler)
             );
             if (handler)
+            {
+                handler.OnMouseLeave(m_wHoveredWidget, null, 0, 0);
                 handler.OnFocusLost(m_wHoveredWidget, 0, 0);
+            }
         }
-        
+
         m_wHoveredWidget = null;
-        
+
         if (m_wCursorHighlight)
             m_wCursorHighlight.SetVisible(false);
     }
@@ -1075,20 +1285,79 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     {
         if (!w)
             return false;
-        
+
         // ButtonWidget
         if (ButtonWidget.Cast(w))
             return true;
-        
+
         // SCR_ModularButtonComponent
         if (w.FindHandler(SCR_ModularButtonComponent))
             return true;
-        
+
         // AG0_TDLMemberCardHandler (for member cards)
         if (w.FindHandler(AG0_TDLMemberCardHandler))
             return true;
-        
+
+        // AG0_TDLMarkerEntryHandler (for placed-marker scroll list cards).
+        // Click deletes the marker via AskRemoveStaticMarker RPC.
+        if (w.FindHandler(AG0_TDLMarkerEntryHandler))
+            return true;
+
+        // SCR_PagingButtonComponent — spinbox left/right arrow buttons. The
+        // recursive walk returns the arrow widget directly as target; the
+        // dispatch in TriggerClick fires the paging button's OnClick.
+        if (w.FindHandler(SCR_PagingButtonComponent))
+            return true;
+
+        // Brightness slider — the outer ButtonWidget that wraps the inner
+        // SliderWidget. FindClickableRecursive returns this widget (not the
+        // inner SliderWidget) because the SCR_SliderComponent handler lives
+        // on the outer button. HandleClickAndDrag branches on this to drive
+        // the slider value from cursor X every frame instead of single-fire
+        // TriggerClick — the engine's normal slider-drag pathway depends on
+        // continuous mouse-move events that this component doesn't emit.
+        if (m_MenuController && m_MenuController.IsBrightnessSlider(w))
+            return true;
+
+        // Spinbox arrow buttons / inner widgets — the SCR_SpinBoxComponent
+        // handler lives on the spinbox container, not the arrow buttons, so
+        // walk up the parent chain. Same for combo boxes (vanilla picker
+        // widgets used by the marker tool panel for type / faction / dim).
+        if (FindSpinBoxOwner(w))
+            return true;
+        if (FindComboBoxOwner(w))
+            return true;
+
         return false;
+    }
+
+    //! Walk up the widget tree from `start` looking for a widget whose handler
+    //! is SCR_SpinBoxComponent. Returns the owner widget (the one carrying the
+    //! handler) so the caller can grab both the component and its screen
+    //! bounds for left/right-half hit-testing.
+    protected Widget FindSpinBoxOwner(Widget start)
+    {
+        Widget w = start;
+        while (w)
+        {
+            if (w.FindHandler(SCR_SpinBoxComponent))
+                return w;
+            w = w.GetParent();
+        }
+        return null;
+    }
+
+    //! Same walk for combo boxes.
+    protected Widget FindComboBoxOwner(Widget start)
+    {
+        Widget w = start;
+        while (w)
+        {
+            if (w.FindHandler(SCR_ComboBoxComponent))
+                return w;
+            w = w.GetParent();
+        }
+        return null;
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1124,8 +1393,6 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     {
         if (!m_bLookingAtScreen || !m_bInteractionEnabled)
             return;
-        
-        // Could add back navigation logic here if needed
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1133,8 +1400,127 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     {
         if (!target)
             return;
-        
-        // Try SCR_ModularButtonComponent - invoke registered callbacks
+
+        // Spinbox dispatch — determine direction and call SetCurrentItem
+        // directly with manual bounds/cycling. Bypasses the vanilla
+        // EnableArrows path that disables a paging button widget at the
+        // index edges (non-cycling spinboxes like the marker tool's type
+        // selector were getting stuck: at index 0 LEFT is disabled, and
+        // even after moving to index 1 the disabled state on the now-
+        // valid LEFT arrow wasn't always cleanly cleared, so subsequent
+        // LEFT clicks via the engine OnClick path no-op'd).
+        //
+        // SetCurrentItem fires m_OnChanged regardless of EnableArrows, so
+        // panel-side handlers (OnTypeSpinBoxChanged, OnPlacedIconChanged,
+        // OnMilitarySelectorChanged) all run as expected.
+        Widget spinOwner = FindSpinBoxOwner(target);
+        if (spinOwner)
+        {
+            SCR_SpinBoxComponent spinBox = SCR_SpinBoxComponent.Cast(
+                spinOwner.FindHandler(SCR_SpinBoxComponent));
+            if (spinBox)
+            {
+                // Decide direction: if click target is a paging button, use
+                // its widget name (most reliable); otherwise compute from
+                // cursor X vs spinbox center (fallback for clicks that
+                // land in the container's body).
+                bool decrement;
+                if (target.FindHandler(SCR_PagingButtonComponent))
+                {
+                    decrement = (target.GetName() == "ButtonLeft");
+                }
+                else
+                {
+                    float sX, sY, sW, sH;
+                    spinOwner.GetScreenPos(sX, sY);
+                    spinOwner.GetScreenSize(sW, sH);
+                    decrement = (m_fCursorX < sX + sW * 0.5);
+                }
+
+                int numItems = spinBox.GetNumItems();
+                if (numItems > 0)
+                {
+                    int currentIdx = spinBox.GetCurrentIndex();
+                    int newIdx;
+                    if (decrement)
+                        newIdx = currentIdx - 1;
+                    else
+                        newIdx = currentIdx + 1;
+                    // Manual wrap. The panel-side type spinbox doesn't set
+                    // cycle mode (only icon / color / faction / dimension
+                    // do) so we cycle ourselves — visually consistent with
+                    // gamepad-style spinbox interaction across all of them.
+                    if (newIdx < 0)
+                        newIdx = numItems - 1;
+                    else if (newIdx >= numItems)
+                        newIdx = 0;
+                    spinBox.SetCurrentItem(newIdx);
+                }
+                return;
+            }
+        }
+
+        // Combo box dispatch — combo boxes don't share the spinbox's
+        // paging-button substructure (they open a dropdown on click via
+        // SCR_ComboBoxComponent.OnClick). Fire OnClick directly so the
+        // engine's dropdown opens. The dropdown's own item selection then
+        // closes it normally.
+        Widget comboOwner = FindComboBoxOwner(target);
+        if (comboOwner)
+        {
+            SCR_ComboBoxComponent combo = SCR_ComboBoxComponent.Cast(comboOwner.FindHandler(SCR_ComboBoxComponent));
+            if (combo)
+            {
+                // Fall back to index cycle since the dropdown overlay
+                // depends on workspace-level rendering that the world-
+                // space RT can't host.
+                int currentIdx = combo.GetCurrentIndex();
+                int numItems = combo.GetNumItems();
+                if (numItems > 0)
+                {
+                    float cX, cY, cW, cH;
+                    comboOwner.GetScreenPos(cX, cY);
+                    comboOwner.GetScreenSize(cW, cH);
+                    float centerX = cX + cW * 0.5;
+
+                    int newIdx;
+                    if (m_fCursorX < centerX)
+                        newIdx = currentIdx - 1;
+                    else
+                        newIdx = currentIdx + 1;
+                    // Manual cycle — combo doesn't always honour cycle mode
+                    // and the dropdown UX isn't available on world-space.
+                    if (newIdx < 0)
+                        newIdx = numItems - 1;
+                    else if (newIdx >= numItems)
+                        newIdx = 0;
+                    combo.SetCurrentItem(newIdx);
+                }
+                return;
+            }
+        }
+
+        // Member-card click — drives ShowDetailView via the controller.
+        AG0_TDLMemberCardHandler cardHandler = AG0_TDLMemberCardHandler.Cast(
+            target.FindHandler(AG0_TDLMemberCardHandler)
+        );
+        if (cardHandler)
+        {
+            cardHandler.OnClick(target, m_fCursorX, m_fCursorY, 0);
+            return;
+        }
+
+        // Marker-entry click — AskRemoveStaticMarker RPC via the panel.
+        AG0_TDLMarkerEntryHandler markerHandler = AG0_TDLMarkerEntryHandler.Cast(
+            target.FindHandler(AG0_TDLMarkerEntryHandler)
+        );
+        if (markerHandler)
+        {
+            markerHandler.OnClick(target, m_fCursorX, m_fCursorY, 0);
+            return;
+        }
+
+        // SCR_ModularButtonComponent — generic toolbar / nav / panel buttons.
         SCR_ModularButtonComponent modBtn = SCR_ModularButtonComponent.Cast(
             target.FindHandler(SCR_ModularButtonComponent)
         );
@@ -1142,16 +1528,6 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         {
             if (modBtn.m_OnClicked)
                 modBtn.m_OnClicked.Invoke(modBtn);
-            return;
-        }
-        
-        // Try AG0_TDLMemberCardHandler for member cards
-        AG0_TDLMemberCardHandler cardHandler = AG0_TDLMemberCardHandler.Cast(
-            target.FindHandler(AG0_TDLMemberCardHandler)
-        );
-        if (cardHandler)
-        {
-            cardHandler.OnClick(target, m_fCursorX, m_fCursorY, 0);
             return;
         }
     }
@@ -1251,8 +1627,13 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // applied via SetLocalTransform. This is the same path AG0_TDLMenuUI's
         // AttachCameraToDevice relies on for the remote-feed camera.
 
-        if (!m_bLookingAtScreen)
-            return "raycast not currently hitting screen (m_bLookingAtScreen == false)";
+        // Eligibility uses m_bNearScreen, not m_bLookingAtScreen. The wider zone
+        // is more forgiving for the focus prompt — players can trigger when looking
+        // at the bezel without pixel-perfect aim on the screen surface. The cursor
+        // raycast and click logic still gate on m_bLookingAtScreen, which is the
+        // exact-screen hit.
+        if (!m_bNearScreen)
+            return "raycast not currently hitting screen eligibility zone (m_bNearScreen == false)";
 
         return string.Empty;
     }
@@ -1361,10 +1742,10 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // Initialize the cursor to the screen center as a sensible starting
         // position. The raycast path would have set this implicitly; in focus
         // mode there's no raycast so we seed it ourselves.
-        if (m_wContentFrame)
+        float frameW, frameH;
+        GetCachedFrameSize(frameW, frameH);
+        if (frameW > 0 && frameH > 0)
         {
-            float frameW, frameH;
-            m_wContentFrame.GetScreenSize(frameW, frameH);
             m_fCursorX = frameW * 0.5;
             m_fCursorY = frameH * 0.5;
         }
@@ -1607,18 +1988,11 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             return;
         }
 
-        // Out-of-range — player walked away from where they originally focused.
-        // Compares current pivot world position to entry-time camera origin.
-        // Uses pivot position (not character position) so it's geometry-aware:
-        // if the device geometry says the pivot is 0.5 m in front of the head,
-        // we measure from there.
-        vector pivotWorld[4];
-        m_FocusCameraPivot.GetWorldTransform(pivotWorld);
-        if (vector.Distance(pivotWorld[3], m_EntryCameraOrigin) > m_fFocusMaxRange)
-        {
-            ExitFocus(false);
-            return;
-        }
+        // (Was: distance-from-entry-camera-origin check. Removed — the pivot
+        // moves with the player so the distance grew with normal walking, which
+        // kicked players out of focus at anything faster than a crawl. The real
+        // device-loss cases are caught by the IsHeldDevice gate at the top of
+        // EOnFrame, so this guard was both redundant and harmful.)
 
         // Controlled-entity change — respawn into a new body, jumping into a
         // vehicle, going to spectator. The held-device cache would catch this on
@@ -1663,20 +2037,45 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
 
         if (clickHeld)
         {
-            if (!m_bClickHandled && !m_bDragging)
+            // Slider drag has its own continuation branch — checked first so
+            // it pre-empts the map-pan and button-click paths once a slider
+            // grab has started. m_wSliderDragTarget is set only on the first
+            // frame the click landed on the brightness slider.
+            if (m_wSliderDragTarget)
+            {
+                if (m_MenuController)
+                    m_MenuController.DriveBrightnessSliderFromCursorX(m_fCursorX);
+            }
+            else if (!m_bClickHandled && !m_bDragging)
             {
                 // First frame of click - decide what to do
                 Widget clickable = FindClickableAt(m_fCursorX, m_fCursorY);
 
+                // Brightness slider — enter slider-drag mode. Drive the
+                // value now (so a tap on the track immediately jumps the
+                // thumb without needing a drag) and on every subsequent
+                // frame the button is held. We don't set m_bClickHandled,
+                // because the continuation branch above looks at
+                // m_wSliderDragTarget instead.
+                if (m_MenuController && m_MenuController.IsBrightnessSlider(clickable))
+                {
+                    m_wSliderDragTarget = clickable;
+                    m_MenuController.DriveBrightnessSliderFromCursorX(m_fCursorX);
+                }
                 // If we hit the drag surface (or nothing), start dragging
-                if (!clickable || clickable == m_wMapDragSurface)
+                else if (!clickable || clickable == m_wMapDragSurface)
                 {
                     if (m_wMapDragSurface && IsPointInWidget(m_wMapDragSurface, m_fCursorX, m_fCursorY))
                     {
-                        // Start dragging on map surface
+                        // Start dragging on map surface. Record entry pos so
+                        // we can distinguish a real drag from a click-and-
+                        // release-without-movement on release — the latter
+                        // is the marker placement path (KBM map-click place).
                         m_bDragging = true;
                         m_fLastDragX = m_fCursorX;
                         m_fLastDragY = m_fCursorY;
+                        m_fDragStartX = m_fCursorX;
+                        m_fDragStartY = m_fCursorY;
                         AG0_TDLDisplayController.SetPlayerTracking(false);
                     }
                     else
@@ -1711,15 +2110,93 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         }
         else
         {
-            // Click released - reset state
+            // Click released — if we were dragging on the map surface and the
+            // total displacement is below the click threshold, this was a
+            // click-without-drag → route to controller's marker placement
+            // path. The controller gates internally on MARKER_TOOL being
+            // the active panel, so calls outside that mode are no-ops.
+            //
+            // Mirrors AG0_TDLMapCanvasDragHandler.m_OnClick on the menu's
+            // drag handler — same KBM placement behaviour, just sourced
+            // from this component's cursor instead of the workspace mouse.
+            if (m_bDragging && m_MenuController)
+            {
+                float dx = m_fCursorX - m_fDragStartX;
+                float dy = m_fCursorY - m_fDragStartY;
+                float distSq = dx * dx + dy * dy;
+                if (distSq <= MAP_CLICK_DRAG_THRESHOLD * MAP_CLICK_DRAG_THRESHOLD)
+                {
+                    // Route to both tool handlers — each internally gates
+                    // on whether its tool is active. Drag threshold above
+                    // already excluded pans, so this only fires on a real
+                    // click-without-drag.
+                    m_MenuController.OnMapClickedForMarkerPlacement(m_fCursorX, m_fCursorY);
+                    m_MenuController.OnMapClickedForBloodhound(m_fCursorX, m_fCursorY);
+                }
+            }
+
             m_bDragging = false;
             m_bClickHandled = false;
+            // End of slider drag — the next click starts a fresh decision.
+            m_wSliderDragTarget = null;
         }
 
         if (m_InputManager.GetActionTriggered("MenuBack"))
         {
             OnBackAction();
         }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Project the cursor's ContentFrame pixel position to a world position by
+    //! way of MapCanvas-local pixels + AG0_TDLMapView.ScreenToWorld. Mirrors
+    //! AG0_TDLMenuController.OnMapClickedForMarkerPlacement's KBM placement
+    //! conversion exactly — same offset subtraction, same call into ScreenToWorld
+    //! — so cursor → bloodhound world position uses identical math to cursor →
+    //! marker placement. Returns false if any prerequisite widget/component is
+    //! missing (defensive — layouts can lose widgets mid-session if e.g. the
+    //! device's RT widget recreates during a level restart).
+    protected bool TryGetBloodhoundCursorWorld(out vector worldPos)
+    {
+        if (!m_DisplayController || !m_wRoot)
+            return false;
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return false;
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return false;
+
+        float canvasScreenX, canvasScreenY;
+        canvasWidget.GetScreenPos(canvasScreenX, canvasScreenY);
+        float localX = m_fCursorX - canvasScreenX;
+        float localY = m_fCursorY - canvasScreenY;
+        mapView.ScreenToWorld(localX, localY, worldPos);
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Returns the ContentFrame screen size, lazily cached on first valid read.
+    //!
+    //! Why cached: querying m_wContentFrame.GetScreenSize() every frame ties the
+    //! cursor's clamp + the raycast's UV scaling to whatever the layout reports
+    //! right now. Internal layout passes (notably MapCanvas resizing when the
+    //! map zooms) shift the reported size, which manifests as cursor sensitivity
+    //! that scales with map zoom — sluggish when zoomed out, normal when zoomed in.
+    //!
+    //! Caching freezes the reference resolution at the first time the cursor is
+    //! actually used (by which point the layout has settled), so everything
+    //! downstream operates against a fixed coordinate space regardless of what
+    //! the map widget is doing.
+    protected void GetCachedFrameSize(out float w, out float h)
+    {
+        if (m_fCachedFrameW <= 0 || m_fCachedFrameH <= 0)
+        {
+            if (m_wContentFrame)
+                m_wContentFrame.GetScreenSize(m_fCachedFrameW, m_fCachedFrameH);
+        }
+        w = m_fCachedFrameW;
+        h = m_fCachedFrameH;
     }
 
     //------------------------------------------------------------------------------------------------
@@ -1741,12 +2218,24 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         m_wCursor.SetVisible(true);
     }
 
+    //! Reference RT width the cursor sensitivity attributes are calibrated
+    //! against. The per-frame motion scales by (actualFrameW / REFERENCE) so
+    //! the cursor feels the same regardless of whether the RT renders at
+    //! 1080p, 1440p, 4K, or a non-standard resolution.
+    protected const float CURSOR_REF_FRAME_WIDTH = 1920.0;
+
     //------------------------------------------------------------------------------------------------
     //! Read the cursor-axis actions and integrate into m_fCursorX/Y.
     //! PC actions are AnalogRelative against mouse:[xy]_rel± so they're already
     //! per-frame deltas — multiply by sensitivity only, NOT by timeSlice.
     //! Gamepad actions are stick deflection in [0,1] — these ARE velocities, so
     //! multiply by sensitivity AND timeSlice.
+    //!
+    //! Both axes are then scaled by (frameW / CURSOR_REF_FRAME_WIDTH) so the
+    //! sensitivity attributes are RT-resolution-independent. Without this,
+    //! a higher-resolution RT would need proportionally more cursor pixels
+    //! to traverse the visible screen, making sensitivity feel sluggish on
+    //! 4K RTs and twitchy on low-res ones.
     protected void DriveCursorFromInput(float timeSlice)
     {
         if (!m_InputManager || !m_wContentFrame)
@@ -1769,16 +2258,25 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         if (Math.AbsFloat(stickX) < m_fGamepadDeadzone) stickX = 0;
         if (Math.AbsFloat(stickY) < m_fGamepadDeadzone) stickY = 0;
 
-        float deltaX = (mouseRight - mouseLeft) * m_fCursorSensitivityMouse
-                     + stickX * m_fCursorSensitivityGamepad * timeSlice;
-        float deltaY = (mouseDown - mouseUp) * m_fCursorSensitivityMouse
-                     + stickY * m_fCursorSensitivityGamepad * timeSlice;
+        // Cached frame size — see GetCachedFrameSize doc. Querying GetScreenSize
+        // each frame here tied cursor speed to map-zoom-driven layout reflows.
+        float frameW, frameH;
+        GetCachedFrameSize(frameW, frameH);
+
+        // Sensitivity scale factor — keeps the perceived cursor speed constant
+        // across RT resolutions. At the reference width (1920), scale = 1.
+        float sensScale = 1.0;
+        if (frameW > 0)
+            sensScale = frameW / CURSOR_REF_FRAME_WIDTH;
+
+        float deltaX = ((mouseRight - mouseLeft) * m_fCursorSensitivityMouse
+                     + stickX * m_fCursorSensitivityGamepad * timeSlice) * sensScale;
+        float deltaY = ((mouseDown - mouseUp) * m_fCursorSensitivityMouse
+                     + stickY * m_fCursorSensitivityGamepad * timeSlice) * sensScale;
 
         m_fCursorX = m_fCursorX + deltaX;
         m_fCursorY = m_fCursorY + deltaY;
 
-        float frameW, frameH;
-        m_wContentFrame.GetScreenSize(frameW, frameH);
         m_fCursorX = Math.Clamp(m_fCursorX, 0, frameW);
         m_fCursorY = Math.Clamp(m_fCursorY, 0, frameH);
     }
@@ -1856,17 +2354,18 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
 
         m_bInteractionEnabled = false;
         m_bLookingAtScreen = false;
+        m_bNearScreen = false;
         m_bDragging = false;
         m_bClickHandled = false;
+        m_fCachedFrameW = 0;
+        m_fCachedFrameH = 0;
         
-        // Cleanup menu controller first (it may want to fire OnPanelHidden
-        // on the active plugin while widget tree is still alive). Then the
-        // display controller.
-        if (m_MenuController)
-        {
-            m_MenuController.Cleanup();
-            m_MenuController = null;
-        }
+        // Safety net for the case where the component is destroyed while the
+        // local player is still holding the device (e.g. server kicks the
+        // entity from the world mid-session). Normal drop/swap teardown runs
+        // earlier via TeardownControllerForUnheld on the held-state
+        // transition. Idempotent if already torn down.
+        TeardownControllerForUnheld();
 
         if (m_DisplayController)
         {

@@ -21,7 +21,7 @@ class AG0_TDLMapMarkerHandler : ScriptedWidgetEventHandler
     //------------------------------------------------------------------------------------------------
     override bool OnClick(Widget w, int x, int y, int button)
     {
-        if (m_Menu && button == 0)  // Left click
+        if (m_Menu && button == 0)
         {
             m_Menu.OnMapMarkerClicked(m_MemberId);
             return true;

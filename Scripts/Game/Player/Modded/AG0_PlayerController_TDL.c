@@ -856,7 +856,6 @@ modded class SCR_PlayerController
     protected void RPC_SetTDLConnectedPlayers(array<int> connectedPlayerIDs)
     {
         m_aTDLConnectedPlayerIDs = connectedPlayerIDs;
-        //Print(string.Format("TDL_PLAYERCONTROLLER: Updated connected players: %1", connectedPlayerIDs), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -875,7 +874,6 @@ modded class SCR_PlayerController
     protected void RPC_ClearTDLNetwork(int networkId)
     {
         m_mTDLNetworkMembersMap.Remove(networkId);
-        //Print(string.Format("TDL_PLAYERCONTROLLER: Cleared network %1 data", networkId), LogLevel.DEBUG);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -888,7 +886,6 @@ modded class SCR_PlayerController
             m_AvailableVideoSourcesSet.Insert(sourceId);
         
         m_bVideoSourcesDirty = true;
-        //Print(string.Format("TDL_PLAYERCONTROLLER: Updated broadcasting sources: %1", broadcastingSources.Count()), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------

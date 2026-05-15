@@ -14,7 +14,6 @@ class AG0_CDU_Power : ScriptedUserAction
             }
         }
         
-        // Toggle display
         if (m_CDUComponent.IsDisplayOn())
             m_CDUComponent.TurnOffDisplay();
         else

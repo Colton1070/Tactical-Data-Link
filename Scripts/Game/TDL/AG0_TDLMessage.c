@@ -548,13 +548,11 @@ class AG0_TDLMessageStore
     {
         if (m_mMessageIndex.Contains(msg.messageId))
         {
-            // Update existing
             int idx = m_mMessageIndex.Get(msg.messageId);
             m_aMessages[idx] = msg;
         }
         else
         {
-            // Add new
             m_mMessageIndex.Set(msg.messageId, m_aMessages.Count());
             m_aMessages.Insert(msg);
         }

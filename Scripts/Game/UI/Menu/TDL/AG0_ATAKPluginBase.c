@@ -13,7 +13,13 @@ class AG0_ATAKPluginBase
     // Runtime state
     protected AG0_TDLDeviceComponent m_ATAKDevice;
     protected IEntity m_SourceDevice;
-    protected AG0_TDLMenuUI m_MenuUI;
+    //! Controller is the shared host of plugin lifecycle — both the fullscreen
+    //! menu (AG0_TDLMenuUI) and the world-space device display
+    //! (TDL_WorldSpaceDisplayComponent) drive an AG0_TDLMenuController against
+    //! their own TDLMenuUI.layout instance and call RefreshPlugins on it.
+    //! Plugins call m_Controller.RequestPluginPanel(this) to claim the side
+    //! panel slot regardless of which frontend hosts them.
+    protected AG0_TDLMenuController m_Controller;
     protected bool m_bEnabled;
 
     // Identity
@@ -23,19 +29,20 @@ class AG0_ATAKPluginBase
     bool IsEnabled() { return m_bEnabled; }
     AG0_TDLDeviceComponent GetATAKDevice() { return m_ATAKDevice; }
     IEntity GetSourceDevice() { return m_SourceDevice; }
-    AG0_TDLMenuUI GetMenuUI() { return m_MenuUI; }
+    AG0_TDLMenuController GetController() { return m_Controller; }
 
     // Lifecycle
     //
-    // Enable() is called by AG0_TDLMenuUI.RefreshPlugins() when the menu opens
-    // with this plugin's source device in hand. The menuUi reference is kept
-    // so the plugin can call back into the menu — most importantly to request
-    // the side-panel slot via m_MenuUI.RequestPluginPanel(this).
-    void Enable(AG0_TDLDeviceComponent atakDevice, IEntity sourceDevice, AG0_TDLMenuUI menuUi)
+    // Enable() is called by AG0_TDLMenuController.RefreshPlugins() when the
+    // hosting frontend (menu open / world-space mounted) initialises plugin
+    // state. The controller reference is kept so the plugin can call back —
+    // most importantly to request the side-panel slot via
+    // m_Controller.RequestPluginPanel(this).
+    void Enable(AG0_TDLDeviceComponent atakDevice, IEntity sourceDevice, AG0_TDLMenuController controller)
     {
         m_ATAKDevice = atakDevice;
         m_SourceDevice = sourceDevice;
-        m_MenuUI = menuUi;
+        m_Controller = controller;
         m_bEnabled = true;
         OnEnabled();
     }
@@ -45,7 +52,7 @@ class AG0_ATAKPluginBase
         OnDisabled();
         m_ATAKDevice = null;
         m_SourceDevice = null;
-        m_MenuUI = null;
+        m_Controller = null;
         m_bEnabled = false;
     }
 
@@ -54,14 +61,14 @@ class AG0_ATAKPluginBase
 
     // Toolbar
     //
-    // ProvidesToolbarTool: declaration only — true means the menu should render
+    // ProvidesToolbarTool: declaration only — true means the host should render
     // a toolbar button for this plugin.
     //
     // OnToolActivated: fired by the toolbar button click. Typical override
-    // calls m_MenuUI.RequestPluginPanel(this) to claim the side panel slot;
-    // the menu handles the toggle (first click opens, second click closes back
-    // to map). Plugins that want non-panel behaviour (e.g. an instant action)
-    // can override this to do anything else.
+    // calls m_Controller.RequestPluginPanel(this) to claim the side panel slot;
+    // the controller handles the toggle (first click opens, second click closes
+    // back to map). Plugins that want non-panel behaviour (e.g. an instant
+    // action) can override this to do anything else.
     bool ProvidesToolbarTool() { return !m_sToolIcon.IsEmpty(); }
     void OnToolActivated(Widget menuRoot) {}
 

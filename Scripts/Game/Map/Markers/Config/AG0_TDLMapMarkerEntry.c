@@ -41,37 +41,30 @@ class AG0_TDLMapMarkerEntry : SCR_MapMarkerEntryDynamic
 	}
 	
     //------------------------------------------------------------------------------------------------
-    // Define our unique marker type for TDL radios
     override SCR_EMapMarkerType GetMarkerType()
     {
-        return SCR_EMapMarkerType.TDL_RADIO; // You'll need to add this to your EMapMarkerType enum
+        return SCR_EMapMarkerType.TDL_RADIO;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     // Server-side initialization - create markers for all TDL radios when they spawn
     override void InitServerLogic()
     {
         super.InitServerLogic();
-        
-        // We should only create markers on the server
+
         if (!Replication.IsServer())
             return;
-            
-        // Register to AG0_TDLSystem for radio registration events
+
         AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
         if (tdlSystem)
         {
-			//Print("AG0_TDLMapMarkerEntry: System exists and registering marker callback so that TDLRadioComps are registered here.", LogLevel.DEBUG);
-            // You'll need to add these registration methods to AG0_TDLSystem
             tdlSystem.RegisterMarkerCallback(this);
         }
-		
+
 		auto config = SCR_MapMarkerManagerComponent.GetInstance().GetMarkerConfig().GetMarkerEntryConfigByType(SCR_EMapMarkerType.TDL_RADIO);
-		//Print(string.Format("AG0_TDLMapMarkerEntry: Config for TDL_RADIO exists: %1", config != null), LogLevel.DEBUG);
-		
+
 		// Compare with a known working type
 		auto squadConfig = SCR_MapMarkerManagerComponent.GetInstance().GetMarkerConfig().GetMarkerEntryConfigByType(SCR_EMapMarkerType.SQUAD_LEADER);
-		//Print(string.Format("AG0_TDLMapMarkerEntry: Config for SQUAD_LEADER exists: %1", squadConfig != null), LogLevel.DEBUG);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -107,17 +100,14 @@ class AG0_TDLMapMarkerEntry : SCR_MapMarkerEntryDynamic
 	}
     
     //------------------------------------------------------------------------------------------------
-    // Configure the marker appearance
     override void InitClientSettingsDynamic(notnull SCR_MapMarkerEntity marker, notnull SCR_MapMarkerDynamicWComponent widgetComp)
     {
-		//Print("AG0_TDLMapMarkerEntry: CLIENT initializing marker display", LogLevel.DEBUG);
         super.InitClientSettingsDynamic(marker, widgetComp);
-        
+
 		auto config = SCR_MapMarkerManagerComponent.GetInstance().GetMarkerConfig().GetMarkerEntryConfigByType(SCR_EMapMarkerType.TDL_RADIO);
-		//Print(string.Format("AG0_TDLMapMarkerEntry: Config for TDL_RADIO exists: %1", config != null), LogLevel.DEBUG);
-		
-        ResourceName imgset = "{B365115DCD2C393A}UI/Textures/Icons/icons_wrapperUI-64TDL.imageset";  // Use our imageset
-		string icon = "tdl_device"; //define icon manually
+
+        ResourceName imgset = "{B365115DCD2C393A}UI/Textures/Icons/icons_wrapperUI-64TDL.imageset";
+		string icon = "tdl_device";
         m_EntryConfig.GetIconResource(imgset, icon);
         
         widgetComp.SetImage(imgset, icon);

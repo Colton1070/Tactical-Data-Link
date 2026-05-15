@@ -1,0 +1,219 @@
+ButtonWidgetClass "{695C3CDCC61B2617}" {
+ Name "SpinBox"
+ Slot AlignableSlot "{5534FAB1662D77B1}" {
+  HorizontalAlign 3
+  Padding 4 4 4 4
+ }
+ Clipping False
+ Color 1 1 1 0
+ components {
+  SCR_SpinBoxComponent "{5472C6CBC0640458}" {
+   m_sSoundClicked ""
+   m_bMouseOverToFocus 1
+   m_sLabel "SpinBox"
+   m_fSizeWithLabel 56
+   m_fSizeWithoutLabel 40
+   m_bUseLightArrows 1
+  }
+  SCR_ModularButtonComponent "{5E4C99C9EEA65996}" {
+   m_aEffects {
+    SCR_ButtonEffectColor "{5DB885898296DF89}" {
+     m_eEvents 6144
+     m_sWidgetName "LineHighlight"
+     m_cDefault 0 0 0 0
+     m_cHovered 0 0 0 0
+     m_cActivated 0 0 0 0
+     m_cActivatedHovered 0 0 0 0
+     m_cDisabled 0 0 0 0
+     m_cDisabledActivated 0 0 0 0
+     m_cClicked 0 0 0 0
+     m_cFocusGained 1 0.597 0.198 0.3
+     m_cFocusLost 0 0 0 0
+     m_cToggledOn 0 0 0 0
+     m_cToggledOff 0 0 0 0
+    }
+    SCR_ButtonEffectColor "{5D9EFC157A1E1706}" {
+     m_eEvents 24581
+     m_sWidgetName "Background"
+     m_fAnimationTime 0.1
+     m_cDefault 0 0 0 0.5
+     m_cHovered 0 0 0 0
+     m_cActivated 0 0 0 0
+     m_cActivatedHovered 0 0 0 0
+     m_cDisabled 0 0 0 0
+     m_cDisabledActivated 0 0 0 0
+     m_cClicked 0 0 0 0
+     m_cFocusGained 0 0 0 0
+     m_cFocusLost 0 0 0 0
+     m_cToggledOn 0 0 0 0
+     m_cToggledOff 0 0 0 0.5
+    }
+   }
+   m_bCanBeToggled 1
+   m_bToggledOnlyThroughApi 1
+   m_eEventReturnValue 2147483644
+  }
+  SCR_AutomaticScrollComponent "{6662682A53AE9FF9}" {
+   m_sWidgetContentName "LabelContent"
+   m_sWidgetHorizontalName "LabelRoot"
+   m_bAnimateOnFocus 1
+  }
+ }
+ style blank
+ {
+  SizeLayoutWidgetClass "{695C3CDCC61B2619}" : "{37F2B4CB4DDDD310}UI/layouts/WidgetLibrary/BaseElements/WLib_Base.layout" {
+   Name "SizeLayout"
+   Slot ButtonWidgetSlot "{55367D829C978EC9}" {
+    HorizontalAlign 3
+   }
+   HeightOverride 38
+   {
+    OverlayWidgetClass "{55367D8E531FD623}" {
+     Prefab "{55367D8E531FD623}"
+     {
+      ImageWidgetClass "{695C3CDCC61B261A}" : "{E679D416053194D7}UI/layouts/WidgetLibrary/BaseElements/WLib_LineHighlight.layout" {
+       Name "LineHighlight"
+       Slot OverlayWidgetSlot "{5DB8C57A14F7A8AF}" {
+       }
+       Progress 0.4
+      }
+      PanelWidgetClass "{55367D8E4A135500}" {
+       Prefab "{55367D8E4A135500}"
+       "Is Visible" 0
+      }
+      HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
+       Prefab "{55367D8E4592BC6E}"
+       {
+        OverlayWidgetClass "{695C3CDCC61B261C}" {
+         Name "Divider"
+         Slot LayoutSlot "{66626834843BAAE1}" {
+          Padding 0 0 10 0
+         }
+        }
+        HorizontalLayoutWidgetClass "{695C3CDCC61B70ED}" {
+         Name "ContentLayout"
+         Slot LayoutSlot "{55367D828911C327}" {
+          SizeMode Fill
+         }
+         {
+          ButtonWidgetClass "{695C3CDCC61B70EE}" : "{320A4B34692A1E7E}UI/layouts/WidgetLibrary/Buttons/WLib_PagingButton.layout" {
+           Name "ButtonLeft"
+           Slot LayoutSlot "{55367D828DA1E57B}" {
+            HorizontalAlign 1
+            VerticalAlign 1
+           }
+           components {
+            SCR_PagingButtonComponent "{547485B3AA82B840}" {
+             m_BackgroundDefault 0.76 0.392 0.078 0
+             m_BackgroundHovered 0.896 0.539 0.184 0
+             m_BackgroundSelected 0.896 0.539 0.184 0
+             m_BackgroundSelectedHovered 0.896 0.539 0.184 0
+             m_BackgroundClicked 0.896 0.539 0.184 0
+             m_bShowBackgroundOnFocus 1
+             m_bIsPositive 0
+            }
+           }
+           {
+            SizeLayoutWidgetClass "{54A0782A39F09C6C}" {
+             Prefab "{54A0782A39F09C6C}"
+             WidthOverride 32
+             HeightOverride 32
+             {
+              OverlayWidgetClass "{000000005E70868E}" {
+               Prefab "{000000005E70868E}"
+               {
+                ImageWidgetClass "{000000003FEF4158}" {
+                 Prefab "{000000003FEF4158}"
+                 Texture "{3262679C50EF4F01}UI/Textures/Icons/icons_wrapperUI.imageset"
+                 Image "sortArrowRight"
+                 Size 64 64
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+          VerticalLayoutWidgetClass "{695C3CDCC61B70D0}" {
+           Name "VerticalLayout0"
+           Slot LayoutSlot "{55367D82D7AA2C75}" {
+            SizeMode Fill
+           }
+           {
+            RichTextWidgetClass "{695C3CDCC61B70D3}" : "{45BA2EA46F09C0FF}UI/layouts/WidgetLibrary/RichTextWidgets/RichText_InteractiveSmall.layout" {
+             Name "SelectionText"
+             Slot LayoutSlot "{55367D82CFCF3437}" {
+              SizeMode Fill
+             }
+             "Horizontal Alignment" Center
+             "Vertical Alignment" Center
+            }
+            SizeLayoutWidgetClass "{695C3CDCC61B470D}" {
+             Name "SizeLayout0"
+             Slot LayoutSlot "{55367D82C1A73CD0}" {
+             }
+             AllowWidthOverride 1
+             WidthOverride 300
+             HeightOverride 4
+             {
+              HorizontalLayoutWidgetClass "{695C3CDCC61B470C}" {
+               Name "HintBar"
+               Slot AlignableSlot "{55367D823C04A23F}" {
+               }
+              }
+             }
+            }
+           }
+          }
+          ButtonWidgetClass "{695C3CDCC61B470B}" : "{320A4B34692A1E7E}UI/layouts/WidgetLibrary/Buttons/WLib_PagingButton.layout" {
+           Name "ButtonRight"
+           Slot LayoutSlot "{55367D828DA1E57B}" {
+           }
+           components {
+            SCR_PagingButtonComponent "{547485B3AA82B840}" {
+             m_BackgroundDefault 0.76 0.392 0.078 0
+             m_BackgroundHovered 0.896 0.539 0.184 0
+             m_BackgroundSelected 0.896 0.539 0.184 0
+             m_BackgroundSelectedHovered 0.896 0.539 0.184 0
+             m_BackgroundClicked 0.896 0.539 0.184 0
+            }
+           }
+           {
+            SizeLayoutWidgetClass "{54A0782A39F09C6C}" {
+             Prefab "{54A0782A39F09C6C}"
+             Slot ButtonWidgetSlot "{5452C531C2876D63}" {
+              HorizontalAlign 1
+              VerticalAlign 1
+             }
+             WidthOverride 32
+             HeightOverride 32
+             {
+              OverlayWidgetClass "{000000005E70868E}" {
+               Prefab "{000000005E70868E}"
+               {
+                ImageWidgetClass "{00000000C379AC4C}" {
+                 Prefab "{00000000C379AC4C}"
+                 Size 32 32
+                }
+                ImageWidgetClass "{000000003FEF4158}" {
+                 Prefab "{000000003FEF4158}"
+                 Texture "{3262679C50EF4F01}UI/Textures/Icons/icons_wrapperUI.imageset"
+                 Image "sortArrowRight"
+                 Size 32 32
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

@@ -175,7 +175,6 @@ class AG0_TDLMapShapeManager
 		// Store raw JSON strings for network redistribution
 		m_mRawShapeJsons.Clear();
 		
-		// Track which shape IDs we received
 		ref set<string> receivedIds = new set<string>();
 		int parsed = 0;
 		

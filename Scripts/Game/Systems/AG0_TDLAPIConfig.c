@@ -828,10 +828,8 @@ class AG0_TDLApiManager
         bool success;
         if (json.ReadValue("success", success))
         {
-//            if (success)
-//                Print("[TDL_API] Server acknowledged submission", LogLevel.DEBUG);
         }
-        
+
         // Handle any additional response fields here
         // e.g., server might return commands or configuration updates
     }

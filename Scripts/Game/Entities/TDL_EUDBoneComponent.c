@@ -45,13 +45,6 @@ class TDL_EUDBoneComponent : ScriptComponent
         if (owner.GetWorld() != GetGame().GetWorld())
             return;
 
-//        if (!m_bInitialized)
-//        {
-//            InitBone(owner);
-//            if (!m_bInitialized)
-//                return;
-//        }
-
         // Target is the replicated value; every client lerps its own local m_fCurrentPosition
         // toward it. This avoids the manipulator stuttering from per-frame replicated snaps
         // of an authoritative current value.
