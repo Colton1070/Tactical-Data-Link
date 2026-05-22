@@ -41,6 +41,10 @@ class AG0_TDLMapView
     protected ref array<ref AG0_TDLMapMarker> m_aMarkers = {};
 	// Shape overlay (populated externally via SetShapes)
     protected ref array<ref AG0_TDLMapShape> m_aShapes;
+	// In-progress shape being drawn by the user. Drawn after the committed
+	// shape pass so it always renders on top, with a translucent stroke so it
+	// reads as a preview rather than a real shape. Null = no active draw.
+	protected ref AG0_TDLMapShape m_GhostShape;
 	// Streamed terrain structures (populated externally via SetTerrainStructures).
 	// Authoritative source for building footprints on the map view; API data is
 	// broader and more accurate than the legacy runtime MapDescriptorComponent
@@ -362,10 +366,10 @@ class AG0_TDLMapView
         float rotRad = m_fRotation * Math.DEG2RAD;
         float cosR = Math.Cos(rotRad);
         float sinR = Math.Sin(rotRad);
-        
+
         float worldDeltaX = (screenDeltaX * cosR - screenDeltaY * sinR) * worldUnitsPerPixel;
         float worldDeltaZ = (screenDeltaX * sinR + screenDeltaY * cosR) * worldUnitsPerPixel;
-        
+
         m_vCenterWorld[0] = m_vCenterWorld[0] - worldDeltaX;
         m_vCenterWorld[2] = m_vCenterWorld[2] - worldDeltaZ;
 
@@ -443,9 +447,37 @@ class AG0_TDLMapView
 	}
     
     //------------------------------------------------------------------------------------------------
+    //! Pre-flight check for callers that produce per-frame cursor samples.
+    //! Returns true when m_fCanvasWidth, m_fMapSizeX and m_fZoom are all
+    //! populated — i.e. the display controller has sized the view and the
+    //! arithmetic in ScreenToWorld / WorldToScreen will yield real results.
+    //! Callers (notably world-space's cursor push) should skip their push
+    //! entirely when this returns false, so the session's m_bCursorWorldKnown
+    //! stays false and freehand samples / ghost rendering don't latch a
+    //! bogus value from ScreenToWorld's fallback.
+    bool IsReady()
+    {
+        return m_fCanvasWidth > 0 && m_fMapSizeX > 0 && m_fZoom > 0;
+    }
+
+    //------------------------------------------------------------------------------------------------
     // Screen position to world position
     void ScreenToWorld(float screenX, float screenY, out vector worldPos)
     {
+        // Early-frame guard: callers on a per-frame tick (e.g. world-space
+        // cursor push) can invoke this before the map view has been sized
+        // or before m_fMapSizeX / m_fZoom have been populated by the display
+        // controller. Without this guard the division below throws a VM
+        // exception and the caller gets garbage anyway. Falling back to the
+        // current map center keeps the result well-defined; callers that
+        // need to know they got a "not ready" answer should call IsReady()
+        // before invoking this function.
+        if (m_fCanvasWidth <= 0 || m_fMapSizeX <= 0 || m_fZoom <= 0)
+        {
+            worldPos = m_vCenterWorld;
+            return;
+        }
+
         float canvasCenterX = m_fCanvasWidth * 0.5;
         float canvasCenterY = m_fCanvasHeight * 0.5;
 
@@ -498,6 +530,16 @@ class AG0_TDLMapView
 	void SetShapes(array<ref AG0_TDLMapShape> shapes)
 	{
 		m_aShapes = shapes;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Push the in-progress draw shape. Pass null to clear the preview when the
+	//! user cancels or commits. The draw session rebuilds this each frame
+	//! during COLLECTING so cursor-tracked rubber-band geometry stays live
+	//! without per-tick allocations escaping the session.
+	void SetGhostShape(AG0_TDLMapShape ghost)
+	{
+		m_GhostShape = ghost;
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -1267,49 +1309,71 @@ class AG0_TDLMapView
 	//------------------------------------------------------------------------------------------------
 	protected void DrawShapes()
 	{
-		if (!m_aShapes || m_aShapes.IsEmpty())
+		bool hasCommitted = m_aShapes && !m_aShapes.IsEmpty();
+		if (!hasCommitted && !m_GhostShape)
 			return;
-		
+
 		float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
-		
-		foreach (AG0_TDLMapShape shape : m_aShapes)
+
+		if (hasCommitted)
 		{
-			// Viewport culling — skip shapes entirely off-screen
-			float screenX, screenY;
-			WorldToScreen(shape.m_vCenter, screenX, screenY);
-			
-			float boundingScreenR = shape.GetBoundingRadius() * pixelsPerWorldUnit;
-			float margin = boundingScreenR + 20;
-			
-			if (screenX + margin < 0 || screenX - margin > m_fCanvasWidth)
-				continue;
-			if (screenY + margin < 0 || screenY - margin > m_fCanvasHeight)
-				continue;
-			
-			switch (shape.m_eShapeType)
+			foreach (AG0_TDLMapShape shape : m_aShapes)
 			{
-				case AG0_ETDLShapeType.CIRCLE:
-					DrawShapeCircle(shape, screenX, screenY, pixelsPerWorldUnit);
-					break;
-				
-				case AG0_ETDLShapeType.SECTOR:
-					DrawShapeSector(shape, screenX, screenY, pixelsPerWorldUnit);
-					break;
-				
-				case AG0_ETDLShapeType.RANGE_RINGS:
-					DrawShapeRangeRings(shape, screenX, screenY, pixelsPerWorldUnit);
-					break;
-				
-				case AG0_ETDLShapeType.RECTANGLE:
-				case AG0_ETDLShapeType.POLYGON:
-				case AG0_ETDLShapeType.FREEHAND:
-					DrawShapePolygon(shape, pixelsPerWorldUnit);
-					break;
-				
-				case AG0_ETDLShapeType.ROUTE:
-					DrawShapeRoute(shape, pixelsPerWorldUnit);
-					break;
+				DrawSingleShape(shape, pixelsPerWorldUnit);
 			}
+		}
+
+		// Ghost goes last so the in-progress draw always reads on top of any
+		// committed shapes that overlap the same region.
+		if (m_GhostShape)
+			DrawSingleShape(m_GhostShape, pixelsPerWorldUnit);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Dispatch one shape to its type-specific renderer. Extracted from
+	//! DrawShapes so the ghost-shape preview reuses the exact same code paths.
+	protected void DrawSingleShape(AG0_TDLMapShape shape, float pixelsPerWorldUnit)
+	{
+		if (!shape)
+			return;
+
+		float screenX, screenY;
+		WorldToScreen(shape.m_vCenter, screenX, screenY);
+
+		float boundingScreenR = shape.GetBoundingRadius() * pixelsPerWorldUnit;
+		float margin = boundingScreenR + 20;
+
+		if (screenX + margin < 0 || screenX - margin > m_fCanvasWidth)
+			return;
+		if (screenY + margin < 0 || screenY - margin > m_fCanvasHeight)
+			return;
+
+		switch (shape.m_eShapeType)
+		{
+			case AG0_ETDLShapeType.CIRCLE:
+				DrawShapeCircle(shape, screenX, screenY, pixelsPerWorldUnit);
+				break;
+
+			case AG0_ETDLShapeType.SECTOR:
+				DrawShapeSector(shape, screenX, screenY, pixelsPerWorldUnit);
+				break;
+
+			case AG0_ETDLShapeType.RANGE_RINGS:
+				DrawShapeRangeRings(shape, screenX, screenY, pixelsPerWorldUnit);
+				break;
+
+			case AG0_ETDLShapeType.RECTANGLE:
+			case AG0_ETDLShapeType.POLYGON:
+				DrawShapePolygon(shape, pixelsPerWorldUnit);
+				break;
+
+			case AG0_ETDLShapeType.FREEHAND:
+				DrawShapeFreehand(shape, pixelsPerWorldUnit);
+				break;
+
+			case AG0_ETDLShapeType.ROUTE:
+				DrawShapeRoute(shape, pixelsPerWorldUnit);
+				break;
 		}
 	}
 	
@@ -1549,6 +1613,41 @@ class AG0_TDLMapView
 		DrawShapeLabel(shape, centroidX, centroidY);
 	}
 	
+	// -----------------------------------------------------------------------
+	// FREEHAND (open continuous stroke — pen-like drawing)
+	// -----------------------------------------------------------------------
+
+	//------------------------------------------------------------------------------------------------
+	//! Render freehand as an open polyline along the sampled cursor path —
+	//! no closing segment, no fill, no waypoint decoration. This is what
+	//! distinguishes a "drawing" gesture from a polygon's closed region:
+	//! the stroke ends where the pen lifted, the shape is the line itself
+	//! rather than the area it encloses.
+	protected void DrawShapeFreehand(AG0_TDLMapShape shape, float ppu)
+	{
+		int rawCount = shape.m_aVertices.Count();
+		if (rawCount < 4)
+			return;
+
+		array<float> screenVerts = {};
+		for (int i = 0; i + 1 < rawCount; i += 2)
+		{
+			float sx, sy;
+			WorldToScreen(Vector(shape.m_aVertices[i], 0, shape.m_aVertices[i + 1]), sx, sy);
+			screenVerts.Insert(sx);
+			screenVerts.Insert(sy);
+		}
+
+		DrawOpenStroke(screenVerts, shape.m_iStrokeColor, shape.m_fStrokeWidth);
+
+		if (!shape.m_sLabel.IsEmpty())
+		{
+			float centroidX, centroidY;
+			WorldToScreen(shape.m_vCenter, centroidX, centroidY);
+			DrawShapeLabel(shape, centroidX, centroidY);
+		}
+	}
+
 	// -----------------------------------------------------------------------
 	// ROUTE (open polyline with waypoint dots)
 	// -----------------------------------------------------------------------

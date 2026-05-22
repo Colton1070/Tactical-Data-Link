@@ -391,6 +391,30 @@ class AG0_TDLSystem : WorldSystem
 	protected const float API_SHAPES_POLL_INTERVAL = 5.0;
     protected float m_fTimeSinceShapesPoll = 0;
 
+	// ============================================
+	// WEB MIRROR — per-player snapshot store + tick
+	//
+	// Snapshot map is keyed by session playerId because that's what the holding
+	// client knows about itself. Mirrored-identity set is keyed by persistent
+	// identityId because that's what the API uses; the tick translates between
+	// the two via GetPlayerIdentityId. Sets stay empty when no web tab is open,
+	// so the mirror tick is effectively free for vanilla / non-mirrored servers.
+	//
+	// Tick runs at 1 Hz to satisfy the <1 s latency target in the design without
+	// drowning the API ingest. Higher than 1 Hz would be wasted work — the
+	// client already rate-limits its uplink to 10 Hz, and the API SSE fan-out
+	// to each web tab is cheap whether the publish rate is 1 or 10 per second.
+	// ============================================
+	protected ref map<int, string> m_mMirrorSnapshots = new map<int, string>();
+	protected ref set<string> m_aMirroredIdentities = new set<string>();
+	// 2 Hz — fast enough that a web user's pan/zoom round-trip lands in about
+	// 800 ms total. Backed off from 3 Hz because the frontend gesture-protection
+	// windows can't keep up with 3 Hz snapshot rate; the higher rate was
+	// triggering more visible drift/fight events on the web mirror than the
+	// extra responsiveness was worth. 2 Hz is the comfortable middle.
+	protected const float MIRROR_TICK_INTERVAL = 0.5;
+	protected float m_fTimeSinceMirrorTick = 0;
+
 	// Lazy-registered handler for SCR_BaseGameMode.GetOnPlayerAuditSuccess.
 	// Used to deliver the terrain structures dataset to every player on session join,
 	// independent of TDL network membership — so the data is always there/available.
@@ -401,6 +425,14 @@ class AG0_TDLSystem : WorldSystem
     // Networks storage
     protected ref array<ref AG0_TDLNetwork> m_aNetworks = {};
     protected int m_iNextNetworkID = 1;
+
+    // Coalesces shape broadcasts within a single tick. Sweep-delete can
+    // remove N shapes in one frame; without coalescing each removal
+    // would fire a full DistributeShapesToClients (N × M-players ×
+    // chunks). Dirty bit + CallLater(0) collapses that to one broadcast
+    // per tick regardless of how many state changes piled up.
+    protected bool m_bShapeBroadcastDirty;
+    protected ref set<int> m_aQueuedShapeTargetedPushes;
     
     // Active bridge links — rebuilt every UpdateNetworks() cycle
     protected ref array<ref AG0_TDLBridgeLink> m_aBridgeLinks = {};
@@ -898,6 +930,19 @@ class AG0_TDLSystem : WorldSystem
 				m_ApiManager.PollShapes();
 				m_fTimeSinceShapesPoll = 0;
 			}
+
+			// Drain the shape-submit retry queue. Self-throttles on its own
+			// interval so the only cost here is the timeSlice push-through.
+			m_ApiManager.OnSubmitRetryTick(timeSlice);
+
+			// Mirror tick — no-op when nothing is mirrored (ApiSyncMirrorSnapshots
+			// short-circuits on empty m_aMirroredIdentities).
+			m_fTimeSinceMirrorTick += timeSlice;
+			if (m_fTimeSinceMirrorTick >= MIRROR_TICK_INTERVAL)
+			{
+				ApiSyncMirrorSnapshots();
+				m_fTimeSinceMirrorTick = 0;
+			}
 	    }
     }
 	
@@ -911,6 +956,23 @@ class AG0_TDLSystem : WorldSystem
 
 	    if (m_PhotoManager)
 	        m_PhotoManager = null;
+
+	    // World unload hook — drop the AG0_TDLMenuController live registry so
+	    // strong-ref entries from this world don't leak into the next one.
+	    // Without this, every world restart accumulates dead controllers in
+	    // s_aLiveControllers (visible as ever-growing frontends= counts in
+	    // the [TDL_MIRROR_PROP] logs); the propagator wastes work iterating
+	    // them and the first non-null primary can be one of the dead entries
+	    // that has stale widget refs.
+	    AG0_TDLMenuController.ClearLiveRegistryOnWorldUnload();
+
+	    // Also drop the mirror state so a fresh world starts with no
+	    // identities considered "actively mirrored." Web subscribers will
+	    // re-establish via their normal subscribe flow.
+	    if (m_aMirroredIdentities)
+	        m_aMirroredIdentities.Clear();
+	    if (m_mMirrorSnapshots)
+	        m_mMirrorSnapshots.Clear();
 	}
     
     int GetAggregatedPlayerCapabilities(IEntity player)
@@ -2004,23 +2066,23 @@ class AG0_TDLSystem : WorldSystem
 	protected void PushPlayerShapes(SCR_PlayerController controller, int playerId)
 	{
 		if (!m_ApiManager || !controller) return;
-		
+
 		AG0_TDLMapShapeManager shapeMgr = m_ApiManager.GetShapeManager();
 		if (!shapeMgr) return;
-		
+
 		PlayerManager playerMgr = GetGame().GetPlayerManager();
 		if (!playerMgr) return;
-		
+
 		IEntity playerEntity = playerMgr.GetPlayerControlledEntity(playerId);
 		if (!playerEntity)
 		{
 			controller.ReceiveTDLShapes("", "");
 			return;
 		}
-		
+
 		set<int> playerNetworkIds = new set<int>();
 		array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(playerEntity);
-		
+
 		foreach (AG0_TDLDeviceComponent device : playerDevices)
 		{
 			foreach (AG0_TDLNetwork network : m_aNetworks)
@@ -2032,13 +2094,292 @@ class AG0_TDLSystem : WorldSystem
 				}
 			}
 		}
-		
-		string packedShapes = shapeMgr.GetPackedShapeDataForNetworks(playerNetworkIds);
+
+		// Orphan promotion — shapes drawn while the player had no active
+		// network bear AG0_TDL_SHAPE_NETWORK_ORPHAN as their networkId. As
+		// soon as they pick up a network we re-scope those shapes so other
+		// network members start seeing them. Picks the first network in the
+		// set as the promotion target; multi-network promotion is left to
+		// follow-up if it ever matters in practice (single-network play is
+		// the dominant case).
+		string playerIdentityId = GetPlayerIdentityId(playerId);
+		if (!playerNetworkIds.IsEmpty() && !playerIdentityId.IsEmpty())
+			PromoteOrphanShapesForPlayer(shapeMgr, playerIdentityId, playerNetworkIds[0]);
+
+		string packedShapes = shapeMgr.GetPackedShapeDataForPlayer(playerNetworkIds, playerIdentityId);
 		string syncHash = shapeMgr.GetLastSyncHash();
-		
+
 		controller.ReceiveTDLShapes(packedShapes, syncHash);
 	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Promote a player's orphan shapes to their first active network. Each
+	//! promoted shape stays LOCAL-origin so the next API poll's full-replace
+	//! doesn't drop it before the API mirror catches up. The raw JSON cache
+	//! is re-emitted so subsequent pack passes carry the new networkId.
+	protected void PromoteOrphanShapesForPlayer(AG0_TDLMapShapeManager shapeMgr, string playerIdentityId, int targetNetworkId)
+	{
+		array<string> ids = shapeMgr.CollectLocalShapeIdsByCreator(playerIdentityId);
+		if (!ids || ids.IsEmpty())
+			return;
+
+		foreach (string id : ids)
+		{
+			AG0_TDLMapShape shape = shapeMgr.GetShape(id);
+			if (!shape)
+				continue;
+			if (shape.m_iNetworkId != AG0_TDL_SHAPE_NETWORK_ORPHAN)
+				continue;
+			if (!shapeMgr.SetShapeNetworkId(id, targetNetworkId))
+				continue;
+
+			// Refresh the cached raw JSON so the next packed-data pass
+			// emits the updated networkId to clients. Without this the
+			// pack would still ship the orphan-marked payload even though
+			// the in-memory shape has been promoted.
+			shapeMgr.UpdateRawShapeJson(id, shape.ToJsonString());
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Create a mod-originated shape from a client RPC. Validates the draft
+	//! JSON, stamps server-side fields (id / version / createdAt / creator /
+	//! networkId), inserts into the shape manager as LOCAL-origin, fans out
+	//! to clients, and queues the best-effort API mirror. Idempotent on
+	//! failure — a parse miss returns without state mutation.
+	void CreateLocalShape(int playerId, string draftJson)
+	{
+		if (!Replication.IsServer())
+			return;
+		if (playerId <= 0 || draftJson.IsEmpty())
+			return;
+		if (!m_ApiManager)
+			return;
+
+		AG0_TDLMapShapeManager shapeMgr = m_ApiManager.GetShapeManager();
+		if (!shapeMgr)
+			return;
+
+		AG0_TDLMapShape shape = shapeMgr.ParseSingleShape(draftJson);
+		if (!shape)
+		{
+			Print("[TDL_SHAPES] CreateLocalShape: failed to parse draft", LogLevel.WARNING);
+			return;
+		}
+
+		string identityId = GetPlayerIdentityId(playerId);
+		if (identityId.IsEmpty())
+		{
+			Print(string.Format("[TDL_SHAPES] CreateLocalShape: no identity for playerId=%1", playerId), LogLevel.WARNING);
+			return;
+		}
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		string playerName = "";
+		if (playerMgr)
+			playerName = playerMgr.GetPlayerName(playerId);
+
+		// Resolve the player's active network. Mirrors the per-device walk
+		// in PushPlayerShapes so the network picked here matches the one a
+		// teammate's PushPlayerShapes pass would consider this player on.
+		int firstNetworkId = AG0_TDL_SHAPE_NETWORK_ORPHAN;
+		IEntity playerEntity;
+		if (playerMgr)
+			playerEntity = playerMgr.GetPlayerControlledEntity(playerId);
+		if (playerEntity)
+		{
+			array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(playerEntity);
+			foreach (AG0_TDLDeviceComponent device : playerDevices)
+			{
+				foreach (AG0_TDLNetwork network : m_aNetworks)
+				{
+					if (network.GetNetworkDevices().Contains(device))
+					{
+						firstNetworkId = network.GetNetworkID();
+						break;
+					}
+				}
+				if (firstNetworkId != AG0_TDL_SHAPE_NETWORK_ORPHAN)
+					break;
+			}
+		}
+
+		shape.m_sId = GenerateLocalShapeId();
+		shape.m_iVersion = 1;
+		shape.m_iCreatedAt = System.GetUnixTime();
+		shape.m_iNetworkId = firstNetworkId;
+		shape.m_sCreatedBy = playerName;
+		shape.m_sCreatedByPlayerIdentityId = identityId;
+
+		string canonicalJson = shape.ToJsonString();
+		shapeMgr.InsertLocalShape(shape, canonicalJson);
+
+		Print(string.Format("[TDL_SHAPES] CreateLocalShape: %1 by '%2' (%3) on network=%4",
+			shape.m_sId, playerName, identityId, firstNetworkId), LogLevel.DEBUG);
+
+		// Coalesced broadcast — flushes once at the next tick boundary
+		// regardless of how many CreateLocalShape calls happen this tick
+		// (sweep doesn't create, but freehand commits and any future
+		// burst-create path benefits from the same coalescer).
+		QueueTargetedShapePush(playerId);
+
+		// Best-effort API mirror. Failure (incl. endpoint not yet deployed)
+		// leaves the shape as LOCAL — players keep seeing it, just without
+		// cross-server persistence until the API path lands.
+		m_ApiManager.SubmitShape(shape);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Server-side handler for a client's AskDeleteShape RPC. Looks up the
+	//! shape, verifies the requesting player's identity matches the shape's
+	//! creator, removes from the local shape manager, broadcasts the
+	//! updated feed, and queues the API-mirror DELETE. Silent no-op when
+	//! the caller doesn't own the shape — clients can't grief each other's
+	//! drawings.
+	void DeleteLocalShape(int playerId, string shapeId)
+	{
+		if (!Replication.IsServer())
+			return;
+		if (playerId <= 0 || shapeId.IsEmpty())
+			return;
+		if (!m_ApiManager)
+			return;
+
+		AG0_TDLMapShapeManager shapeMgr = m_ApiManager.GetShapeManager();
+		if (!shapeMgr)
+			return;
+
+		AG0_TDLMapShape shape = shapeMgr.GetShape(shapeId);
+		if (!shape)
+			return;
+
+		string callerIdentity = GetPlayerIdentityId(playerId);
+		if (callerIdentity.IsEmpty())
+			return;
+		if (shape.m_sCreatedByPlayerIdentityId != callerIdentity)
+		{
+			Print(string.Format("[TDL_SHAPES] DeleteLocalShape: %1 not owned by player %2", shapeId, playerId), LogLevel.DEBUG);
+			return;
+		}
+
+		shapeMgr.RemoveShapeById(shapeId);
+
+		Print(string.Format("[TDL_SHAPES] DeleteLocalShape: %1 by '%2'", shapeId, callerIdentity), LogLevel.DEBUG);
+
+		// Coalesced broadcast — sweep-delete over N of the player's own
+		// shapes piles N DeleteLocalShape calls into one tick; the
+		// coalescer collapses that to a single broadcast + a single
+		// targeted push to the creator regardless of N.
+		QueueTargetedShapePush(playerId);
+
+		// API-mirror delete. Best-effort — gated on IsEnabled inside the
+		// manager so unlinked servers silently skip it. Local removal
+		// already happened, so failure here just means the API copy stays
+		// behind until the next admin cleanup; the in-game state is
+		// already correct.
+		m_ApiManager.SubmitShapeDelete(shapeId, callerIdentity);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Generate a transient `local_<8 hex>` id for a mod-originated shape.
+	//! Reconciled to a canonical `shape_<8 hex>` once the API mirror POST
+	//! succeeds. Random source is Math.RandomInt which is good enough — the
+	//! id only needs to be unique within the running server process.
+	protected string GenerateLocalShapeId()
+	{
+		int hi = Math.RandomInt(0, 0x10000);
+		int lo = Math.RandomInt(0, 0x10000);
+		return string.Format("local_%1%2", IntToHex4(hi), IntToHex4(lo));
+	}
+
+	//! Lowercase 4-digit hex with leading zeros. Enfusion doesn't ship a
+	//! printf-style hex format, so the digits are unpacked by hand.
+	protected string IntToHex4(int v)
+	{
+		string digits = "0123456789abcdef";
+		string outStr = "";
+		for (int i = 3; i >= 0; i--)
+		{
+			int nibble = (v >> (i * 4)) & 0xF;
+			outStr = outStr + digits.Substring(nibble, 1);
+		}
+		return outStr;
+	}
 	
+	//------------------------------------------------------------------------------------------------
+	//! Push the shape feed to a single player by id. Targeted alternative
+	//! to DistributeShapesToClients for cases where the network walk would
+	//! skip the player (no-network creators on orphan shapes, or as a
+	//! latency win for any player who needs the freshest state for a
+	//! state change they directly caused). Idempotent on the client side
+	//! via the syncHash check in RpcDo_ReceiveTDLShapes.
+	void PushShapesToPlayer(int playerId)
+	{
+		if (!Replication.IsServer() || playerId <= 0)
+			return;
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr)
+			return;
+
+		SCR_PlayerController controller = SCR_PlayerController.Cast(playerMgr.GetPlayerController(playerId));
+		if (!controller)
+			return;
+
+		PushPlayerShapes(controller, playerId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Mark the shape feed dirty for a coalesced broadcast at next-tick
+	//! boundary. Multiple inline calls within the same tick collapse to a
+	//! single FlushShapeBroadcast — keeping sweep-delete and any other
+	//! multi-shape mutation paths at O(1) broadcasts per tick instead of
+	//! O(N) where N is the number of shapes touched.
+	void MarkShapesDirtyForBroadcast()
+	{
+		if (!Replication.IsServer())
+			return;
+		if (m_bShapeBroadcastDirty)
+			return;
+		m_bShapeBroadcastDirty = true;
+		GetGame().GetCallqueue().CallLater(FlushShapeBroadcast, 0, false);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Queue a per-player targeted push for the next coalesced flush.
+	//! Same reasoning as MarkShapesDirtyForBroadcast: sweeping N of one
+	//! player's shapes shouldn't fire N targeted pushes back to that
+	//! player on top of the network fan-out. Set semantics dedupe by
+	//! playerId.
+	void QueueTargetedShapePush(int playerId)
+	{
+		if (!Replication.IsServer() || playerId <= 0)
+			return;
+		if (!m_aQueuedShapeTargetedPushes)
+			m_aQueuedShapeTargetedPushes = new set<int>();
+		m_aQueuedShapeTargetedPushes.Insert(playerId);
+		MarkShapesDirtyForBroadcast();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Coalesced flush entrypoint. Runs at most once per tick — the
+	//! dirty bit blocks duplicate CallLater queueing in
+	//! MarkShapesDirtyForBroadcast. Performs the full network broadcast
+	//! and drains any queued targeted pushes.
+	protected void FlushShapeBroadcast()
+	{
+		m_bShapeBroadcastDirty = false;
+		DistributeShapesToClients();
+		if (m_aQueuedShapeTargetedPushes)
+		{
+			for (int i = 0; i < m_aQueuedShapeTargetedPushes.Count(); i++)
+			{
+				PushShapesToPlayer(m_aQueuedShapeTargetedPushes[i]);
+			}
+			m_aQueuedShapeTargetedPushes.Clear();
+		}
+	}
+
 	//------------------------------------------------------------------------------------------------
 	//! Distribute current shape data to all networked players.
 	void DistributeShapesToClients()
@@ -3139,6 +3480,7 @@ class AG0_TDLSystem : WorldSystem
 	            devState.callsign = device.GetDisplayName();
 	            devState.capabilities = device.GetActiveCapabilities();
 	            devState.isPowered = device.IsPowered();
+	            devState.isCameraBroadcasting = device.IsCameraBroadcasting();
 	            
 	            IEntity owner = device.GetOwner();
 	            if (owner)
@@ -3652,8 +3994,309 @@ class AG0_TDLSystem : WorldSystem
 	        if (device.GetOwner())
 	            deviceName = device.GetOwner().ToString();
 	        
-	        Print(string.Format("    Device: %1 (Caps: %2, Waveform: %3, Powered: %4, In Network: %5)", 
+	        Print(string.Format("    Device: %1 (Caps: %2, Waveform: %3, Powered: %4, In Network: %5)",
 	            deviceName, device.GetActiveCapabilities(), device.GetWaveform(), device.IsPowered(), device.IsInNetwork()), LogLevel.DEBUG);
 	    }
+	}
+
+	// ============================================
+	// WEB MIRROR — snapshot intake, subscription tracking, periodic API push
+	// ============================================
+
+	//! RPC entry point — called from RpcAsk_PushATAKPanelState on the player's
+	//! controller. We don't parse here; the JSON is forwarded verbatim in the
+	//! next tick so a flapping web tab can't make the receive path expensive.
+	//! Last write wins per playerId because the snapshot is a full state dump,
+	//! not a delta.
+	void AcceptMirrorSnapshotFromClient(int playerId, string snapshotJson)
+	{
+		if (playerId <= 0)
+			return;
+		if (snapshotJson.IsEmpty())
+			return;
+		m_mMirrorSnapshots.Set(playerId, snapshotJson);
+	}
+
+	//! API queue handler entry — register an identity as actively mirrored.
+	//! The web tab opening the mirror page caused the API to enqueue this
+	//! command for whichever server this identity is online on; the resolution
+	//! happens on the API side via the player:servers:<identityNorm> cache.
+	//!
+	//! Idempotent: opening a second tab on the same identity is a no-op here
+	//! (the API handles reference counting). The held-device indicator gets
+	//! pushed only on the empty -> non-empty transition for this identity.
+	//! Cross-system accessor for the API manager's poll-interval gate. Active
+	//! mirror sessions tighten the poll to 1s so web inputs reach the holding
+	//! client without the default 5s wait. Returns 0 when nothing is mirrored
+	//! so the API manager falls back to the configured interval.
+	int GetActiveMirrorSessionCount()
+	{
+		if (!m_aMirroredIdentities)
+			return 0;
+		return m_aMirroredIdentities.Count();
+	}
+
+	void OnMirrorSubscribe(string identityId)
+	{
+		if (identityId.IsEmpty())
+			return;
+		if (m_aMirroredIdentities.Contains(identityId))
+			return;
+		m_aMirroredIdentities.Insert(identityId);
+		PushMirrorIndicatorToIdentity(identityId, true);
+		// Tell the owner client to invalidate its s_LastSentMirrorSnapshot
+		// baseline so the next TickMirrorUplink unconditionally pushes a
+		// fresh snapshot. Without this, the client might not push for many
+		// seconds (TickMirrorUplink only fires on state change), and the
+		// server's mirror tick has no client snapshot to forward — meaning
+		// the web mirror stays in "establishing" state until the player
+		// touches the ATAK. Force-push closes that window to ~one tick.
+		RequestClientMirrorSnapshotResend(identityId);
+	}
+
+	//! Fires RpcDo_InvalidateMirrorSnapshotBaseline on the owning client so
+	//! its next TickMirrorUplink pushes regardless of whether state changed.
+	protected void RequestClientMirrorSnapshotResend(string identityId)
+	{
+		int pid = GetPlayerIdFromIdentityId(identityId);
+		if (pid <= 0)
+			return;
+		PlayerManager pmgr = GetGame().GetPlayerManager();
+		if (!pmgr)
+			return;
+		SCR_PlayerController pc = SCR_PlayerController.Cast(pmgr.GetPlayerController(pid));
+		if (!pc)
+			return;
+		pc.InvalidateMirrorSnapshotBaseline();
+	}
+
+	void OnMirrorUnsubscribe(string identityId)
+	{
+		if (identityId.IsEmpty())
+			return;
+		if (!m_aMirroredIdentities.Contains(identityId))
+			return;
+		m_aMirroredIdentities.RemoveItem(identityId);
+		// Drop the stashed snapshot too — nothing reads it after the last
+		// subscriber leaves, and the next subscribe will pull a fresh one
+		// within ~100ms of the holding client's next state mutation.
+		int pid = GetPlayerIdFromIdentityId(identityId);
+		if (pid > 0)
+			m_mMirrorSnapshots.Remove(pid);
+		PushMirrorIndicatorToIdentity(identityId, false);
+	}
+
+	//! Dispatch one mirror command to the holding client. The API queue handler
+	//! resolves identityId -> playerId here before calling; we just plumb the
+	//! RPC. If the player isn't online or has no controller, the command is
+	//! dropped — the queue handler emits a rejection event in that path.
+	bool DispatchMirrorCommandToIdentity(string identityId, string commandJson)
+	{
+		if (identityId.IsEmpty() || commandJson.IsEmpty())
+		{
+			Print("[TDL_MIRROR_DISPATCH] empty identity or command", LogLevel.WARNING);
+			return false;
+		}
+		int pid = GetPlayerIdFromIdentityId(identityId);
+		if (pid <= 0)
+		{
+			Print(string.Format("[TDL_MIRROR_DISPATCH] no playerId for identity=%1", identityId), LogLevel.WARNING);
+			return false;
+		}
+		PlayerManager pmgr = GetGame().GetPlayerManager();
+		if (!pmgr)
+		{
+			Print("[TDL_MIRROR_DISPATCH] no PlayerManager", LogLevel.WARNING);
+			return false;
+		}
+		SCR_PlayerController pc = SCR_PlayerController.Cast(pmgr.GetPlayerController(pid));
+		if (!pc)
+		{
+			Print(string.Format("[TDL_MIRROR_DISPATCH] no SCR_PlayerController for playerId=%1", pid), LogLevel.WARNING);
+			return false;
+		}
+		pc.ApplyMirrorCommand(commandJson);
+		return true;
+	}
+
+	//! Fire the indicator RPC at the player matching this identity (if online).
+	//! No-op on offline identities — next time they connect their static will
+	//! be false by default; the API can re-emit mirror_subscribe after the join
+	//! audit to bring the indicator back up.
+	protected void PushMirrorIndicatorToIdentity(string identityId, bool active)
+	{
+		int pid = GetPlayerIdFromIdentityId(identityId);
+		if (pid <= 0)
+			return;
+		PlayerManager pmgr = GetGame().GetPlayerManager();
+		if (!pmgr)
+			return;
+		SCR_PlayerController pc = SCR_PlayerController.Cast(pmgr.GetPlayerController(pid));
+		if (!pc)
+			return;
+		pc.SetMirrorIndicator(active);
+	}
+
+	//! Mirror tick — assembles the per-identity snapshot payload and submits a
+	//! single atak_mirror_sync API event. No-op on empty subscriber set so the
+	//! cost on a server with zero mirror activity is one tick-time accumulator
+	//! and one bool check.
+	//!
+	//! The server augments each snapshot with player world position, heading,
+	//! and MGRS before submission — these are server-known fields the holding
+	//! client doesn't need to push, and recomputing them here keeps the
+	//! client-side uplink small.
+	protected void ApiSyncMirrorSnapshots()
+	{
+		if (!m_ApiManager || !m_ApiManager.CanCommunicate())
+			return;
+		if (m_aMirroredIdentities.Count() == 0)
+			return;
+
+		PlayerManager pmgr = GetGame().GetPlayerManager();
+		array<ref AG0_TDLMirrorEntry> entries = {};
+
+		foreach (string identityId : m_aMirroredIdentities)
+		{
+			int pid = GetPlayerIdFromIdentityId(identityId);
+			if (pid <= 0)
+				continue;
+
+			// Skip identities whose client hasn't uplinked a snapshot yet.
+			// Fabricating "fresh ATAK" defaults (tracking=true, zoom=0.15) was
+			// causing AugmentSnapshotWithServerFields to overwrite mapCenter
+			// with the player position and ship that to the API — which the
+			// web mirror then rendered as "snap to player" mid-pan whenever a
+			// subscribe cycle wiped the cached client snapshot. Better to
+			// emit no envelope for this identity until the client pushes its
+			// real state (web sees a brief "establishing mirror" state instead
+			// of bogus tracking-on snapshots).
+			string clientJson = m_mMirrorSnapshots.Get(pid);
+			if (clientJson.IsEmpty())
+				continue;
+			AG0_TDLMirrorSnapshot snap = new AG0_TDLMirrorSnapshot();
+			snap.FromJson(clientJson);
+			AugmentSnapshotWithServerFields(pid, snap);
+
+			AG0_TDLMirrorEntry entry = new AG0_TDLMirrorEntry();
+			entry.identityId = identityId;
+			entry.playerId = pid;
+			if (pmgr)
+				entry.playerName = pmgr.GetPlayerName(pid);
+			entry.CopyFromSnapshot(snap);
+			entries.Insert(entry);
+		}
+
+		if (entries.Count() == 0)
+			return;
+
+		SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+		json.WriteValue("type", "atak_mirror_sync");
+		json.WriteValue("timestamp", System.GetUnixTime());
+		json.WriteValue("snapshots", entries);
+
+		m_ApiManager.SubmitData(json.ExportToString());
+	}
+
+	// ApplyMirrorSnapshotDefaults was removed: shipping "fresh ATAK" defaults
+	// for identities with no client uplink yet was causing post-subscribe
+	// snapshots to ship tracking=true (then AugmentSnapshotWithServerFields
+	// overwrote mapCenter with player position), which the web mirror rendered
+	// as "snap to player" mid-pan after every subscribe cycle. ApiSyncMirrorSnapshots
+	// now skips those identities until the client has uplinked real state,
+	// and OnMirrorSubscribe triggers RpcDo_InvalidateMirrorSnapshotBaseline on
+	// the owner to force that first uplink immediately.
+
+	//! Fill in the server-side fields on a snapshot — player world position,
+	//! heading, MGRS. These are computed from the live player entity, not
+	//! cached. Cheap per-tick: at most one foreach across PlayerManager and
+	//! a couple of GetOrigin / GetYawPitchRoll calls per mirrored player.
+	//!
+	//! Also enforces the "tracking-on ⇒ mapCenter follows player" invariant
+	//! the in-game ATAK enforces via CenterOnPlayer each frame. Without this,
+	//! a stale client snapshot whose mapCenter was sampled before the user
+	//! turned tracking on, or an empty just-subscribed snapshot whose mapCenter
+	//! is zero, would render the web mirror's camera at the wrong location even
+	//! when the holding client's screen shows the map correctly tracking.
+	protected void AugmentSnapshotWithServerFields(int playerId, AG0_TDLMirrorSnapshot snap)
+	{
+		PlayerManager pmgr = GetGame().GetPlayerManager();
+		if (!pmgr)
+			return;
+		IEntity player = pmgr.GetPlayerControlledEntity(playerId);
+		if (!player)
+			return;
+		vector pos = player.GetOrigin();
+		snap.playerWorldX = pos[0];
+		snap.playerWorldY = pos[1];
+		snap.playerWorldZ = pos[2];
+		vector angles = player.GetYawPitchRoll();
+		snap.playerHeadingDeg = angles[0];
+		snap.mgrs = AG0_MGRSGridUtils.GetFullMGRS(pos, 5);
+
+		if (snap.playerTracking)
+		{
+			snap.mapCenterX = pos[0];
+			snap.mapCenterZ = pos[2];
+		}
+
+		PopulateMirrorContacts(snap);
+	}
+
+	//! Server-side fill for the snapshot's per-viewer contacts[] array. Uses the
+	//! viewer's active networkId (already populated client-side from their
+	//! held device) and walks the network's stored member map. Per-pair signal
+	//! readings live only in transient connectivity ticks, so the network's
+	//! own GetDeviceData() is the closest stable mirror of what
+	//! PopulateDetailView reads in-game — the values are refreshed by the
+	//! same connectivity passes that update the in-game contact list.
+	//!
+	//! No contacts emitted when the player isn't in a network (snap.networkId
+	//! <= 0); the web mirror treats absence the same as an empty contacts
+	//! array.
+	protected void PopulateMirrorContacts(AG0_TDLMirrorSnapshot snap)
+	{
+		if (!snap.contacts)
+			snap.contacts = new array<ref AG0_TDLMirrorContact>();
+		else
+			snap.contacts.Clear();
+
+		if (snap.networkId <= 0)
+			return;
+
+		AG0_TDLNetwork network = FindNetworkByID(snap.networkId);
+		if (!network)
+			return;
+
+		map<RplId, ref AG0_TDLNetworkMember> data = network.GetDeviceData();
+		if (!data)
+			return;
+
+		foreach (RplId rplId, AG0_TDLNetworkMember member : data)
+		{
+			if (!member)
+				continue;
+
+			AG0_TDLMirrorContact c = new AG0_TDLMirrorContact();
+			RplId memberRpl = member.GetRplId();
+			if (memberRpl.IsValid())
+				c.rplId = memberRpl;
+			else
+				c.rplId = 0;
+
+			c.signalStrength = member.GetSignalStrength();
+			c.networkIp = member.GetNetworkIP();
+			c.isGpsActive = member.IsGPSActive();
+			c.isBridged = member.IsBridged();
+			c.sourceNetworkId = member.GetSourceNetworkId();
+
+			RplId videoRpl = member.GetVideoSourceRplId();
+			if (videoRpl.IsValid())
+				c.videoSourceRplId = videoRpl;
+			else
+				c.videoSourceRplId = 0;
+
+			snap.contacts.Insert(c);
+		}
 	}
 }

@@ -40,9 +40,22 @@ class AG0_TDLMarkerToolPanel
     // the card deletes the underlying marker.
     protected static const ResourceName MARKER_ENTRY_LAYOUT = "{D0D62BD37945894C}UI/layouts/Map/ATAKMapMarkerEntry.layout";
 
+    // Shape sub-form layout. Named widgets the spawn looks up:
+    // ShapeToolSpinBox, StrokeColorSpinBox, StrokeWidthSpinBox, FillToggle,
+    // and a SCR_EditBoxComponent root named EditBoxRoot for the label.
+    protected static const ResourceName SHAPE_LAYOUT = "{54F9660B26F602EA}UI/layouts/Map/ATAKMapShapeEditBox.layout";
+
     // Type spinbox indices — keep in sync with the m_aElementNames in TDLMenuUI.layout
     protected static const int TYPE_INDEX_PLACED   = 0;
     protected static const int TYPE_INDEX_MILITARY = 1;
+    protected static const int TYPE_INDEX_SHAPE    = 2;
+    protected static const int TYPE_INDEX_DELETE   = 3;
+
+    // World-space radius around the cursor that picks up a marker for the
+    // sweep-delete gesture. At default zoom (~0.15) this is roughly 5–10
+    // pixels on screen — wide enough to forgive imprecise sweeps without
+    // grabbing markers the user didn't intend.
+    protected static const float DELETE_SWEEP_RADIUS_M = 30.0;
 
     // ============================================
     // CROSS-FRONTEND CONFIG STATICS
@@ -66,6 +79,11 @@ class AG0_TDLMarkerToolPanel
     static protected int    s_iLastMilCombo1       = -1;
     static protected int    s_iLastMilCombo2       = -1;
     static protected string s_sLastMilText         = "";
+    static protected int    s_iLastShapeTool       = -1;
+    static protected int    s_iLastShapeStrokeColor = -1;
+    static protected int    s_iLastShapeStrokeWidth = -1;
+    static protected int    s_iLastShapeFill       = -1;
+    static protected string s_sLastShapeLabel      = "";
 
     //------------------------------------------------------------------------------------------------
     // ROOT WIDGETS
@@ -75,6 +93,13 @@ class AG0_TDLMarkerToolPanel
     protected Widget m_wRoot;
     protected Widget m_wPlacedSection;
     protected Widget m_wMilitarySection;
+    protected Widget m_wShapeSection;
+    // Layout-side: add a FrameWidget named "MarkerToolDeleteSection" to
+    // MarkerToolContent (typically a short help-text TextWidget inside).
+    // Tolerated as null until the layout is updated — delete mode then
+    // silently no-ops the section toggle, but the sweep behaviour still
+    // works because it doesn't depend on a sub-form.
+    protected Widget m_wDeleteSection;
     protected SCR_SpinBoxComponent m_TypeSpinBox;
     protected SCR_ModularButtonComponent m_BackButton;
 
@@ -91,10 +116,41 @@ class AG0_TDLMarkerToolPanel
     // the server's broadcast back. Self-cleared once the manager's lists no
     // longer contain the ID.
     protected ref array<int> m_aPendingDeletes = {};
+    // Shape IDs whose AskDeleteShape RPC is in flight. Sweep checks this
+    // before re-firing so the same shape doesn't get a delete request
+    // every frame while the server round-trip is pending. Cleared lazily
+    // — entries linger after the shape is actually gone, but the per-
+    // shape-id miss is harmless because GetShape returns null for
+    // already-deleted shapes anyway.
+    protected ref array<string> m_aPendingShapeDeletes = {};
 
-    // Roots of the two spawned edit-box layouts (null until OnPanelShown)
+    // Roots of the spawned edit-box layouts (null until OnPanelShown)
     protected Widget m_wPlacedEditBox;
     protected Widget m_wMilitaryEditBox;
+    protected Widget m_wShapeEditBox;
+
+    //------------------------------------------------------------------------------------------------
+    // SHAPE EDIT-BOX WIDGETS (looked up after spawn)
+    //------------------------------------------------------------------------------------------------
+
+    // Spinbox driving the AG0_ETDLShapeTool selection. Order matches the
+    // enum (index 0 = UNKNOWN sentinel reserved for "no tool"; the layout's
+    // first visible item maps to CIRCLE).
+    protected SCR_SpinBoxComponent m_ShapeToolSpinBox;
+    protected SCR_SpinBoxComponent m_ShapeStrokeColorSpinBox;
+    protected SCR_SpinBoxComponent m_ShapeStrokeWidthSpinBox;
+    protected SCR_SpinBoxComponent m_ShapeFillSpinBox;
+    protected SCR_EditBoxComponent m_ShapeLabelEditBox;
+
+    // Stroke colour entries shared with the placed-marker config, so the
+    // palette stays consistent with markers the player has already learned.
+    // ARGB ints pulled once at spawn time; index aligns with the spinbox.
+    protected ref array<int> m_aShapeStrokeColorValues = {};
+    // Stroke widths in pixels, parallel to the StrokeWidthSpinBox items.
+    protected ref array<float> m_aShapeStrokeWidthValues = {};
+
+    // Active draw session. One per panel instance; created in Init.
+    protected ref AG0_TDLShapeDrawSession m_ShapeDrawSession;
 
     //------------------------------------------------------------------------------------------------
     // PLACED EDIT-BOX WIDGETS (looked up after spawn)
@@ -165,6 +221,13 @@ class AG0_TDLMarkerToolPanel
     //! tick (which doesn't see the deletion until after the RPC roundtrip).
     ref ScriptInvoker m_OnMarkerDeleted = new ScriptInvoker();
 
+    //! Fires when the user finishes drawing a shape, signature
+    //! (AG0_TDLMapShape draft, AG0_ETDLShapeTool tool). Menu controller
+    //! subscribes and routes the draft to the player-controller's
+    //! AskCreateShape RPC. The draft has geometry + style filled in; the
+    //! menu controller adds creator identity / network context before send.
+    ref ScriptInvoker m_OnShapeDrawCommitted = new ScriptInvoker();
+
 
     //------------------------------------------------------------------------------------------------
     // LIFECYCLE
@@ -182,6 +245,11 @@ class AG0_TDLMarkerToolPanel
 
         m_wPlacedSection   = m_wRoot.FindAnyWidget("MarkerToolPlacedSection");
         m_wMilitarySection = m_wRoot.FindAnyWidget("MarkerToolMilitarySection");
+        // Tolerated as null when the layout hasn't been extended yet — shape
+        // mode silently no-ops in that case so the existing marker tool keeps
+        // working through the layout transition.
+        m_wShapeSection    = m_wRoot.FindAnyWidget("MarkerToolShapeSection");
+        m_wDeleteSection   = m_wRoot.FindAnyWidget("MarkerToolDeleteSection");
 
         Widget typeSpinBoxWidget = m_wRoot.FindAnyWidget("MarkerToolTypeSpinBox");
         if (typeSpinBoxWidget)
@@ -223,6 +291,14 @@ class AG0_TDLMarkerToolPanel
         // matches type spinbox default index 0.
         if (m_wPlacedSection) m_wPlacedSection.SetVisible(true);
         if (m_wMilitarySection) m_wMilitarySection.SetVisible(false);
+        if (m_wShapeSection) m_wShapeSection.SetVisible(false);
+        if (m_wDeleteSection) m_wDeleteSection.SetVisible(false);
+
+        // One draw session per panel instance. Persistent across show/hide so
+        // an in-progress draw survives panel re-entry; the session is
+        // cancelled explicitly via cancel action or tool-spinbox change.
+        m_ShapeDrawSession = new AG0_TDLShapeDrawSession();
+        m_ShapeDrawSession.m_OnCommitted.Insert(OnShapeSessionCommitted);
 
         return true;
     }
@@ -238,6 +314,9 @@ class AG0_TDLMarkerToolPanel
 
         if (!m_wMilitaryEditBox)
             SpawnMilitaryEditBox();
+
+        if (!m_wShapeEditBox && m_wShapeSection)
+            SpawnShapeEditBox();
 
         // Repopulate the player-owned marker scroll every time we re-enter
         // the panel — markers may have been added/removed by other paths
@@ -290,6 +369,17 @@ class AG0_TDLMarkerToolPanel
             m_MilCombo2.SetCurrentItem(s_iLastMilCombo2);
         if (m_MilEditBox && !s_sLastMilText.IsEmpty())
             m_MilEditBox.SetValue(s_sLastMilText);
+
+        if (m_ShapeToolSpinBox && s_iLastShapeTool != -1)
+            m_ShapeToolSpinBox.SetCurrentItem(s_iLastShapeTool);
+        if (m_ShapeStrokeColorSpinBox && s_iLastShapeStrokeColor != -1)
+            m_ShapeStrokeColorSpinBox.SetCurrentItem(s_iLastShapeStrokeColor);
+        if (m_ShapeStrokeWidthSpinBox && s_iLastShapeStrokeWidth != -1)
+            m_ShapeStrokeWidthSpinBox.SetCurrentItem(s_iLastShapeStrokeWidth);
+        if (m_ShapeFillSpinBox && s_iLastShapeFill != -1)
+            m_ShapeFillSpinBox.SetCurrentItem(s_iLastShapeFill);
+        if (m_ShapeLabelEditBox && !s_sLastShapeLabel.IsEmpty())
+            m_ShapeLabelEditBox.SetValue(s_sLastShapeLabel);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -302,6 +392,8 @@ class AG0_TDLMarkerToolPanel
             s_sLastPlacedText = m_PlacedEditBox.GetValue();
         if (m_MilEditBox)
             s_sLastMilText = m_MilEditBox.GetValue();
+        if (m_ShapeLabelEditBox)
+            s_sLastShapeLabel = m_ShapeLabelEditBox.GetValue();
     }
 
     //------------------------------------------------------------------------------------------------
@@ -327,6 +419,11 @@ class AG0_TDLMarkerToolPanel
 
         if (im.GetActionTriggered("TDLPlaceMarker"))
             m_OnPlaceRequested.Invoke(false);
+
+        // Variadic shape commit uses geometric close-the-loop instead of a
+        // dedicated input action — the draw session itself spots a click
+        // near the target closing vertex and auto-commits from AddPoint.
+        // Cancel is handled by the panel's Back button via OnBackButtonClicked.
     }
 
     //------------------------------------------------------------------------------------------------
@@ -969,6 +1066,18 @@ class AG0_TDLMarkerToolPanel
             m_wPlacedSection.SetVisible(index == TYPE_INDEX_PLACED);
         if (m_wMilitarySection)
             m_wMilitarySection.SetVisible(index == TYPE_INDEX_MILITARY);
+        if (m_wShapeSection)
+            m_wShapeSection.SetVisible(index == TYPE_INDEX_SHAPE);
+        if (m_wDeleteSection)
+            m_wDeleteSection.SetVisible(index == TYPE_INDEX_DELETE);
+
+        // Leaving shape mode mid-draw discards the in-progress geometry.
+        // Re-entering re-arms with the spinbox's tool selection, matching
+        // the user's expectation that switching modes is a clean reset.
+        if (index != TYPE_INDEX_SHAPE && m_ShapeDrawSession && m_ShapeDrawSession.IsArmed())
+            m_ShapeDrawSession.Cancel();
+        if (index == TYPE_INDEX_SHAPE)
+            ReArmShapeSession();
 
         // Mirror to static for cross-frontend persistence.
         s_iLastType = index;
@@ -1523,12 +1632,529 @@ class AG0_TDLMarkerToolPanel
     }
 
     //------------------------------------------------------------------------------------------------
-    //! MarkerToolBackButton in MarkerToolContent fires this. Routes through
-    //! m_OnCancelRequested so the menu side can flip the active panel back
-    //! to NETWORK_LIST without the panel itself owning panel-state.
+    //! MarkerToolBackButton in MarkerToolContent fires this. Two-state:
+    //! during a shape draw with collected points the press cancels the
+    //! draw and stays on the panel; otherwise it routes through
+    //! m_OnCancelRequested so the menu can flip the active panel back to
+    //! NETWORK_LIST. Lets the same button serve both "abort this draw"
+    //! and "leave the marker tool" without a dedicated cancel binding.
     protected void OnBackButtonClicked()
     {
+        if (m_ShapeDrawSession && m_ShapeDrawSession.IsArmed() && m_ShapeDrawSession.GetPointCount() > 0)
+        {
+            OnShapeCancelAction();
+            return;
+        }
+
         m_OnCancelRequested.Invoke();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    // SHAPE MODE
+    //------------------------------------------------------------------------------------------------
+
+    //! True when the shape sub-form is the active sub-mode. Used by the menu
+    //! controller to decide whether a map click feeds the marker placement
+    //! path or the shape draw session.
+    bool IsShapeModeActive()
+    {
+        if (!m_TypeSpinBox)
+            return false;
+        return m_TypeSpinBox.GetCurrentIndex() == TYPE_INDEX_SHAPE;
+    }
+
+    //! True when the delete sub-form is the active sub-mode. Map clicks
+    //! and TDLDraw-held cursor sweeps route through SweepDeleteAt to
+    //! remove the player's own markers near the cursor.
+    bool IsDeleteModeActive()
+    {
+        if (!m_TypeSpinBox)
+            return false;
+        return m_TypeSpinBox.GetCurrentIndex() == TYPE_INDEX_DELETE;
+    }
+
+    //! Sweep-delete the local player's own PLACED_CUSTOM / PLACED_MILITARY
+    //! markers within DELETE_SWEEP_RADIUS_M of the supplied world position.
+    //! Called per-frame (TDLDraw held) for sweep, or once per click-place
+    //! event for single-click delete. Reuses the AskRemoveStaticMarker RPC
+    //! path that the marker scroll list uses, and the same m_aPendingDeletes
+    //! gate to suppress per-frame duplicate dispatch while a removal is
+    //! in flight. Only the player's own markers are affected — teammates'
+    //! markers stay put regardless of how wide the sweep goes.
+    void SweepDeleteAt(vector worldPos)
+    {
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+            return;
+
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return;
+        int selfPlayerId = pc.GetPlayerId();
+        if (selfPlayerId <= 0)
+            return;
+
+        SCR_MapMarkerSyncComponent syncComp = SCR_MapMarkerSyncComponent.Cast(
+            pc.FindComponent(SCR_MapMarkerSyncComponent));
+        if (!syncComp)
+            return;
+
+        // Union both lists — same trick as RefreshMarkerList. Vanilla
+        // SCR shuffles off-frame markers from m_aStaticMarkers into
+        // m_aDisabledMarkers; without checking both the sweep would miss
+        // markers placed outside the current M-map viewport.
+        array<SCR_MapMarkerBase> allMarkers = markerMgr.GetStaticMarkers();
+        array<SCR_MapMarkerBase> disabled = markerMgr.GetDisabledMarkers();
+        if (disabled)
+        {
+            foreach (SCR_MapMarkerBase d : disabled)
+            {
+                if (d && allMarkers.Find(d) == -1)
+                    allMarkers.Insert(d);
+            }
+        }
+
+        float radiusSq = DELETE_SWEEP_RADIUS_M * DELETE_SWEEP_RADIUS_M;
+        vector targetPos = Vector(worldPos[0], 0, worldPos[2]);
+
+        foreach (SCR_MapMarkerBase marker : allMarkers)
+        {
+            if (!marker)
+                continue;
+            int t = marker.GetType();
+            if (t != SCR_EMapMarkerType.PLACED_CUSTOM && t != SCR_EMapMarkerType.PLACED_MILITARY)
+                continue;
+            if (marker.GetMarkerOwnerID() != selfPlayerId)
+                continue;
+
+            int markerId = marker.GetMarkerID();
+            if (m_aPendingDeletes.Find(markerId) != -1)
+                continue;
+
+            // World pos uses int coords on the marker (SetWorldPos took
+            // ints during placement). GetWorldPos writes into an int[2]
+            // out-array where index 0 = world X and index 1 = world Z
+            // (no Y component — markers live on the map plane). Distance
+            // squared keeps the per-marker cost to a couple multiplies
+            // plus a compare.
+            int mPos[2];
+            marker.GetWorldPos(mPos);
+            float dx = mPos[0] - targetPos[0];
+            float dz = mPos[1] - targetPos[2];
+            if (dx * dx + dz * dz > radiusSq)
+                continue;
+
+            // Same pre-RPC dance as OnMarkerEntryClicked: unhide from the
+            // disabled list (so the server's GetStaticMarkerByID lookup
+            // hits) before asking for removal.
+            markerMgr.SetStaticMarkerDisabled(marker, false);
+
+            syncComp.AskRemoveStaticMarker(markerId);
+            m_aPendingDeletes.Insert(markerId);
+            m_OnMarkerDeleted.Invoke(markerId);
+        }
+
+        SweepDeleteShapesAt(targetPos, radiusSq, selfPlayerId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Shape half of the sweep — hit-tests against the shape's centroid,
+    //! every vertex, and (for radial shapes) the bounding radius so any
+    //! visible part of the shape under the cursor triggers the delete.
+    //! Dispatches AG0_PlayerController_TDL.AskDeleteShape; the server is
+    //! the sole authority on ownership and silently no-ops requests for
+    //! shapes the caller didn't create. No client-side identity gate —
+    //! SCR_PlayerIdentityUtils.GetPlayerIdentityId is server-authoritative
+    //! and returns empty on dedicated-MP clients, which would block every
+    //! delete the user can legitimately make. m_aPendingShapeDeletes
+    //! prevents the same id being re-asked while one round-trip is in
+    //! flight, so the per-sweep grief-RPC ceiling is "one per shape under
+    //! the cursor" — cheap even with full coverage.
+    protected void SweepDeleteShapesAt(vector targetPos, float radiusSq, int selfPlayerId)
+    {
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return;
+
+        AG0_TDLMapShapeManager shapeMgr = pc.GetTDLShapeManager();
+        if (!shapeMgr)
+            return;
+
+        float sweepRadius = DELETE_SWEEP_RADIUS_M;
+
+        array<ref AG0_TDLMapShape> shapes = shapeMgr.GetShapes();
+        if (!shapes)
+            return;
+
+        foreach (AG0_TDLMapShape shape : shapes)
+        {
+            if (!shape || shape.m_sId.IsEmpty())
+                continue;
+            if (m_aPendingShapeDeletes.Find(shape.m_sId) != -1)
+                continue;
+            if (!IsCursorHittingShape(shape, targetPos, sweepRadius))
+                continue;
+
+            pc.AskDeleteShape(shape.m_sId);
+            m_aPendingShapeDeletes.Insert(shape.m_sId);
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Hit-test a shape against a cursor position with a forgiving radius.
+    //! Order of checks is cheap-to-expensive: centroid first (always a
+    //! single distance check), then bounding-radius for radial shapes
+    //! (circle / sector / range_rings), then per-vertex (vertex-based
+    //! shapes). Returns true on the first criterion that hits — sweep
+    //! delete doesn't need a precise point-in-polygon, just "near enough
+    //! to be the obvious target".
+    protected bool IsCursorHittingShape(AG0_TDLMapShape shape, vector targetPos, float sweepRadius)
+    {
+        float dxC = shape.m_vCenter[0] - targetPos[0];
+        float dzC = shape.m_vCenter[2] - targetPos[2];
+        float centerDistSq = dxC * dxC + dzC * dzC;
+        float sweepRadiusSq = sweepRadius * sweepRadius;
+        if (centerDistSq <= sweepRadiusSq)
+            return true;
+
+        // Radial shapes: cursor inside the shape's enclosing disc (with
+        // sweep tolerance) counts as a hit. Catches the case where the
+        // user sweeps across the interior of a large circle whose
+        // centroid is far from the cursor.
+        if (shape.m_fRadius > 0)
+        {
+            float reach = shape.m_fRadius + sweepRadius;
+            if (centerDistSq <= reach * reach)
+                return true;
+        }
+
+        // Vertex-based shapes: any vertex within sweep radius hits.
+        // Stored as flat [x0,z0, x1,z1, ...].
+        if (shape.m_aVertices && !shape.m_aVertices.IsEmpty())
+        {
+            int n = shape.m_aVertices.Count();
+            for (int i = 0; i + 1 < n; i += 2)
+            {
+                float dx = shape.m_aVertices[i] - targetPos[0];
+                float dz = shape.m_aVertices[i + 1] - targetPos[2];
+                if (dx * dx + dz * dz <= sweepRadiusSq)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    AG0_TDLShapeDrawSession GetShapeDrawSession()
+    {
+        return m_ShapeDrawSession;
+    }
+
+    //! Forward a world-space click into the active shape session. The menu
+    //! controller calls this on map-click or TDLPlaceMarker action when shape
+    //! mode is active; it has already resolved the world position from the
+    //! map cursor (PC) or map view centre (gamepad / world-space frontend).
+    //!
+    //! Freehand short-circuit: that tool uses TDLDraw-held cursor sampling,
+    //! not discrete clicks. When TDLDraw and the click action are co-bound
+    //! to the same key, releasing the key fires both a TDLDraw release
+    //! (which commits via TickFreehandDraw) AND a click-release (which
+    //! would otherwise leak through to AddFreehandSample here, adding a
+    //! stray final sample). Returning early in freehand mode keeps the
+    //! click path inert and the commit path the single source of truth.
+    void OnShapeClick(vector worldPos)
+    {
+        if (!m_ShapeDrawSession)
+            return;
+        if (m_ShapeDrawSession.GetActiveTool() == AG0_ETDLShapeTool.FREEHAND)
+            return;
+        if (!m_ShapeDrawSession.IsArmed())
+            ReArmShapeSession();
+        m_ShapeDrawSession.AddPoint(worldPos);
+    }
+
+    //! Variadic-shape commit action — closes polygon / range_rings / route.
+    //! Fixed-point tools auto-commit through AddPoint and ignore this.
+    void OnShapeCommitAction()
+    {
+        if (m_ShapeDrawSession)
+            m_ShapeDrawSession.CommitVariadic();
+    }
+
+    //! Cancel the in-progress draw without committing. Caller (menu / world-
+    //! space frontend) wires this to a cancel-shaped input action and to
+    //! mode-leaving transitions where dropping geometry is appropriate.
+    void OnShapeCancelAction()
+    {
+        if (m_ShapeDrawSession && m_ShapeDrawSession.IsArmed())
+            m_ShapeDrawSession.Cancel();
+        ReArmShapeSession();
+    }
+
+    //! Push the live cursor world position into the session for ghost rubber-
+    //! banding. Menu controller resolves the cursor world from the canvas
+    //! drag handler's poll, world-space frontend pushes from its own cursor
+    //! plumbing; both feed the same entry point.
+    void SetShapeCursorWorld(vector worldPos)
+    {
+        if (m_ShapeDrawSession)
+            m_ShapeDrawSession.SetCursorWorld(worldPos);
+    }
+
+    //! Commit the freehand session on draw release. Controller calls this
+    //! when TDLDraw transitions from held to released. Equivalent to the
+    //! variadic commit action — produces a closed shape when enough samples
+    //! have been collected, no-op otherwise (session stays armed, user can
+    //! start another draw without re-selecting the tool).
+    void OnShapeFreehandEnd()
+    {
+        if (m_ShapeDrawSession)
+            m_ShapeDrawSession.CommitVariadic();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Spawn the shape sub-form layout into MarkerToolShapeSection and look
+    //! up the named widgets. {RESOURCE} marker on SHAPE_LAYOUT means the
+    //! layout file isn't authored yet — the spawn will fail cleanly and the
+    //! sub-form stays inert until the layout lands.
+    protected void SpawnShapeEditBox()
+    {
+        if (!m_wShapeSection)
+            return;
+
+        m_wShapeEditBox = GetGame().GetWorkspace().CreateWidgets(SHAPE_LAYOUT, m_wShapeSection);
+        if (!m_wShapeEditBox)
+        {
+            Print("[AG0_TDLMarkerToolPanel] ATAKMapShapeEditBox.layout not yet authored — shape sub-form inert", LogLevel.NORMAL);
+            return;
+        }
+
+        m_ShapeToolSpinBox        = SCR_SpinBoxComponent.GetSpinBoxComponent("ShapeToolSpinBox",       m_wShapeEditBox);
+        m_ShapeStrokeColorSpinBox = SCR_SpinBoxComponent.GetSpinBoxComponent("StrokeColorSpinBox",     m_wShapeEditBox);
+        m_ShapeStrokeWidthSpinBox = SCR_SpinBoxComponent.GetSpinBoxComponent("StrokeWidthSpinBox",     m_wShapeEditBox);
+        m_ShapeFillSpinBox        = SCR_SpinBoxComponent.GetSpinBoxComponent("FillToggle",             m_wShapeEditBox);
+
+        Widget editRoot = m_wShapeEditBox.FindAnyWidget("EditBoxRoot");
+        if (editRoot)
+            m_ShapeLabelEditBox = SCR_EditBoxComponent.Cast(editRoot.FindHandler(SCR_EditBoxComponent));
+
+        if (m_ShapeToolSpinBox)
+            m_ShapeToolSpinBox.m_OnChanged.Insert(OnShapeToolChanged);
+        if (m_ShapeStrokeColorSpinBox)
+            m_ShapeStrokeColorSpinBox.m_OnChanged.Insert(OnShapeStyleChanged);
+        if (m_ShapeStrokeWidthSpinBox)
+            m_ShapeStrokeWidthSpinBox.m_OnChanged.Insert(OnShapeStyleChanged);
+        if (m_ShapeFillSpinBox)
+            m_ShapeFillSpinBox.m_OnChanged.Insert(OnShapeStyleChanged);
+
+        PopulateShapeSelectors();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Build the spinbox item lists. Tool list mirrors AG0_ETDLShapeTool
+    //! values (FREEHAND deliberately absent per v1 scope). Colour list
+    //! reuses the placed-marker config so the in-mod palette stays
+    //! consistent and the user sees colours they're already familiar with.
+    protected void PopulateShapeSelectors()
+    {
+        if (m_ShapeToolSpinBox)
+        {
+            m_ShapeToolSpinBox.ClearAll();
+            m_ShapeToolSpinBox.AddItem("Circle");
+            m_ShapeToolSpinBox.AddItem("Rectangle");
+            m_ShapeToolSpinBox.AddItem("Polygon");
+            m_ShapeToolSpinBox.AddItem("Sector");
+            m_ShapeToolSpinBox.AddItem("Range Rings");
+            m_ShapeToolSpinBox.AddItem("Route");
+            m_ShapeToolSpinBox.AddItem("Freehand");
+            m_ShapeToolSpinBox.SetCycleMode(true);
+            m_ShapeToolSpinBox.SetCurrentItem(0);
+        }
+
+        m_aShapeStrokeColorValues.Clear();
+        if (m_ShapeStrokeColorSpinBox)
+        {
+            m_ShapeStrokeColorSpinBox.ClearAll();
+            if (m_PlacedConfig)
+            {
+                array<ref SCR_MarkerColorEntry> colorEntries = m_PlacedConfig.GetColorEntries();
+                if (colorEntries)
+                {
+                    foreach (SCR_MarkerColorEntry entry : colorEntries)
+                    {
+                        if (!entry)
+                            continue;
+                        m_ShapeStrokeColorSpinBox.AddItem(entry.GetName());
+                        m_aShapeStrokeColorValues.Insert(ColorToArgbInt(entry.GetColor()));
+                    }
+                }
+            }
+            // Fallback so the spinbox isn't empty when the config is missing.
+            if (m_aShapeStrokeColorValues.IsEmpty())
+            {
+                m_ShapeStrokeColorSpinBox.AddItem("Red");
+                m_aShapeStrokeColorValues.Insert(0xFFFF0000);
+            }
+            m_ShapeStrokeColorSpinBox.SetCycleMode(true);
+            m_ShapeStrokeColorSpinBox.SetCurrentItem(0);
+        }
+
+        m_aShapeStrokeWidthValues.Clear();
+        if (m_ShapeStrokeWidthSpinBox)
+        {
+            m_ShapeStrokeWidthSpinBox.ClearAll();
+            m_ShapeStrokeWidthSpinBox.AddItem("1 px"); m_aShapeStrokeWidthValues.Insert(1);
+            m_ShapeStrokeWidthSpinBox.AddItem("2 px"); m_aShapeStrokeWidthValues.Insert(2);
+            m_ShapeStrokeWidthSpinBox.AddItem("3 px"); m_aShapeStrokeWidthValues.Insert(3);
+            m_ShapeStrokeWidthSpinBox.AddItem("4 px"); m_aShapeStrokeWidthValues.Insert(4);
+            m_ShapeStrokeWidthSpinBox.SetCycleMode(true);
+            m_ShapeStrokeWidthSpinBox.SetCurrentItem(1);
+        }
+
+        if (m_ShapeFillSpinBox)
+        {
+            m_ShapeFillSpinBox.ClearAll();
+            m_ShapeFillSpinBox.AddItem("No Fill");
+            m_ShapeFillSpinBox.AddItem("Fill 40%");
+            m_ShapeFillSpinBox.SetCycleMode(true);
+            m_ShapeFillSpinBox.SetCurrentItem(0);
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Re-arm the draw session with the current tool selection. Called on
+    //! shape-mode entry and whenever the tool spinbox changes. Cancels any
+    //! in-progress draw so switching tools mid-shape doesn't mix geometry.
+    protected void ReArmShapeSession()
+    {
+        if (!m_ShapeDrawSession)
+            return;
+
+        PushShapeStyleToSession();
+        AG0_ETDLShapeTool tool = ResolveCurrentShapeTool();
+        m_ShapeDrawSession.Arm(tool);
+    }
+
+    protected void OnShapeToolChanged()
+    {
+        if (m_ShapeToolSpinBox)
+            s_iLastShapeTool = m_ShapeToolSpinBox.GetCurrentIndex();
+        ReArmShapeSession();
+    }
+
+    //! Pushes the current style state into the session so the next ghost
+    //! rebuild reflects the user's pick. Stroke/fill changes during a draw
+    //! update the live preview without resetting collected points.
+    protected void OnShapeStyleChanged()
+    {
+        if (m_ShapeStrokeColorSpinBox)
+            s_iLastShapeStrokeColor = m_ShapeStrokeColorSpinBox.GetCurrentIndex();
+        if (m_ShapeStrokeWidthSpinBox)
+            s_iLastShapeStrokeWidth = m_ShapeStrokeWidthSpinBox.GetCurrentIndex();
+        if (m_ShapeFillSpinBox)
+            s_iLastShapeFill = m_ShapeFillSpinBox.GetCurrentIndex();
+        PushShapeStyleToSession();
+    }
+
+    protected void PushShapeStyleToSession()
+    {
+        if (!m_ShapeDrawSession)
+            return;
+
+        int strokeColor = ResolveCurrentStrokeColor();
+        float strokeWidth = ResolveCurrentStrokeWidth();
+        int fillColor = ResolveCurrentFillColor(strokeColor);
+        string label = "";
+        if (m_ShapeLabelEditBox)
+            label = m_ShapeLabelEditBox.GetValue();
+
+        m_ShapeDrawSession.SetStyle(strokeColor, strokeWidth, fillColor, label);
+    }
+
+    protected AG0_ETDLShapeTool ResolveCurrentShapeTool()
+    {
+        // Spinbox is 0-indexed (Circle=0), AG0_ETDLShapeTool reserves 0 for
+        // UNKNOWN — shift by one so spinbox 0 maps to CIRCLE=1.
+        if (!m_ShapeToolSpinBox)
+            return AG0_ETDLShapeTool.UNKNOWN;
+        int idx = m_ShapeToolSpinBox.GetCurrentIndex();
+        if (idx < 0)
+            return AG0_ETDLShapeTool.UNKNOWN;
+        int shifted = idx + 1;
+        if (shifted == AG0_ETDLShapeTool.CIRCLE)        return AG0_ETDLShapeTool.CIRCLE;
+        if (shifted == AG0_ETDLShapeTool.RECTANGLE)     return AG0_ETDLShapeTool.RECTANGLE;
+        if (shifted == AG0_ETDLShapeTool.POLYGON)       return AG0_ETDLShapeTool.POLYGON;
+        if (shifted == AG0_ETDLShapeTool.SECTOR)        return AG0_ETDLShapeTool.SECTOR;
+        if (shifted == AG0_ETDLShapeTool.RANGE_RINGS)   return AG0_ETDLShapeTool.RANGE_RINGS;
+        if (shifted == AG0_ETDLShapeTool.ROUTE)         return AG0_ETDLShapeTool.ROUTE;
+        if (shifted == AG0_ETDLShapeTool.FREEHAND)      return AG0_ETDLShapeTool.FREEHAND;
+        return AG0_ETDLShapeTool.UNKNOWN;
+    }
+
+    protected int ResolveCurrentStrokeColor()
+    {
+        if (!m_ShapeStrokeColorSpinBox || m_aShapeStrokeColorValues.IsEmpty())
+            return 0xFFFF0000;
+        int idx = m_ShapeStrokeColorSpinBox.GetCurrentIndex();
+        if (idx < 0 || idx >= m_aShapeStrokeColorValues.Count())
+            return m_aShapeStrokeColorValues[0];
+        return m_aShapeStrokeColorValues[idx];
+    }
+
+    protected float ResolveCurrentStrokeWidth()
+    {
+        if (!m_ShapeStrokeWidthSpinBox || m_aShapeStrokeWidthValues.IsEmpty())
+            return 2.0;
+        int idx = m_ShapeStrokeWidthSpinBox.GetCurrentIndex();
+        if (idx < 0 || idx >= m_aShapeStrokeWidthValues.Count())
+            return 2.0;
+        return m_aShapeStrokeWidthValues[idx];
+    }
+
+    //! Build a fill ARGB int from the stroke colour and the fill spinbox.
+    //! "No Fill" returns 0 (transparent — the renderer skips fill when
+    //! m_iFillColor == 0). "Fill 40%" reuses the stroke hue with alpha 0x66
+    //! so the fill reads as a tinted region without obscuring the underlying
+    //! map detail.
+    protected int ResolveCurrentFillColor(int strokeColor)
+    {
+        if (!m_ShapeFillSpinBox)
+            return 0;
+        int idx = m_ShapeFillSpinBox.GetCurrentIndex();
+        if (idx <= 0)
+            return 0;
+        return (0x66 << 24) | (strokeColor & 0x00FFFFFF);
+    }
+
+    //! Convert an engine Color (0..1 floats) to the ARGB packed int the
+    //! shape renderer expects. Matches the format used by AG0_TDLMapShape
+    //! style fields and the API's strokeColor/fillColor.
+    protected int ColorToArgbInt(Color c)
+    {
+        int a = Math.Clamp((int)(c.A() * 255), 0, 255);
+        int r = Math.Clamp((int)(c.R() * 255), 0, 255);
+        int g = Math.Clamp((int)(c.G() * 255), 0, 255);
+        int b = Math.Clamp((int)(c.B() * 255), 0, 255);
+        return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Forwarded from AG0_TDLShapeDrawSession.m_OnCommitted when a draw
+    //! commits. Re-fires through the panel-level invoker so the menu
+    //! controller can attach creator identity / network context before
+    //! routing to the AskCreateShape RPC — the panel doesn't know about
+    //! either of those.
+    protected void OnShapeSessionCommitted(AG0_TDLMapShape draft, AG0_ETDLShapeTool tool)
+    {
+        if (!draft)
+            return;
+
+        m_OnShapeDrawCommitted.Invoke(draft, tool);
+
+        // Auto re-arm with the same tool so the user can keep drawing without
+        // round-tripping through the spinbox. Matches the marker tool's
+        // "place, place again" flow.
+        ReArmShapeSession();
     }
 }
 

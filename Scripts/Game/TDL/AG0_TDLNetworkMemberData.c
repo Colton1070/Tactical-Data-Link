@@ -30,6 +30,10 @@ class AG0_TDLNetworkMember
     float GetSignalStrength() { return m_fSignalStrength; }
     int GetNetworkIP() { return m_iNetworkIP; }
     int GetCapabilities() { return m_iDeviceCapabilities; }
+    // Surfaces the deserialized GPS-active flag — populated by the snapshot
+    // Inject path, no setter elsewhere in code. Used by the web mirror's
+    // per-viewer contacts array to render the GPS-fix badge per network member.
+    bool IsGPSActive() { return m_bGPSActive; }
 	int GetOwnerPlayerId() { return m_iOwnerPlayerId; }
 	RplId GetVideoSourceRplId() { return m_VideoSourceRplId; }
 	bool IsBridged() { return m_bIsBridged; }

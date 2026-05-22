@@ -947,11 +947,19 @@ modded class SCR_PlayerController
     {
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system)
+        {
+            Print(string.Format("[TDL_CALLSIGN] RpcAsk_SetDeviceCallsign: no AG0_TDLSystem on server (deviceRplId=%1)",
+                deviceRplId), LogLevel.WARNING);
             return;
+        }
 
         AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
         if (!device)
+        {
+            Print(string.Format("[TDL_CALLSIGN] RpcAsk_SetDeviceCallsign: no device with RplId=%1 — stale snapshot on web?",
+                deviceRplId), LogLevel.WARNING);
             return;
+        }
 
         // Diagnostic: how many AG0_TDLDeviceComponents live on the entity backing
         // this RplId? If >1, multiple TDL components share a single RplComponent
@@ -1308,6 +1316,81 @@ modded class SCR_PlayerController
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Client → Server: request creation of a shape drawn in-game.
+	//! The client serialises an AG0_TDLMapShape draft (no id / version /
+	//! createdAt / networkId / createdBy / createdByPlayerIdentityId — server
+	//! fills those in) and ships the JSON string. The server-side handler
+	//! resolves the originating player and forwards to AG0_TDLSystem.
+	//!
+	//! Payload size: single shape JSON. Cap polygon / route vertex counts
+	//! upstream to stay under the 8191-byte per-string-param Enfusion RPC
+	//! ceiling. Chunking is not needed in v1 since the panel enforces sane
+	//! point caps before commit.
+	void AskCreateShape(string draftJson)
+	{
+		Rpc(RpcAsk_CreateShape, draftJson);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_CreateShape(string draftJson)
+	{
+		if (draftJson.IsEmpty())
+			return;
+
+		AG0_TDLSystem tdl = AG0_TDLSystem.GetInstance();
+		if (!tdl)
+		{
+			Print("[TDL_SHAPES] RpcAsk_CreateShape: TDL system unavailable", LogLevel.WARNING);
+			return;
+		}
+
+		int playerId = GetPlayerId();
+		if (playerId <= 0)
+		{
+			Print("[TDL_SHAPES] RpcAsk_CreateShape: no playerId on controller", LogLevel.WARNING);
+			return;
+		}
+
+		tdl.CreateLocalShape(playerId, draftJson);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Client → Server: request deletion of a shape by its server-assigned
+	//! id. Server validates that the requesting player is the shape's
+	//! creator (matched by Bohemia identity UUID), removes locally,
+	//! broadcasts the updated shape feed, and fires the API-mirror delete.
+	//! Used by the sweep-delete tool to remove the player's own shapes.
+	void AskDeleteShape(string shapeId)
+	{
+		Rpc(RpcAsk_DeleteShape, shapeId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_DeleteShape(string shapeId)
+	{
+		if (shapeId.IsEmpty())
+			return;
+
+		AG0_TDLSystem tdl = AG0_TDLSystem.GetInstance();
+		if (!tdl)
+		{
+			Print("[TDL_SHAPES] RpcAsk_DeleteShape: TDL system unavailable", LogLevel.WARNING);
+			return;
+		}
+
+		int playerId = GetPlayerId();
+		if (playerId <= 0)
+		{
+			Print("[TDL_SHAPES] RpcAsk_DeleteShape: no playerId on controller", LogLevel.WARNING);
+			return;
+		}
+
+		tdl.DeleteLocalShape(playerId, shapeId);
+	}
+
+	//------------------------------------------------------------------------------------------------
 	//! Client RPC handler for one chunk of a terrain structures dataset.
 	//!
 	//! Reassembly contract:
@@ -1657,5 +1740,104 @@ modded class SCR_PlayerController
 	{
 		AG0_RadioCryptoFillBridge.s_OnKeyReceived.Invoke(entityRplId, key);
 	}
-	
+
+	// ============================================
+	// WEB MIRROR
+	//
+	// Three-RPC surface. Snapshot uplink (client -> server) carries the local
+	// panel/map/setting state the server can't otherwise observe. Apply (server
+	// -> owner) injects a command from the web UI as if the player touched the
+	// screen. Indicator (server -> owner) flips the holding-client's
+	// "your ATAK is being watched" overlay.
+	//
+	// Snapshot JSON stays well under the 8191-byte per-string-param RPC cap
+	// for any realistic field set; the wrapper class enforces it on the way out.
+	// ============================================
+
+	//! Client-side mirror-active flag — true when at least one web mirror is
+	//! subscribed to this player. Read by the world-space display to surface
+	//! the small "being watched" indicator. Static so a held-state controller
+	//! recreated mid-session inherits the live state rather than starting at
+	//! false until the next indicator push.
+	static protected bool s_bMirrorIndicatorActive = false;
+	static bool IsMirrorIndicatorActive() { return s_bMirrorIndicatorActive; }
+
+	//! Client-side entry point for the menu controller's TickMirrorUplink.
+	//! Calls the server-bound RPC. Public method (not the RPC itself) because
+	//! Enfusion RPCs go through Rpc(method, args) and that machinery wants a
+	//! method that's already a member of the controller.
+	void PushATAKPanelStateToServer(string snapshotJson)
+	{
+		if (snapshotJson.IsEmpty())
+			return;
+		Rpc(RpcAsk_PushATAKPanelState, snapshotJson);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! CLIENT -> SERVER: receive a per-player ATAK snapshot.
+	//!
+	//! The server immediately stashes the payload on AG0_TDLSystem keyed by playerId.
+	//! No interpretation here — the system's mirror tick pulls the latest stashed JSON
+	//! when assembling the next atak_mirror_sync API push. Decoupling the receive from
+	//! the API push means a flaky web subscriber doesn't stall the uplink path.
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_PushATAKPanelState(string snapshotJson)
+	{
+		AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+		if (!system)
+			return;
+		int playerId = GetPlayerId();
+		if (playerId <= 0)
+			return;
+		system.AcceptMirrorSnapshotFromClient(playerId, snapshotJson);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! SERVER -> OWNER: apply one mirror command originating from the web UI.
+	//!
+	//! Routed via AG0_TDLMirrorCommandDispatcher so command-type fanout stays
+	//! in one place (the dispatcher) rather than ballooning this RPC handler.
+	//! The dispatcher walks the live AG0_TDLMenuController list — if no
+	//! frontend is alive (player not holding the device, menu not open) the
+	//! command is dropped on the floor with a debug log; the API mirrors that
+	//! as a mirror_command_rejected event so the web tab can surface it.
+	void ApplyMirrorCommand(string commandJson)
+	{
+		Rpc(RpcDo_ApplyMirrorCommand, commandJson);
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_ApplyMirrorCommand(string commandJson)
+	{
+		AG0_TDLMirrorCommandDispatcher.Dispatch(commandJson);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! SERVER -> OWNER: flip the local "your ATAK is being mirrored" indicator.
+	void SetMirrorIndicator(bool active)
+	{
+		Rpc(RpcDo_SetMirrorIndicator, active);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! SERVER -> OWNER: nuke the client's last-sent baseline so the next
+	//! TickMirrorUplink unconditionally pushes a fresh snapshot. Called on
+	//! subscribe so the server doesn't have to wait for the player to touch
+	//! the ATAK before getting real state.
+	void InvalidateMirrorSnapshotBaseline()
+	{
+		Rpc(RpcDo_InvalidateMirrorSnapshotBaseline);
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_InvalidateMirrorSnapshotBaseline()
+	{
+		AG0_TDLMenuController.ResetMirrorUplinkBaseline();
+	}
+
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_SetMirrorIndicator(bool active)
+	{
+		s_bMirrorIndicatorActive = active;
+	}
 }

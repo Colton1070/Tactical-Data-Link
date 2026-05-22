@@ -1,0 +1,22 @@
+Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
+ ID "57DA6675519A417B"
+ components {
+  SCR_BaseCompartmentManagerComponent "{20FB66C5DCB8DF72}" {
+   CompartmentSlots {
+    PilotCompartmentSlot PilotCompartment {
+     CompartmentUniqueName "pilot"
+    }
+    PilotCompartmentSlot CopilotCompartment {
+     CompartmentUniqueName "copilot"
+    }
+   }
+  }
+  ActionsManagerComponent "{C97BE5489221AE18}" {
+   additionalActions {
+    AG0_VehicleRadioFillAction "{68A76C6015F9673C}" {
+     VisibilityRange 6
+    }
+   }
+  }
+ }
+}

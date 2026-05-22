@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{A6CC9692A0638850}Prefabs/Vehicles/Helicopters/AUS_MH60/Awenzj_SOAR_UH60_Pylon_APKWS_Hellfires.et"
+ Configurations {
+  EntityTemplateResourceClass PC {
+  }
+  EntityTemplateResourceClass XBOX_ONE : PC {
+  }
+  EntityTemplateResourceClass XBOX_SERIES : PC {
+  }
+  EntityTemplateResourceClass PS4 : PC {
+  }
+  EntityTemplateResourceClass PS5 : PC {
+  }
+  EntityTemplateResourceClass HEADLESS : PC {
+  }
+ }
+}

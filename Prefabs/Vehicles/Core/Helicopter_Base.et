@@ -1,0 +1,16 @@
+Vehicle : "{4085446E2B406849}Prefabs/Vehicles/Core/Vehicle_Base.et" {
+ ID "57DA6675519A417B"
+ components {
+  SCR_VehicleICSComponent "{68A285C2A2E2574E}" {
+  }
+  SCR_VehicleRadioComponent "{68A36A899D564381}" {
+   m_sVirtualRadioPrefab "{D733B1AAB325A119}Prefabs/Items/Core/VehicleRadioItem_US.et"
+   m_aChannelNames {
+    "F1" "M2" "M3" "F5" "M6"
+   }
+   m_aAllowedCompartmentNames {
+    "pilot" "copilot"
+   }
+  }
+ }
+}

@@ -173,6 +173,82 @@ class AG0_TDLApiShapesCallback : RestCallback
 }
 
 //------------------------------------------------------------------------------------------------
+// REST Callback for POST /shapes (mod-originated shape create).
+// Carries the local_<hex> ID so the manager can reconcile the canonical
+// shape_<hex> ID from the response back to the in-memory entry. Failure
+// paths leave the local-origin entry intact — clients keep seeing the
+// shape, and the retry queue picks it up later.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiSubmitShapeCallback : RestCallback
+{
+	protected AG0_TDLApiManager m_Manager;
+	protected string m_sLocalShapeId;
+
+	//------------------------------------------------------------------------------------------------
+	void AG0_TDLApiSubmitShapeCallback(AG0_TDLApiManager manager, string localShapeId)
+	{
+		m_Manager = manager;
+		m_sLocalShapeId = localShapeId;
+		SetOnSuccess(OnSuccessHandler);
+		SetOnError(OnErrorHandler);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void OnSuccessHandler(RestCallback cb)
+	{
+		if (m_Manager)
+			m_Manager.OnSubmitShapeSuccess(m_sLocalShapeId, cb.GetData());
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void OnErrorHandler(RestCallback cb)
+	{
+		int errorCode = cb.GetHttpCode();
+		if (m_Manager)
+			m_Manager.OnSubmitShapeError(m_sLocalShapeId, errorCode);
+	}
+}
+
+//------------------------------------------------------------------------------------------------
+// REST Callback for DELETE /shapes/[shapeId] (mod-originated shape delete).
+// Fire-and-forget — the local-side removal already happened before this
+// fires, so success/error here is purely about whether the API mirror got
+// the memo. Errors get logged but don't trigger retries (a stuck DELETE
+// in a retry queue could resurrect a deleted shape on next reconcile,
+// which is worse than letting the API copy linger until admin cleanup).
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiDeleteShapeCallback : RestCallback
+{
+	protected string m_sShapeId;
+
+	//------------------------------------------------------------------------------------------------
+	void AG0_TDLApiDeleteShapeCallback(string shapeId)
+	{
+		m_sShapeId = shapeId;
+		SetOnSuccess(OnSuccessHandler);
+		SetOnError(OnErrorHandler);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void OnSuccessHandler(RestCallback cb)
+	{
+		Print(string.Format("[TDL_SHAPES] DeleteShape API ok for %1", m_sShapeId), LogLevel.DEBUG);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void OnErrorHandler(RestCallback cb)
+	{
+		int errorCode = cb.GetHttpCode();
+		// 404 is fine — the shape might be LOCAL-origin (never persisted)
+		// or already gone server-side via another path.
+		LogLevel level = LogLevel.WARNING;
+		if (errorCode == 404)
+			level = LogLevel.DEBUG;
+		Print(string.Format("[TDL_SHAPES] DeleteShape API error %1 for %2", errorCode, m_sShapeId), level);
+	}
+}
+
+//------------------------------------------------------------------------------------------------
 // REST Callback for Terrain Structures polling endpoint
 // Notes:
 //   * 200 → success path; body is the columnar JSON dataset.
@@ -656,20 +732,36 @@ class AG0_TDLApiManager
     {
         if (!m_bInitialized || !m_Config || !m_Config.enabled)
             return;
-        
+
         if (!m_bApiKeyValid)
             return;
-        
+
         // Update poll timer
         m_fTimeSinceLastPoll += timeSlice;
-        
-        // Poll for queued commands at configured interval
-        if (!m_bPollInProgress && m_fTimeSinceLastPoll >= m_Config.pollIntervalSeconds)
+
+        // Poll for queued commands. Effective interval drops to MIRROR_FAST_POLL_SECONDS
+        // whenever at least one identity is actively mirrored on this server — web
+        // inputs need to round-trip in under a second to feel live, and the default
+        // 5s interval blows the latency budget by itself. Falls back to the configured
+        // interval the moment the last mirror session disconnects.
+        float effectivePollInterval = m_Config.pollIntervalSeconds;
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (system && system.GetActiveMirrorSessionCount() > 0)
+            effectivePollInterval = MIRROR_FAST_POLL_SECONDS;
+
+        if (!m_bPollInProgress && m_fTimeSinceLastPoll >= effectivePollInterval)
         {
             PollQueue();
             m_fTimeSinceLastPoll = 0;
         }
     }
+
+    //! Poll cadence when the web mirror has at least one active subscriber.
+    //! 0.5 s gives ~250 ms average inbound latency for web commands without
+    //! materially adding to REST traffic — one extra GET per mirrored server
+    //! per second vs the 1s baseline. Outbound mirror tick is 3 Hz so the
+    //! visible round trip lands around 500 ms total.
+    protected const float MIRROR_FAST_POLL_SECONDS = 0.5;
     
     //------------------------------------------------------------------------------------------------
     //! Submit data to the API
@@ -694,9 +786,26 @@ class AG0_TDLApiManager
         // Format: "key1,value1,key2,value2"
         string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
         ctx.SetHeaders(headers);
-        
-        Print(string.Format("[TDL_API] Submitting data: %1 bytes", jsonData.Length()), LogLevel.DEBUG);
-        
+
+        // Per-submit Print was drowning the log once the mirror tick ramped up
+        // (atak_mirror_sync fires 2 Hz per active mirror). Now suppressed only
+        // for atak_mirror_sync; everything else (state_sync, heartbeat, events)
+        // continues to log normally so you can verify the mod is talking to
+        // the API. Large-payload warning preserved as a separate path.
+        bool isMirrorSync = false;
+        int mirrorTagIdx = jsonData.IndexOf("\"atak_mirror_sync\"");
+        if (mirrorTagIdx > 0 && mirrorTagIdx < 80)
+            isMirrorSync = true;
+
+        if (!isMirrorSync)
+        {
+            Print(string.Format("[TDL_API] Submitting data: %1 bytes", jsonData.Length()), LogLevel.DEBUG);
+        }
+        if (jsonData.Length() > 50000)
+        {
+            Print(string.Format("[TDL_API] Submitting data: %1 bytes (large)", jsonData.Length()), LogLevel.WARNING);
+        }
+
         // POST(callback, request_path, data)
         ctx.POST(m_SubmitCallback, "/submit", jsonData);
         
@@ -931,9 +1040,109 @@ class AG0_TDLApiManager
                 HandleImageDeliverCommand(cmdJson);
                 break;
 
+            case "mirror_subscribe":
+                HandleMirrorSubscribeCommand(cmdJson);
+                break;
+
+            case "mirror_unsubscribe":
+                HandleMirrorUnsubscribeCommand(cmdJson);
+                break;
+
+            case "mirror_set_panel":
+            case "mirror_set_chat_contact":
+            case "mirror_set_brightness":
+            case "mirror_set_map_view":
+            case "mirror_toggle_bloodhound":
+            case "mirror_set_callsign":
+            case "mirror_toggle_camera_broadcast":
+                HandleMirrorCommandDispatch(cmdJson, commandJson);
+                break;
+
             default:
                 Print(string.Format("[TDL_API] Unknown command type: %1", cmdType), LogLevel.WARNING);
                 break;
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Mirror subscribe/unsubscribe — register / deregister an identity as
+    //! actively mirrored on this server. The web layer enqueues these when
+    //! its SSE channel opens / closes.
+    //!
+    //! Payload shape (both):
+    //!   { "type": "mirror_subscribe" | "mirror_unsubscribe", "identityId": "<uuid>" }
+    //! OR (fallback for API revisions that renamed the field):
+    //!   { ..., "playerIdentityId": "<uuid>" }
+    //! Accepting both names lets the API rename freely without bricking the
+    //! mod every time the contract shifts during this iteration.
+    protected void HandleMirrorSubscribeCommand(SCR_JsonLoadContext cmdJson)
+    {
+        string identityId = ReadIdentityIdField(cmdJson);
+        if (identityId.IsEmpty())
+        {
+            Print("[TDL_API] mirror_subscribe missing identityId / playerIdentityId", LogLevel.WARNING);
+            return;
+        }
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system)
+            return;
+        system.OnMirrorSubscribe(identityId);
+    }
+
+    protected void HandleMirrorUnsubscribeCommand(SCR_JsonLoadContext cmdJson)
+    {
+        string identityId = ReadIdentityIdField(cmdJson);
+        if (identityId.IsEmpty())
+        {
+            Print("[TDL_API] mirror_unsubscribe missing identityId / playerIdentityId", LogLevel.WARNING);
+            return;
+        }
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system)
+            return;
+        system.OnMirrorUnsubscribe(identityId);
+    }
+
+    //! Read the identity field from a mirror command payload. Accepts both
+    //! `identityId` (original brief contract) and `playerIdentityId` (Cursor's
+    //! later rename). Whichever fires, returns the trimmed UUID string.
+    protected string ReadIdentityIdField(SCR_JsonLoadContext cmdJson)
+    {
+        string identityId;
+        if (cmdJson.ReadValue("identityId", identityId) && !identityId.IsEmpty())
+            return identityId;
+        if (cmdJson.ReadValue("playerIdentityId", identityId) && !identityId.IsEmpty())
+            return identityId;
+        return string.Empty;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! All actionable mirror_* commands share the same plumbing: identity ->
+    //! online player -> owner RPC carrying the original JSON. The client-side
+    //! dispatcher (AG0_TDLMirrorCommandDispatcher.Dispatch) parses the JSON
+    //! and routes by type. Keeping the API-side fan-out as one handler avoids
+    //! duplicating identity resolution per command.
+    //!
+    //! Payload shape (all share these fields, plus per-type extras):
+    //!   { "type": "mirror_set_<x>", "identityId": "<uuid>", ...command fields... }
+    protected void HandleMirrorCommandDispatch(SCR_JsonLoadContext cmdJson, string rawJson)
+    {
+        string identityId = ReadIdentityIdField(cmdJson);
+        if (identityId.IsEmpty())
+        {
+            Print("[TDL_API] mirror command missing identityId / playerIdentityId", LogLevel.WARNING);
+            return;
+        }
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system)
+            return;
+        // The RPC on the owning client takes the original JSON unchanged so
+        // type-specific fields don't need to be re-serialised here.
+        bool delivered = system.DispatchMirrorCommandToIdentity(identityId, rawJson);
+        if (!delivered)
+        {
+            Print(string.Format("[TDL_API] mirror command for identity %1 dropped — player offline or no controller",
+                identityId), LogLevel.DEBUG);
         }
     }
     
@@ -1851,9 +2060,11 @@ class AG0_TDLApiManager
 		
 		m_bShapesPollInProgress = true;
 		
-		// Build query path — include syncHash for server-side short-circuit
+		// Build query path — include syncHash for server-side short-circuit.
+		// Use the raw API epoch (no local-mutation suffix) so the API can
+		// still 304-equivalent when nothing has changed on its side.
 		string path = "/shapes";
-		string lastHash = m_ShapeManager.GetLastSyncHash();
+		string lastHash = m_ShapeManager.GetApiPollSyncHash();
 		if (!lastHash.IsEmpty())
 			path = string.Format("/shapes?since=%1", lastHash);
 		
@@ -1891,13 +2102,15 @@ class AG0_TDLApiManager
 		// Prune any expired shapes
 		m_ShapeManager.PruneStale();
 		
-		// If sync hash changed, distribute to all networked clients
+		// If sync hash changed, distribute to all networked clients.
+		// Coalesced — a poll that lands on the same tick as a local
+		// create/delete folds into one broadcast.
 		string newHash = m_ShapeManager.GetLastSyncHash();
 		if (newHash != prevHash)
 		{
 			AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
 			if (tdlSystem)
-				tdlSystem.DistributeShapesToClients();
+				tdlSystem.MarkShapesDirtyForBroadcast();
 		}
 		
 		if (updated > 0)
@@ -1938,6 +2151,222 @@ class AG0_TDLApiManager
 	AG0_TDLMapShapeManager GetShapeManager()
 	{
 		return m_ShapeManager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// SHAPE SUBMIT (mod-originated → API mirror)
+	//------------------------------------------------------------------------------------------------
+
+	// In-memory retry queue for mod-originated shape POSTs. Holds local
+	// shape IDs whose first submit failed; periodic retry kicks in via
+	// OnSubmitRetryTick. Cap at 64 so a long API outage doesn't grow this
+	// unbounded — older entries get dropped (logged) when the cap is hit.
+	protected ref array<string> m_aSubmitRetryQueue = {};
+	protected float m_fSubmitRetryAccum = 0;
+	protected static const int SUBMIT_RETRY_CAP = 64;
+	protected static const float SUBMIT_RETRY_INTERVAL = 15.0;
+
+	//------------------------------------------------------------------------------------------------
+	//! POST a mod-originated shape to /api/mod/shapes. Best-effort: a failure
+	//! does NOT remove the shape from the local store. Caller is responsible
+	//! for having already inserted the shape as LOCAL-origin so clients see
+	//! it the same tick — this is the persistence mirror on top of that.
+	bool SubmitShape(AG0_TDLMapShape shape)
+	{
+		if (!shape || shape.m_sId.IsEmpty())
+			return false;
+
+		if (!CanCommunicate())
+		{
+			// Distinguish "API is off / not configured" from "API is on
+			// but temporarily unreachable". Retry only makes sense for
+			// the second — for the first the shape would churn through
+			// the retry queue forever, each 15s tick dequeueing and
+			// re-queueing on the same failed check. Most servers run
+			// unlinked (no API key), so the common case is the disabled
+			// path — discard and let the LOCAL-origin shape live out
+			// its life in mod memory only.
+			if (IsEnabled())
+				QueueShapeRetry(shape.m_sId);
+			return false;
+		}
+
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+		{
+			QueueShapeRetry(shape.m_sId);
+			return false;
+		}
+
+		string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		string payload = shape.ToJsonString();
+		if (payload.IsEmpty())
+			return false;
+
+		AG0_TDLApiSubmitShapeCallback cb = new AG0_TDLApiSubmitShapeCallback(this, shape.m_sId);
+		ctx.POST(cb, "/shapes", payload);
+		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Best-effort DELETE /api/mod/shapes/[shapeId]?byIdentityId=<uuid>.
+	//! Local-side removal has already happened by the time this is called —
+	//! this just syncs the API store. Skipped entirely when API is disabled
+	//! (most servers). LOCAL-origin shapes (id starts with "local_") are
+	//! also skipped because the API never had them in the first place.
+	bool SubmitShapeDelete(string shapeId, string identityId)
+	{
+		if (shapeId.IsEmpty() || identityId.IsEmpty())
+			return false;
+		if (!IsEnabled())
+			return false;
+		// LOCAL-origin shapes were never persisted to the API — skip the
+		// round-trip rather than burn a guaranteed 404.
+		if (shapeId.IndexOf("local_") == 0)
+			return false;
+
+		if (!CanCommunicate())
+			return false;
+
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+			return false;
+
+		string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		AG0_TDLApiDeleteShapeCallback cb = new AG0_TDLApiDeleteShapeCallback(shapeId);
+		string path = string.Format("/shapes/%1?byIdentityId=%2", shapeId, identityId);
+		ctx.DELETE(cb, path, string.Empty);
+		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! POST /shapes succeeded. Parse the response (canonical shape with the
+	//! API-assigned id), remove the local placeholder, insert the canonical
+	//! entry as LOCAL-origin until the next API poll reconciles it to API-
+	//! origin. Then re-fan-out so clients swap to the canonical id.
+	void OnSubmitShapeSuccess(string localShapeId, string responseBody)
+	{
+		if (localShapeId.IsEmpty() || !m_ShapeManager)
+			return;
+
+		// API response is the full canonical shape. ParseSingleShape handles
+		// the same JSON shape the GET feed emits.
+		AG0_TDLMapShape canonical = m_ShapeManager.ParseSingleShape(responseBody);
+		if (!canonical || canonical.m_sId.IsEmpty())
+		{
+			// Bad response — leave the local entry alone and try again later.
+			QueueShapeRetry(localShapeId);
+			Print(string.Format("[TDL_SHAPES] SubmitShape ok but canonical parse failed for %1", localShapeId), LogLevel.WARNING);
+			return;
+		}
+
+		// Drop the local placeholder and insert the canonical entry. Keep
+		// it as LOCAL-origin so the next poll's full-replace doesn't wipe
+		// it before the API response includes it in its own listing.
+		m_ShapeManager.RemoveShapeById(localShapeId);
+		m_ShapeManager.InsertLocalShape(canonical, responseBody);
+
+		Print(string.Format("[TDL_SHAPES] SubmitShape: %1 -> %2", localShapeId, canonical.m_sId), LogLevel.DEBUG);
+
+		// Drop any pending retry for this id — submit succeeded.
+		int idx = m_aSubmitRetryQueue.Find(localShapeId);
+		if (idx != -1)
+			m_aSubmitRetryQueue.Remove(idx);
+
+		// Redistribute so clients see the canonical id this tick.
+		// Coalesced broadcast + targeted push so a burst of POST
+		// successes (multiple LOCAL shapes posting back-to-back)
+		// collapses on the wire instead of multiplying.
+		AG0_TDLSystem tdl = AG0_TDLSystem.GetInstance();
+		if (tdl)
+		{
+			tdl.MarkShapesDirtyForBroadcast();
+
+			// Targeted push to the creator on top of the network fan-out.
+			// DistributeShapesToClients walks m_aNetworks and only pushes
+			// to network members — a no-network creator (orphan draw)
+			// would otherwise never receive the canonical update, leaving
+			// their client showing the original local_<hex> sample data
+			// from CreateLocalShape's first targeted push (visible as the
+			// "in-game looks smoother than web" mismatch: in-game still
+			// has the unsimplified local samples while web reads the
+			// simplified canonical from the API store).
+			if (!canonical.m_sCreatedByPlayerIdentityId.IsEmpty())
+			{
+				int creatorPlayerId = tdl.GetPlayerIdFromIdentityId(canonical.m_sCreatedByPlayerIdentityId);
+				if (creatorPlayerId > 0)
+					tdl.QueueTargetedShapePush(creatorPlayerId);
+			}
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! POST /shapes failed. 404 = endpoint not yet deployed; queue for retry
+	//! so the local entry persists and reconciles whenever the API endpoint
+	//! lands. Other 4xx (incl. 422 validation) likely won't fix themselves —
+	//! still queue so a server admin can fix server-side state and retry
+	//! later without losing the in-game draft.
+	void OnSubmitShapeError(string localShapeId, int errorCode)
+	{
+		LogLevel level = LogLevel.WARNING;
+		if (errorCode == 404)
+			level = LogLevel.DEBUG;
+		Print(string.Format("[TDL_SHAPES] SubmitShape error %1 for %2", errorCode, localShapeId), level);
+
+		if (errorCode == 401)
+			m_bApiKeyValid = false;
+
+		QueueShapeRetry(localShapeId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Append a local shape ID to the retry queue. De-duplicates so a burst
+	//! of failures for the same shape doesn't fill the cap with duplicates.
+	//! Drops the oldest entry when the cap is hit so the queue stays bounded.
+	protected void QueueShapeRetry(string localShapeId)
+	{
+		if (localShapeId.IsEmpty())
+			return;
+		if (m_aSubmitRetryQueue.Find(localShapeId) != -1)
+			return;
+
+		if (m_aSubmitRetryQueue.Count() >= SUBMIT_RETRY_CAP)
+		{
+			string dropped = m_aSubmitRetryQueue[0];
+			m_aSubmitRetryQueue.Remove(0);
+			Print(string.Format("[TDL_SHAPES] Retry queue full; dropping %1", dropped), LogLevel.WARNING);
+		}
+
+		m_aSubmitRetryQueue.Insert(localShapeId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Periodic retry tick — drains the queue at SUBMIT_RETRY_INTERVAL. Each
+	//! tick re-submits one queued shape (so a burst of failures doesn't
+	//! produce a burst of retries; spaces them out). Caller wires this into
+	//! the API manager's existing update loop.
+	void OnSubmitRetryTick(float timeSlice)
+	{
+		m_fSubmitRetryAccum = m_fSubmitRetryAccum + timeSlice;
+		if (m_fSubmitRetryAccum < SUBMIT_RETRY_INTERVAL)
+			return;
+		m_fSubmitRetryAccum = 0;
+
+		if (m_aSubmitRetryQueue.IsEmpty() || !m_ShapeManager || !CanCommunicate())
+			return;
+
+		string localId = m_aSubmitRetryQueue[0];
+		m_aSubmitRetryQueue.Remove(0);
+
+		AG0_TDLMapShape shape = m_ShapeManager.GetShape(localId);
+		if (!shape)
+			return;
+
+		SubmitShape(shape);
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -2204,6 +2633,11 @@ class AG0_TDLDeviceState
     string callsign;
     int capabilities;
     bool isPowered;
+    // Device-global broadcast flag. Per-viewer "is the contact reachable as a
+    // video source" lives in the mirror snapshot's contacts[] instead, since
+    // bridging can hide a broadcast from some networks; this top-level bit is
+    // the raw "the gadget is currently producing a feed" answer.
+    bool isCameraBroadcasting;
     float posX;
     float posY;
     float posZ;

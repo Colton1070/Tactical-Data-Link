@@ -151,6 +151,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     protected bool m_bClickHandled;
     protected float m_fLastDragX;
     protected float m_fLastDragY;
+    //! Sticky flag set while a drag has had IsFreehandDrawActive true at any
+    //! point. Used at release to suppress the click-place path so a user
+    //! who pressed TDLDraw without moving the cursor (or with TDLDraw bound
+    //! to the same key as TDLScreenClick / MenuSelect) doesn't drop a stray
+    //! marker. Cleared on every drag-start so each drag is evaluated fresh.
+    protected bool m_bDragWasFreehandDraw;
     //! Set on first frame of a click that lands on the brightness slider.
     //! While non-null, HandleClickAndDrag drives the slider value from
     //! m_fCursorX every frame (instead of single-fire TriggerClick), since
@@ -298,6 +304,20 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             {
                 m_MenuController.ClearBloodhoundCursorWorld();
             }
+
+            // Shape draw ghost + delete-sweep cursor — push the cursor
+            // world position so the shape session's rubber-band tracks
+            // between clicks and so the delete sweep has a position to
+            // test against. OnShapeCursorWorldFromWorldSpace gates
+            // internally on shape OR delete sub-mode, so calling
+            // unconditionally is safe and keeps the hot path the same
+            // shape on both frontends. Reuses the MapCanvas →
+            // ScreenToWorld plumbing as the bloodhound path; the
+            // function name is a holdover from when it had a single
+            // caller.
+            vector shapeCursorWorld;
+            if (TryGetBloodhoundCursorWorld(shapeCursorWorld))
+                m_MenuController.OnShapeCursorWorldFromWorldSpace(shapeCursorWorld);
         }
 
         // Tick the shared menu controller — drives plugins' OnMenuUpdate,
@@ -320,7 +340,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
 
         // Update interaction (raycast, cursor, hover)
         if (m_bInteractionEnabled && m_ScreenEntity)
-            UpdateInteraction();
+            UpdateInteraction(timeSlice);
         
         // Debug visualization
         if (m_bDrawDebug)
@@ -712,7 +732,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     // ============================================
     
     //------------------------------------------------------------------------------------------------
-    protected void UpdateInteraction()
+    protected void UpdateInteraction(float timeSlice)
     {
 		MenuManager menuManager = GetGame().GetMenuManager();
         if (menuManager && menuManager.GetTopMenu())
@@ -736,10 +756,6 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // so showing the cursor would be visually noisy.
         if (m_eFocusState == TDL_EFocusState.ACTIVE)
         {
-            float ts = 0.016;  // approximate; EOnFrame's timeSlice would be more accurate,
-                               // but UpdateInteraction is called without it. The mouse path
-                               // doesn't use ts anyway (raw delta), and gamepad sensitivity
-                               // is already low enough that frame-rate variance is invisible.
             if (m_InputManager)
             {
                 // TDLFocusContext (priority 100, Exclusive) owns the TDLCursor* actions.
@@ -753,7 +769,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                 // identically to the raycast path.
                 m_InputManager.ActivateContext("TDLScreenContext");
             }
-            DriveCursorFromInput(ts);
+            // Use EOnFrame's actual timeSlice (plumbed through UpdateInteraction)
+            // instead of the previous hardcoded 0.016 — that hardcode made the
+            // gamepad cursor speed frame-rate-dependent: too slow at 144fps, too
+            // fast at 30fps. Mouse path doesn't read ts (it's already per-frame
+            // delta), so this only affects the stick branch.
+            DriveCursorFromInput(timeSlice);
             UpdateFocusCursorWidget();
             SetLookingAtScreen(true);
             UpdateHoveredWidget();
@@ -2076,6 +2097,10 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                         m_fLastDragY = m_fCursorY;
                         m_fDragStartX = m_fCursorX;
                         m_fDragStartY = m_fCursorY;
+                        // Fresh drag — reset the sticky freehand flag. If
+                        // TDLDraw is already held this frame the continuation
+                        // branch will re-raise it next tick.
+                        m_bDragWasFreehandDraw = false;
                         AG0_TDLDisplayController.SetPlayerTracking(false);
                     }
                     else
@@ -2093,11 +2118,20 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             }
             else if (m_bDragging)
             {
-                // Continue dragging - apply delta to map pan
+                // Freehand draw suppresses map pan so the cursor movement
+                // belongs entirely to the stroke. Sticky flag keeps the
+                // release-path click-place suppressed too — handles the
+                // case where TDLDraw is bound to the same key as
+                // TDLScreenClick / MenuSelect (releasing the key ends the
+                // "drag" without ever having been a real pan).
+                bool drawingNow = m_MenuController && m_MenuController.IsAnyDrawInteractionActive(m_InputManager);
+                if (drawingNow)
+                    m_bDragWasFreehandDraw = true;
+
                 float deltaX = m_fCursorX - m_fLastDragX;
                 float deltaY = m_fCursorY - m_fLastDragY;
 
-                if (m_DisplayController && (deltaX != 0 || deltaY != 0))
+                if (!drawingNow && m_DisplayController && (deltaX != 0 || deltaY != 0))
                 {
                     AG0_TDLMapView mapView = m_DisplayController.GetMapView();
                     if (mapView)
@@ -2119,7 +2153,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             // Mirrors AG0_TDLMapCanvasDragHandler.m_OnClick on the menu's
             // drag handler — same KBM placement behaviour, just sourced
             // from this component's cursor instead of the workspace mouse.
-            if (m_bDragging && m_MenuController)
+            if (m_bDragging && m_MenuController && !m_bDragWasFreehandDraw)
             {
                 float dx = m_fCursorX - m_fDragStartX;
                 float dy = m_fCursorY - m_fDragStartY;
@@ -2129,13 +2163,16 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                     // Route to both tool handlers — each internally gates
                     // on whether its tool is active. Drag threshold above
                     // already excluded pans, so this only fires on a real
-                    // click-without-drag.
+                    // click-without-drag. Skipped entirely when the drag
+                    // was a freehand draw — otherwise releasing TDLDraw
+                    // without moving the cursor would drop a stray marker.
                     m_MenuController.OnMapClickedForMarkerPlacement(m_fCursorX, m_fCursorY);
                     m_MenuController.OnMapClickedForBloodhound(m_fCursorX, m_fCursorY);
                 }
             }
 
             m_bDragging = false;
+            m_bDragWasFreehandDraw = false;
             m_bClickHandled = false;
             // End of slider drag — the next click starts a fresh decision.
             m_wSliderDragTarget = null;
@@ -2162,6 +2199,15 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             return false;
         AG0_TDLMapView mapView = m_DisplayController.GetMapView();
         if (!mapView)
+            return false;
+        // Reject cursor resolution before the map view has been sized.
+        // ScreenToWorld would fall back to m_vCenterWorld in that state,
+        // which the freehand sample stream would latch as a legitimate
+        // first sample at the map centre — manifesting as a bogus "first
+        // sample from an invalid position" on the very first frame of a
+        // freehand draw. Skipping the push entirely keeps the session's
+        // m_bCursorWorldKnown false until the map is actually ready.
+        if (!mapView.IsReady())
             return false;
         Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
         if (!canvasWidget)
@@ -2241,6 +2287,14 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         if (!m_InputManager || !m_wContentFrame)
             return;
 
+        // Cap large frame-time spikes — server hitches, alt-tab returns, and
+        // long replication stalls can produce timeSlice values of 100ms+. With
+        // sensitivity tuned for normal frame times, those spikes teleport the
+        // cursor. 50ms cap keeps motion bounded without affecting normal play
+        // (60fps = 16ms, 30fps = 33ms, both well under the cap).
+        if (timeSlice > 0.05)
+            timeSlice = 0.05;
+
         float mouseRight = m_InputManager.GetActionValue("TDLCursorRight");
         float mouseLeft  = m_InputManager.GetActionValue("TDLCursorLeft");
         float mouseDown  = m_InputManager.GetActionValue("TDLCursorDown");
@@ -2251,12 +2305,40 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         float stickDown  = m_InputManager.GetActionValue("TDLCursorGamepadDown");
         float stickUp    = m_InputManager.GetActionValue("TDLCursorGamepadUp");
 
-        // Gamepad deadzone — applied per-axis after combining ±. Avoids cursor
-        // drift on stick-at-rest noise and gives the stick a snappier feel.
+        // Radial deadzone + linear response.
+        //
+        // Compute the true stick magnitude (the vector radius), apply a single
+        // deadzone-aware linear rescale to that magnitude, then scale the
+        // original direction vector to the rescaled magnitude. Per-axis
+        // curving (what this used to do) made diagonals travel sqrt(2)x
+        // faster than cardinal directions because each axis got its own
+        // sensitivity multiplier and the resulting deltas combined as
+        // sqrt(dx² + dy²) — the speed ended up depending on which way the
+        // stick pointed, not just how far it was pushed.
+        //
+        // Linear response (no t² / smoothstep) means cursor speed is directly
+        // proportional to stick radius above the deadzone. Combined with the
+        // timeSlice cap above, the cursor speed is predictable: framerate-
+        // independent and direction-independent.
         float stickX = stickRight - stickLeft;
         float stickY = stickDown - stickUp;
-        if (Math.AbsFloat(stickX) < m_fGamepadDeadzone) stickX = 0;
-        if (Math.AbsFloat(stickY) < m_fGamepadDeadzone) stickY = 0;
+        float magnitude = Math.Sqrt(stickX * stickX + stickY * stickY);
+        if (magnitude < m_fGamepadDeadzone)
+        {
+            stickX = 0;
+            stickY = 0;
+        }
+        else
+        {
+            // Linear remap of the radius from [deadzone..1] to [0..1].
+            float t = (magnitude - m_fGamepadDeadzone) / (1.0 - m_fGamepadDeadzone);
+            if (t > 1.0)
+                t = 1.0;
+            // Replace the radius while preserving the direction vector.
+            float scale = t / magnitude;
+            stickX = stickX * scale;
+            stickY = stickY * scale;
+        }
 
         // Cached frame size — see GetCachedFrameSize doc. Querying GetScreenSize
         // each frame here tied cursor speed to map-zoom-driven layout reflows.

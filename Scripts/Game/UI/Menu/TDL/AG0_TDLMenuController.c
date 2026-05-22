@@ -214,13 +214,103 @@ class AG0_TDLMenuController
     // Marker tool
     protected Widget m_wMarkerToolBackButton;
     protected Widget m_wMarkerToolPlaceButton;
+    // Shape-only confirm button — sibling of the place button in
+    // MarkerToolContent. Visible only when the active shape-draw session
+    // has a variadic tool armed and enough points to commit. Provides the
+    // explicit "I'm done" gesture for range_rings / route (which have no
+    // geometric close-the-loop) and as a backup commit for polygon.
+    protected Widget m_wMarkerToolShapeConfirmButton;
     protected Widget m_wMarkerCrosshair;
+
+    // Edge-detect TDLDraw transitions for freehand commit. True while the
+    // user was actively drawing on the previous frame; a true→false flip
+    // on this frame is the "I'm done drawing" gesture that commits the
+    // shape via OnShapeFreehandEnd. Polled per-frame in TickFreehandDraw.
+    protected bool m_bFreehandDrawHeldLastFrame;
+
+    // World time of the most recent map-pan input deflection (gamepad
+    // stick / keyboard arrows on the menu, etc.). Stays "active" for a
+    // short window past the last deflection so brief drops through the
+    // deadzone — stick wobble between motions, direction changes — don't
+    // flip the cursor source back to the stale OS mouse position. The
+    // glitch this prevents: freehand samples spike toward the OS mouse
+    // position (typically top-left of screen for gamepad users) on any
+    // frame the stick is momentarily at zero.
+    protected float m_fLastMapPanInputTime;
 
     // ============================================
     // PLUGIN TOOLBAR BUTTON LAYOUT
     // ============================================
     protected const ResourceName PLUGIN_TOOLBAR_BUTTON_LAYOUT = "{7DEC0DEDA7AB1E01}UI/layouts/Menus/TDL/PluginToolbarButton.layout";
     protected const ResourceName MESSAGE_CARD_LAYOUT = "{2507AC45B21BBC57}UI/layouts/Menus/TDL/TDLMessageUI.layout";
+
+    // ============================================
+    // WEB MIRROR UPLINK
+    //
+    // Per-class live registry + last-sent snapshot so the inbound mirror command
+    // dispatcher can reach any live controller (panel switches need an instance
+    // because SetPanelContent fires widget side-effects), and so the change-detect
+    // loop in Tick() can compare against the previous send. With multiple held
+    // ATAK devices the world-space pathway can spawn more than one frontend, so
+    // the registry can have any positive count — the dispatcher just needs the
+    // first live entry.
+    //
+    // Element type is `ref` (strong reference). Without it, when a frontend's
+    // strong reference drops (menu UI destroyed after OnMenuClose) the controller
+    // is freed and the array entry becomes a dangling null. Cleanup() always
+    // removes from the array first, so a strong ref here can't leak as long as
+    // Cleanup runs — and dispatcher / uplink stay null-tolerant as a backstop.
+    // ============================================
+    static protected ref array<ref AG0_TDLMenuController> s_aLiveControllers = {};
+    static protected ref AG0_TDLMirrorSnapshot s_LastSentMirrorSnapshot;
+    static protected float s_fMirrorLastSendTimeMs;
+    //! 10 Hz uplink cap. Map drag mutates pan/zoom every frame; without this the
+    //! reliable RPC channel would saturate. Discrete events (panel switch, chat
+    //! contact change) still send immediately because the change-detect path
+    //! ignores the cap when nothing has been sent in this window.
+    protected const float MIRROR_MIN_SEND_INTERVAL_MS = 100.0;
+
+    static array<ref AG0_TDLMenuController> GetLiveControllers() { return s_aLiveControllers; }
+
+    //! Clear the last-sent snapshot baseline so the next TickMirrorUplink
+    //! unconditionally pushes a fresh snapshot. Called from the player
+    //! controller's RpcDo_InvalidateMirrorSnapshotBaseline when the server
+    //! has just registered a mirror subscribe and needs the client's current
+    //! state immediately (no waiting for a state-change-triggered uplink).
+    static void ResetMirrorUplinkBaseline()
+    {
+        s_LastSentMirrorSnapshot = null;
+        s_fMirrorLastSendTimeMs = 0;
+    }
+
+    //! Drop every entry from the live-controller registry and reset the
+    //! uplink baseline. Called from AG0_TDLSystem's destructor on world
+    //! unload — the registry's strong refs would otherwise pin controllers
+    //! from the previous world session alive across a restart, and the next
+    //! world's controllers would stack on top instead of starting clean.
+    //! Statics persist for the lifetime of the script process; only this
+    //! kind of explicit hook can reset them between worlds.
+    static void ClearLiveRegistryOnWorldUnload()
+    {
+        if (s_aLiveControllers)
+            s_aLiveControllers.Clear();
+        s_LastSentMirrorSnapshot = null;
+        s_fMirrorLastSendTimeMs = 0;
+    }
+
+    //! First non-null entry in the live registry. Used by the dispatcher to find
+    //! any working frontend, and by the uplink gate to pick the primary. Null
+    //! filtering is defensive against weak-ref drift even though strong refs
+    //! above should prevent it.
+    static AG0_TDLMenuController FindPrimaryLiveController()
+    {
+        foreach (AG0_TDLMenuController c : s_aLiveControllers)
+        {
+            if (c)
+                return c;
+        }
+        return null;
+    }
 
     // ============================================
     // EVENTS
@@ -240,11 +330,6 @@ class AG0_TDLMenuController
     //! space doesn't subscribe — its cursor handles focus differently.
     //! Signature: (RplId memberId).
     ref ScriptInvoker m_OnMemberCardFocused = new ScriptInvoker();
-
-    //! Tracks the card list count from the most recent AttachCardHandlers
-    //! pass so Tick can re-attach handlers when the display controller
-    //! rebuilds the list (1Hz membership refresh).
-    protected int m_iLastCardCount = 0;
 
     // ============================================
     // ACCESSORS
@@ -429,6 +514,9 @@ class AG0_TDLMenuController
         // Marker tool
         m_wMarkerToolBackButton = m_wRoot.FindAnyWidget("MarkerToolBackButton");
         m_wMarkerToolPlaceButton = m_wRoot.FindAnyWidget("MarkerToolPlaceButton");
+        m_wMarkerToolShapeConfirmButton = m_wRoot.FindAnyWidget("MarkerToolShapeConfirmButton");
+        if (m_wMarkerToolShapeConfirmButton)
+            m_wMarkerToolShapeConfirmButton.SetVisible(false);
         m_wMarkerCrosshair = m_wRoot.FindAnyWidget("MarkerCrosshair");
 
         HookButtonHandlers();
@@ -444,6 +532,12 @@ class AG0_TDLMenuController
         UpdateBloodhoundButtonVisual();
         if (m_wBloodhoundReadout)
             m_wBloodhoundReadout.SetVisible(false);
+
+        // Web mirror — register this controller so inbound mirror commands can
+        // dispatch panel/chat changes through a live frontend. Deregistered in
+        // Cleanup. Order does not matter for the dispatcher (first hit wins).
+        if (s_aLiveControllers.Find(this) == -1)
+            s_aLiveControllers.Insert(this);
 
         return true;
     }
@@ -545,10 +639,26 @@ class AG0_TDLMenuController
             if (comp)
                 comp.m_OnClicked.Insert(OnMarkerToolPlaceButtonClicked);
         }
+
+        if (m_wMarkerToolShapeConfirmButton)
+        {
+            SCR_ModularButtonComponent confirmComp = SCR_ModularButtonComponent.Cast(
+                m_wMarkerToolShapeConfirmButton.FindHandler(SCR_ModularButtonComponent));
+            if (confirmComp)
+                confirmComp.m_OnClicked.Insert(OnMarkerToolShapeConfirmButtonClicked);
+        }
     }
 
     void Cleanup()
     {
+        // Pair with the Init() registration so the mirror dispatcher never
+        // tries to drive a torn-down controller. Run before plugin teardown
+        // so any plugin tick reentering the dispatcher during Disable sees
+        // an already-unregistered frontend.
+        int idx = s_aLiveControllers.Find(this);
+        if (idx != -1)
+            s_aLiveControllers.Remove(idx);
+
         // Tear down plugins first so OnPanelHidden + OnMenuClosed run while
         // the widget tree is still live. Idempotent if the frontend already
         // called DisablePlugins (e.g. menu's OnMenuClose path).
@@ -1073,7 +1183,7 @@ class AG0_TDLMenuController
         // one (which auto-clears the previous pin in OnMapClickedForBloodhound).
         // When unpinned, behaviour is unchanged from before: tool off clears
         // the readout + line on the same frame.
-        if (!s_bBloodhoundEnabled && !m_bBloodhoundPinned)
+        if (!s_bBloodhoundEnabled && !s_bBloodhoundPinned)
         {
             if (m_wBloodhoundReadout)
                 m_wBloodhoundReadout.SetVisible(false);
@@ -1108,13 +1218,21 @@ class AG0_TDLMenuController
         // pin and clears it.
         if (!s_bBloodhoundEnabled)
             return;
+
+        // Yield to the marker tool side panel — its placement path is what
+        // owns the click when the marker tool is open, and we don't want a
+        // single click to both drop a marker AND set/clear a bloodhound pin.
+        // The bloodhound readout itself keeps tracking (the tool's "active"
+        // state isn't paused) — only the click→pin interaction is suppressed.
+        if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL)
+            return;
         if (!m_DisplayController || !m_wRoot)
             return;
 
         // Tool is active. Pin set → click unpins (fast path, no projection).
-        if (m_bBloodhoundPinned)
+        if (s_bBloodhoundPinned)
         {
-            m_bBloodhoundPinned = false;
+            s_bBloodhoundPinned = false;
             return;
         }
 
@@ -1132,8 +1250,8 @@ class AG0_TDLMenuController
 
         vector worldPos;
         mapView.ScreenToWorld(localX, localY, worldPos);
-        m_vBloodhoundPinPos = worldPos;
-        m_bBloodhoundPinned = true;
+        s_vBloodhoundPinPos = worldPos;
+        s_bBloodhoundPinned = true;
     }
 
     //! Tint the BloodhoundImage amber when active, default gray when inactive.
@@ -1186,14 +1304,17 @@ class AG0_TDLMenuController
     protected bool   m_bBloodhoundFirstTickPrinted;
 
     //! Bloodhound pin state — when set, UpdateBloodhound sources the cursor
-    //! world position from m_vBloodhoundPinPos instead of the per-frame
+    //! world position from s_vBloodhoundPinPos instead of the per-frame
     //! override / map centre. Toggled by OnMapClickedForBloodhound: first
-    //! click pins at the click's world position, second click unpins and
-    //! the readout resumes following the cursor / map centre. Cleared on
-    //! tool disable so toggling Bloodhound off-then-on doesn't restore a
-    //! stale pin from the previous enable.
-    protected bool   m_bBloodhoundPinned;
-    protected vector m_vBloodhoundPinPos;
+    //! click pins at the click's world position, second click unpins.
+    //!
+    //! STATIC so that a pin set on the world-space display is visible on
+    //! the full-screen menu (and vice versa) — both frontends each have
+    //! their own AG0_TDLMenuController instance, so per-instance state
+    //! desyncs the moment one frontend touches it. Mirrors how
+    //! s_bBloodhoundEnabled (the tool toggle) is already shared.
+    static protected bool   s_bBloodhoundPinned;
+    static protected vector s_vBloodhoundPinPos;
     void SetBloodhoundCursorWorld(vector worldPos)
     {
         m_vBloodhoundCursorOverride = worldPos;
@@ -1213,9 +1334,9 @@ class AG0_TDLMenuController
         // A live pin keeps the readout/line drawing even after the tool
         // toggle is off, so the early-return only fires when both the tool
         // is disabled AND nothing is pinned. The cursor-priority logic
-        // below picks m_vBloodhoundPinPos when m_bBloodhoundPinned, so the
+        // below picks s_vBloodhoundPinPos when s_bBloodhoundPinned, so the
         // pin-only render path is just "fall through with pin as cursor".
-        if (!s_bBloodhoundEnabled && !m_bBloodhoundPinned)
+        if (!s_bBloodhoundEnabled && !s_bBloodhoundPinned)
         {
             if (m_wBloodhoundReadout)
                 m_wBloodhoundReadout.SetVisible(false);
@@ -1241,8 +1362,8 @@ class AG0_TDLMenuController
         //      pushes its m_fCursorX/Y-derived world pos each tick).
         //   3. Map centre — full-screen menu has no real cursor on the map.
         vector cursorWorld;
-        if (m_bBloodhoundPinned)
-            cursorWorld = m_vBloodhoundPinPos;
+        if (s_bBloodhoundPinned)
+            cursorWorld = s_vBloodhoundPinPos;
         else if (m_bBloodhoundCursorOverrideValid)
             cursorWorld = m_vBloodhoundCursorOverride;
         else
@@ -1524,18 +1645,53 @@ class AG0_TDLMenuController
         if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL && m_MarkerToolPanel && im)
             m_MarkerToolPanel.TickPlaceActionPoll(im);
 
-        // Re-attach member card handlers when the display controller rebuilds
-        // its card list (~1Hz membership refresh). Cheap when no rebuild has
-        // happened — just a count comparison.
+        // Shape ghost preview — refresh every frame so the rubber-band
+        // tracks the cursor even when the player is just hovering. The
+        // function null-clears the renderer when shape mode isn't active,
+        // which is how the ghost disappears after a commit or cancel.
+        UpdateShapeGhost();
+
+        // Gamepad-scroll focus gate — every frame, enable each scroll
+        // layout's SCR_GamepadScrollComponent only when the gamepad focus
+        // chain is currently within that scroll subtree. Otherwise the
+        // right stick scrolls every layout in view in parallel with
+        // moving the cursor, which is upsetting on console.
+        TickScrollFocusGate();
+
+        // Freehand draw — TDLDraw-held drives per-frame cursor sampling
+        // and release-transition drives commit. Same logic on menu KBM,
+        // world-space normal mode, and world-space focus mode because the
+        // cursor world position is pushed via SetShapeCursorWorld from
+        // whichever frontend is active.
+        TickFreehandDraw(im);
+
+        // Delete sweep — same TDLDraw-held model but in the panel's
+        // delete sub-mode. Each frame the action is held, sweep-delete
+        // the player's own markers within radius of the cursor world.
+        TickDeleteSweep(im);
+
+        // Shape confirm button visibility — hidden unless a variadic shape
+        // is mid-draw with enough points to commit. Pairs with the ghost
+        // refresh so both the in-progress preview and the commit affordance
+        // update in lock-step.
+        UpdateShapeConfirmButtonVisibility();
+
+        // Re-attach member card handlers each tick. The previous count-based
+        // skip missed the case where AG0_TDLDisplayController.RebuildMemberCards
+        // produces new widget instances at the same total count (one member
+        // leaves, another joins in the same tick) — RebuildMemberCards fires
+        // on cached-id mismatch, not just count change, so a count comparison
+        // can't detect every rebuild. AttachCardHandlers is idempotent: it
+        // skips cards that already have a handler attached, so the per-tick
+        // cost is one FindHandler call per card (single-digit members; cheap).
         if (m_DisplayController)
-        {
-            array<Widget> cards = m_DisplayController.GetMemberCards();
-            if (cards && cards.Count() != m_iLastCardCount)
-            {
-                AttachCardHandlers();
-                m_iLastCardCount = cards.Count();
-            }
-        }
+            AttachCardHandlers();
+
+        // Web mirror — build a fresh snapshot from current UI state, compare to
+        // the last sent one, and dispatch up to the server when anything user-
+        // visible changed (subject to the 10 Hz cap). Cheap when the device
+        // isn't mirrored because the server simply ignores the payload.
+        TickMirrorUplink();
     }
 
     // -------- Plugin lifecycle --------
@@ -1664,13 +1820,17 @@ class AG0_TDLMenuController
             if (icon && !toolIcon.IsEmpty())
                 icon.LoadImageTexture(0, toolIcon);
 
-            // Per-button relay captures the plugin + menu root and exposes a
-            // zero-arg OnClick() that dispatches OnToolActivated. Held in
+            // Per-button relay captures the plugin + menu root + this
+            // controller. OnClick re-binds the plugin's m_Controller back
+            // to this frontend before dispatching OnToolActivated, so the
+            // panel opens on the frontend that owns the button regardless
+            // of cross-frontend interference (menu open/close cycles
+            // sharing the same plugin instance). Held in
             // m_aPluginClickRelays so it lives as long as the button does.
             SCR_ModularButtonComponent btnComp = SCR_ModularButtonComponent.FindComponent(btnRoot);
             if (btnComp)
             {
-                AG0_PluginButtonClickRelay relay = new AG0_PluginButtonClickRelay(plugin, m_wRoot);
+                AG0_PluginButtonClickRelay relay = new AG0_PluginButtonClickRelay(plugin, m_wRoot, this);
                 m_aPluginClickRelays.Insert(relay);
                 btnComp.m_OnClicked.Insert(relay.OnClick);
             }
@@ -2200,6 +2360,7 @@ class AG0_TDLMenuController
             m_MarkerToolPanel.m_OnCancelRequested.Insert(OnMarkerToolCancelRequested);
             m_MarkerToolPanel.m_OnPlaceRequested.Insert(OnMarkerToolPlaceRequested);
             m_MarkerToolPanel.m_OnMarkerDeleted.Insert(OnMarkerToolMarkerDeleted);
+            m_MarkerToolPanel.m_OnShapeDrawCommitted.Insert(OnShapeDrawCommitted);
         }
         else
         {
@@ -2228,6 +2389,24 @@ class AG0_TDLMenuController
         if (!mapView)
             return;
 
+        // Shape mode treats every place-action as "drop a point at the
+        // canvas centre" — gamepad / world-space frontend has no live
+        // pointer, the centre is what the user has framed in via pan/zoom.
+        if (m_MarkerToolPanel.IsShapeModeActive())
+        {
+            m_MarkerToolPanel.OnShapeClick(mapView.GetCenter());
+            return;
+        }
+
+        // Delete mode treats the place action as "delete near the
+        // canvas centre" — same gamepad ergonomics, just inverted in
+        // intent (remove instead of place).
+        if (m_MarkerToolPanel.IsDeleteModeActive())
+        {
+            m_MarkerToolPanel.SweepDeleteAt(mapView.GetCenter());
+            return;
+        }
+
         m_MarkerToolPanel.PlaceCurrentMarker(mapView.GetCenter(), isLocal);
     }
 
@@ -2237,6 +2416,18 @@ class AG0_TDLMenuController
     void OnMarkerToolPlaceButtonClicked()
     {
         OnMarkerToolPlaceRequested(false);
+    }
+
+    //! Mouse / focus-A on the shape-only confirm button (sibling of the
+    //! place button in MarkerToolContent). Forwards to the panel's variadic
+    //! commit path, which is a no-op when the session isn't ready — the
+    //! visibility gate in UpdateShapeConfirmButtonVisibility already hides
+    //! the button in that case, but the redundant check keeps the click
+    //! handler self-contained.
+    void OnMarkerToolShapeConfirmButtonClicked()
+    {
+        if (m_MarkerToolPanel)
+            m_MarkerToolPanel.OnShapeCommitAction();
     }
 
     //! Forwarded from AG0_TDLMarkerToolPanel.m_OnMarkerDeleted right after the
@@ -2290,6 +2481,643 @@ class AG0_TDLMenuController
         vector worldPos;
         mapView.ScreenToWorld(localX, localY, worldPos);
 
+        if (m_MarkerToolPanel.IsShapeModeActive())
+        {
+            m_MarkerToolPanel.OnShapeClick(worldPos);
+            return;
+        }
+
+        if (m_MarkerToolPanel.IsDeleteModeActive())
+        {
+            m_MarkerToolPanel.SweepDeleteAt(worldPos);
+            return;
+        }
+
         m_MarkerToolPanel.PlaceCurrentMarker(worldPos, false);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! True when the marker tool panel is active AND shape sub-mode is on
+    //! AND the active tool is FREEHAND. Menu UI polls this each frame to
+    //! tell the drag handler whether to emit freehand samples or treat the
+    //! drag as a pan. Cheap chain of accessors so per-frame polling is
+    //! fine — no caching needed.
+    bool IsFreehandModeActive()
+    {
+        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL || !m_MarkerToolPanel)
+            return false;
+        if (!m_MarkerToolPanel.IsShapeModeActive())
+            return false;
+        AG0_TDLShapeDrawSession session = m_MarkerToolPanel.GetShapeDrawSession();
+        if (!session)
+            return false;
+        return session.GetActiveTool() == AG0_ETDLShapeTool.FREEHAND;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! True while TDLDraw is held AND the marker tool panel has FREEHAND
+    //! armed. Frontends poll this to gate pan suppression on the drag
+    //! handler; Tick polls it to drive per-frame cursor sampling and to
+    //! detect release-transitions for commit. Returns false when the
+    //! InputManager is null (e.g. session not fully bound yet) so callers
+    //! treat that as "not drawing" rather than an error.
+    bool IsFreehandDrawActive(InputManager im)
+    {
+        if (!im)
+            return false;
+        if (!IsFreehandModeActive())
+            return false;
+        return im.GetActionValue("TDLDraw") > 0.5;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! True while TDLDraw is held AND the marker tool panel has the
+    //! Delete sub-mode active. Frontends poll this to extend pan
+    //! suppression to delete sweeps (same reasoning as freehand — user
+    //! is interacting with the map content, not the view); Tick polls it
+    //! to drive per-frame sweep-delete dispatch.
+    bool IsDeleteSweepActive(InputManager im)
+    {
+        if (!im)
+            return false;
+        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL || !m_MarkerToolPanel)
+            return false;
+        if (!m_MarkerToolPanel.IsDeleteModeActive())
+            return false;
+        return im.GetActionValue("TDLDraw") > 0.5;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Combined "any draw-style input action is active" predicate that
+    //! menu UI / world-space use to suppress map pan. Currently TDLDraw
+    //! is the only such action and it serves both freehand sampling and
+    //! delete sweeping — pan stays suppressed for either.
+    bool IsAnyDrawInteractionActive(InputManager im)
+    {
+        return IsFreehandDrawActive(im) || IsDeleteSweepActive(im);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Cursor-move sample forwarded from the menu UI / world-space frontend.
+    //! Delete mode also needs cursor-world updates so SweepDeleteAt has a
+    //! position to test against; without this branch the sweep tick reads
+    //! a stale/unknown cursor and the delete tool no-ops every frame.
+    void OnMapCursorMovedForShape(int absMouseX, int absMouseY)
+    {
+        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+            return;
+        if (!m_MarkerToolPanel)
+            return;
+        if (!m_MarkerToolPanel.IsShapeModeActive() && !m_MarkerToolPanel.IsDeleteModeActive())
+            return;
+        if (!m_DisplayController)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return;
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return;
+
+        float canvasScreenX, canvasScreenY;
+        canvasWidget.GetScreenPos(canvasScreenX, canvasScreenY);
+
+        vector worldPos;
+        mapView.ScreenToWorld(absMouseX - canvasScreenX, absMouseY - canvasScreenY, worldPos);
+        m_MarkerToolPanel.SetShapeCursorWorld(worldPos);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! World-space frontend equivalent of OnMapCursorMovedForShape. The
+    //! world-space cursor already lives in world coordinates, so it pushes
+    //! directly without the canvas → screen → world conversion step the KBM
+    //! path needs. Same gating as the KBM path.
+    void OnShapeCursorWorldFromWorldSpace(vector worldPos)
+    {
+        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+            return;
+        if (!m_MarkerToolPanel)
+            return;
+        if (!m_MarkerToolPanel.IsShapeModeActive() && !m_MarkerToolPanel.IsDeleteModeActive())
+            return;
+        m_MarkerToolPanel.SetShapeCursorWorld(worldPos);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Fallback cursor-world push for fullscreen menu gamepad / keyboard
+    //! input. Pushes canvas-center as the cursor world so the shape ghost
+    //! and freehand sampling track where TDLPlaceMarker would actually
+    //! drop a point, instead of trailing the parked OS mouse cursor.
+    //!
+    //! Sticky pan-input detection — once TDLPanHorizontal/Vertical has been
+    //! deflected within the last 500 ms, the gamepad/keyboard user is
+    //! considered active and canvas-center is pushed every frame. Crucially
+    //! this survives single-frame drops through the deadzone (stick wobble
+    //! between motions), eliminating the up-left-then-back glitch where
+    //! freehand samples would spike to the OS mouse position any frame the
+    //! stick happened to read zero.
+    //!
+    //! Mouse users never deflect the pan stick, so this gate never engages
+    //! for them — their cursor world stays whatever the OnMapCursorMoved
+    //! path pushed, untouched.
+    void PushFallbackCursorIfNeeded(InputManager im)
+    {
+        if (!im || !m_MarkerToolPanel || !m_DisplayController)
+            return;
+        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+            return;
+        if (!m_MarkerToolPanel.IsShapeModeActive() && !m_MarkerToolPanel.IsDeleteModeActive())
+            return;
+
+        float now = GetGame().GetWorld().GetWorldTime();
+        bool panInputActive = Math.AbsFloat(im.GetActionValue("TDLPanHorizontal")) > 0.1
+                           || Math.AbsFloat(im.GetActionValue("TDLPanVertical")) > 0.1;
+        if (panInputActive)
+            m_fLastMapPanInputTime = now;
+
+        bool panRecentlyActive = (now - m_fLastMapPanInputTime) < 0.5;
+        if (!panRecentlyActive)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView || !mapView.IsReady())
+            return;
+
+        m_MarkerToolPanel.SetShapeCursorWorld(mapView.GetCenter());
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Fired by AG0_TDLMarkerToolPanel.m_OnShapeDrawCommitted. Serialises the
+    //! draft + adds whatever creator context the player controller can
+    //! resolve, then RPCs to the server. The local player isn't authoritative
+    //! over the shape — the server will fill in id / version / createdAt /
+    //! networkId / createdBy / createdByPlayerIdentityId from the live
+    //! BackendApi identity and the player's current network membership.
+    void OnShapeDrawCommitted(AG0_TDLMapShape draft, AG0_ETDLShapeTool tool)
+    {
+        if (!draft)
+            return;
+
+        // AskCreateShape lives on the modded SCR_PlayerController (see
+        // AG0_PlayerController_TDL.c — modded class, not a subtype). Cast
+        // through SCR_PlayerController is enough; the modded method is
+        // resolved at the engine level.
+        SCR_PlayerController controller = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!controller)
+            return;
+
+        // Client serialises with empty server fields; server fills them in
+        // before persisting and broadcasting. Sentinel m_iNetworkId stays at
+        // 0 here; server replaces it from the player's BackendApi state.
+        string draftJson = draft.ToJsonString();
+        if (draftJson.IsEmpty())
+            return;
+
+        controller.AskCreateShape(draftJson);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Per-frame ghost refresh. Called from Tick when shape mode is active so
+    //! the map view sees the latest in-progress preview. Passing null when no
+    //! ghost is available clears any stale preview from the renderer.
+    protected void UpdateShapeGhost()
+    {
+        if (!m_DisplayController || !m_MarkerToolPanel)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return;
+
+        AG0_TDLShapeDrawSession session = m_MarkerToolPanel.GetShapeDrawSession();
+        if (!session)
+        {
+            mapView.SetGhostShape(null);
+            return;
+        }
+
+        AG0_TDLMapShape ghost;
+        if (m_MarkerToolPanel.IsShapeModeActive())
+            ghost = session.BuildGhostShape();
+        mapView.SetGhostShape(ghost);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Per-frame freehand draw pump. Two paths:
+    //!   - Held this frame  → sample the current cursor world position into
+    //!     the session. Distance filter + hard cap inside AddFreehandSample
+    //!     handle dedup and overflow.
+    //!   - Released this frame, was held last frame  → commit via
+    //!     OnShapeFreehandEnd. CommitVariadic fires the create RPC if
+    //!     enough samples were collected, or no-ops otherwise (session
+    //!     stays armed for the next attempt).
+    //! Works on every frontend because the cursor world comes from
+    //! whichever push path the active frontend has wired (mouse cursor on
+    //! menu KBM, m_fCursorX/Y on world-space). The session is always armed
+    //! while shape mode + FREEHAND is selected (panel's ReArmShapeSession
+    //! handles tool selection + post-commit re-arm), so no press-transition
+    //! arm is needed here.
+    protected void TickFreehandDraw(InputManager im)
+    {
+        bool held = IsFreehandDrawActive(im);
+
+        if (held && m_MarkerToolPanel)
+        {
+            AG0_TDLShapeDrawSession session = m_MarkerToolPanel.GetShapeDrawSession();
+            if (session)
+                session.TickFreehandFromCursor();
+        }
+        else if (!held && m_bFreehandDrawHeldLastFrame && m_MarkerToolPanel)
+        {
+            m_MarkerToolPanel.OnShapeFreehandEnd();
+        }
+
+        m_bFreehandDrawHeldLastFrame = held;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Per-frame walk of the controller's widget tree that toggles each
+    //! SCR_GamepadScrollComponent's enabled state based on whether the
+    //! currently focused widget lives inside that scroll layout. Scroll
+    //! layouts whose subtree doesn't contain the focus get their gamepad
+    //! scroll component disabled, so right-stick input drives only the
+    //! scroll layout the user has actually navigated into.
+    //!
+    //! Walks the tree every frame rather than caching at init — plugin
+    //! panels (MPU5 management, future plugins) spawn scroll widgets after
+    //! their OnPanelShown, and dynamic re-collect-on-change would need a
+    //! hook on every potential spawn point. The walk is cheap (single-
+    //! digit microseconds for our layout) and avoids that bookkeeping.
+    protected void TickScrollFocusGate()
+    {
+        if (!m_wRoot)
+            return;
+
+        Widget focused = GetGame().GetWorkspace().GetFocusedWidget();
+        GateScrollComponentsRecursive(m_wRoot, focused);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Recursive helper for TickScrollFocusGate. For every ScrollLayoutWidget
+    //! it encounters, call SetEnabled on the attached SCR_GamepadScrollComponent
+    //! based on whether `focused` is in that scroll's subtree. Tolerated as a
+    //! no-op when the scroll layout has no gamepad component.
+    protected void GateScrollComponentsRecursive(Widget root, Widget focused)
+    {
+        if (!root)
+            return;
+
+        ScrollLayoutWidget scroll = ScrollLayoutWidget.Cast(root);
+        if (scroll)
+        {
+            SCR_GamepadScrollComponent comp = SCR_GamepadScrollComponent.Cast(
+                scroll.FindHandler(SCR_GamepadScrollComponent));
+            if (comp)
+                comp.SetEnabled(IsWidgetInSubtree(focused, scroll));
+        }
+
+        Widget child = root.GetChildren();
+        while (child)
+        {
+            GateScrollComponentsRecursive(child, focused);
+            child = child.GetSibling();
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! True when `candidate` is `treeRoot` or any descendant of it. Walks
+    //! up the parent chain from candidate rather than the (typically much
+    //! larger) child tree from treeRoot — cheaper for the focused-widget
+    //! case where the parent chain is bounded by layout depth.
+    protected bool IsWidgetInSubtree(Widget candidate, Widget treeRoot)
+    {
+        if (!candidate || !treeRoot)
+            return false;
+        Widget cur = candidate;
+        while (cur)
+        {
+            if (cur == treeRoot)
+                return true;
+            cur = cur.GetParent();
+        }
+        return false;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Per-frame delete-sweep pump. While TDLDraw is held in delete mode,
+    //! pull the cursor world from the shape draw session (same source
+    //! freehand uses — already populated by mouse-move / world-space
+    //! EOnFrame / gamepad fallback) and hand it to SweepDeleteAt. Owner +
+    //! distance gating happens inside SweepDeleteAt, and m_aPendingDeletes
+    //! prevents the same marker from being re-deleted on subsequent
+    //! frames while the AskRemoveStaticMarker RPC is still in flight.
+    protected void TickDeleteSweep(InputManager im)
+    {
+        if (!IsDeleteSweepActive(im))
+            return;
+        if (!m_MarkerToolPanel)
+            return;
+        AG0_TDLShapeDrawSession session = m_MarkerToolPanel.GetShapeDrawSession();
+        if (!session || !session.IsCursorWorldKnown())
+            return;
+        m_MarkerToolPanel.SweepDeleteAt(session.GetCursorWorld());
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Per-frame visibility update for MarkerToolShapeConfirmButton. Shown
+    //! when the marker tool panel is the active side panel, shape sub-mode
+    //! is selected, the session has a variadic tool armed, and enough
+    //! points have been placed to commit — i.e. exactly when the user has
+    //! a meaningful "I'm done" action to take. Hidden in every other state
+    //! so it doesn't clutter the placed/military sub-forms or sit visible
+    //! during a fixed-point tool (circle/rectangle/sector) that auto-commits.
+    protected void UpdateShapeConfirmButtonVisibility()
+    {
+        if (!m_wMarkerToolShapeConfirmButton)
+            return;
+
+        bool show = false;
+        if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL
+            && m_MarkerToolPanel
+            && m_MarkerToolPanel.IsShapeModeActive())
+        {
+            AG0_TDLShapeDrawSession session = m_MarkerToolPanel.GetShapeDrawSession();
+            if (session && session.CanCommit())
+                show = true;
+        }
+
+        m_wMarkerToolShapeConfirmButton.SetVisible(show);
+    }
+
+    // ============================================
+    // WEB MIRROR — snapshot capture + uplink + inbound apply
+    // ============================================
+
+    //! Sample current UI state into a fresh snapshot. Every field comes from
+    //! a canonical cross-frontend source — class-level statics for panel /
+    //! chat / settings / map view, the controller's own m_NetworkDevice for
+    //! device fields. We deliberately avoid instance fields like m_eActivePanel
+    //! / m_ChatContactRplId because SetPanelContent / SetChatContact only
+    //! update the calling frontend's instance — the other frontend's instance
+    //! stays stale until its own input fires, which made the web mirror
+    //! alternate between two different "current panel" values frame to frame.
+    //!
+    //! Server-side fields (playerWorldX/Y/Z, MGRS) stay zero — the server fills
+    //! them in before forwarding to the API so the holding client doesn't
+    //! recompute every tick.
+    AG0_TDLMirrorSnapshot BuildMirrorSnapshot()
+    {
+        AG0_TDLMirrorSnapshot s = new AG0_TDLMirrorSnapshot();
+
+        s.panel = s_eLastPanel;
+        s.panelPluginID = s_sLastPanelPluginID;
+        s.chatContactRplId = s_LastChatContactRplId;
+        s.chatContactName = s_sLastChatContactName;
+        s.selectedDeviceRplId = s_LastSelectedDeviceId;
+
+        // Read map state from the cross-frontend statics rather than this
+        // controller's m_DisplayController.GetMapView() — both AG0_TDLDisplayController
+        // instances run divergence-sync each frame, so the statics are the
+        // single canonical "what's the current map view" answer. Reading from
+        // an instance map view would tie the snapshot to whichever frontend
+        // happens to be the uplink primary, masking changes the user made on
+        // the sibling frontend until the next propagator pass settled.
+        vector sharedCenter = AG0_TDLDisplayController.GetSavedCenter();
+        s.mapCenterX = sharedCenter[0];
+        s.mapCenterZ = sharedCenter[2];
+        s.mapZoom = AG0_TDLDisplayController.GetSavedZoom();
+        s.playerTracking = AG0_TDLDisplayController.GetPlayerTracking();
+        s.trackUp = AG0_TDLDisplayController.GetTrackUp();
+
+        s.brightness = s_fBrightness;
+        s.bloodhoundEnabled = s_bBloodhoundEnabled;
+        s.bloodhoundPinned = s_bBloodhoundPinned;
+        s.bloodhoundPinX = s_vBloodhoundPinPos[0];
+        s.bloodhoundPinZ = s_vBloodhoundPinPos[2];
+
+        // Use the player's actual NETWORK_ACCESS device (the radio — MPU5 etc.)
+        // rather than the frontend's m_NetworkDevice. World-space's m_NetworkDevice
+        // is the gadget the EUD/CDU itself is, which usually does NOT have
+        // NETWORK_ACCESS — that's a separate held radio. The in-game settings
+        // panel reads callsign from the network device too (see
+        // AG0_TDLMenuUI.FindNetworkDevice), so this mirrors what the user
+        // actually sees in-game.
+        AG0_TDLDeviceComponent networkDevice = FindLocalNetworkDevice();
+        if (networkDevice)
+        {
+            s.deviceCallsign = networkDevice.GetDisplayName();
+            s.networkId = networkDevice.GetCurrentNetworkID();
+            s.deviceRplId = networkDevice.GetDeviceRplId();
+            s.cameraBroadcasting = networkDevice.IsCameraBroadcasting();
+        }
+        else if (m_NetworkDevice)
+        {
+            // Fallback to whatever the frontend chose so an EUD-only player
+            // (no radio held) still has something on the panel.
+            s.deviceCallsign = m_NetworkDevice.GetDisplayName();
+            s.networkId = m_NetworkDevice.GetCurrentNetworkID();
+            s.deviceRplId = m_NetworkDevice.GetDeviceRplId();
+            s.cameraBroadcasting = m_NetworkDevice.IsCameraBroadcasting();
+        }
+
+        return s;
+    }
+
+    //! Mirror the in-game AG0_TDLMenuUI.FindNetworkDevice logic on the client
+    //! side so the snapshot's deviceCallsign / deviceRplId / networkId always
+    //! refer to the player's actual radio (NETWORK_ACCESS), not whatever
+    //! gadget the frontend happens to be representing. Preference order:
+    //! NETWORK_ACCESS + IsInNetwork > NETWORK_ACCESS alone > nothing.
+    protected AG0_TDLDeviceComponent FindLocalNetworkDevice()
+    {
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return null;
+        array<AG0_TDLDeviceComponent> held = pc.GetHeldDevicesCached();
+        if (!held)
+            return null;
+        AG0_TDLDeviceComponent fallback = null;
+        foreach (AG0_TDLDeviceComponent device : held)
+        {
+            if (!device)
+                continue;
+            if (!device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS))
+                continue;
+            if (device.IsInNetwork())
+                return device;
+            if (!fallback)
+                fallback = device;
+        }
+        return fallback;
+    }
+
+    //! Per-tick uplink — early-exits when nothing has changed since the last
+    //! send, and enforces the 10 Hz cap by tracking world time in ms. World
+    //! time (not real wall-clock) so that paused or slowed-down game time
+    //! doesn't break the cadence assumption.
+    //!
+    //! Only the first live controller drives the uplink each frame. Without
+    //! this gate, multiple frontends (world-space per held device + fullscreen
+    //! menu) both run TickMirrorUplink every frame and race against the static
+    //! last-sent snapshot. Use FindPrimaryLiveController so dangling/null
+    //! entries in the registry don't strand the uplink with no driver.
+    protected void TickMirrorUplink()
+    {
+        if (FindPrimaryLiveController() != this)
+            return;
+
+        PlayerController pcBase = GetGame().GetPlayerController();
+        if (!pcBase)
+            return;
+        SCR_PlayerController pc = SCR_PlayerController.Cast(pcBase);
+        if (!pc)
+            return;
+
+        AG0_TDLMirrorSnapshot snap = BuildMirrorSnapshot();
+        if (!snap)
+            return;
+
+        bool changed = !s_LastSentMirrorSnapshot || !snap.EqualsForClientUplink(s_LastSentMirrorSnapshot);
+        if (!changed)
+            return;
+
+        World world = GetGame().GetWorld();
+        if (!world)
+            return;
+        float nowMs = world.GetWorldTime();
+        if (s_fMirrorLastSendTimeMs > 0 && (nowMs - s_fMirrorLastSendTimeMs) < MIRROR_MIN_SEND_INTERVAL_MS)
+            return;
+        s_fMirrorLastSendTimeMs = nowMs;
+
+        // Diagnostic: log the snapshot push when playerTracking flips. Lets us
+        // see whether tracking on/off transitions match what the web sent vs.
+        // some other path silently flipping it back.
+        if (s_LastSentMirrorSnapshot && s_LastSentMirrorSnapshot.playerTracking != snap.playerTracking)
+        {
+            Print(string.Format("[TDL_MIRROR_UPLINK] tracking flip in snapshot: %1 -> %2 (mapCenter=<%3,%4>)",
+                s_LastSentMirrorSnapshot.playerTracking, snap.playerTracking,
+                snap.mapCenterX, snap.mapCenterZ), LogLevel.DEBUG);
+        }
+
+        string payload = snap.ToJson();
+        pc.PushATAKPanelStateToServer(payload);
+
+        if (!s_LastSentMirrorSnapshot)
+            s_LastSentMirrorSnapshot = new AG0_TDLMirrorSnapshot();
+        s_LastSentMirrorSnapshot.CopyFrom(snap);
+    }
+
+    //! Inbound command application — called by AG0_TDLMirrorCommandDispatcher
+    //! after the queue handler resolves the target identity to this client.
+    //! Always runs against a live frontend (the dispatcher walks
+    //! s_aLiveControllers and bails when empty).
+    void ApplyMirrorSetPanel(int panel, string pluginId, int selectedDeviceRplIdInt = 0)
+    {
+        // Explicit cast — Enfusion is strict about enum<->int and the dispatcher
+        // hands us a raw int parsed from JSON. Same pattern below.
+        ETDLPanelContent target = panel;
+
+        // Plugin-tool requires re-binding the active plugin before SetPanelContent
+        // so the fallback guard there doesn't kick us back to NETWORK_LIST.
+        if (target == ETDLPanelContent.PLUGIN_TOOL && !pluginId.IsEmpty())
+        {
+            foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
+            {
+                if (plugin && plugin.GetPluginID() == pluginId)
+                {
+                    m_ActivePanelPlugin = plugin;
+                    break;
+                }
+            }
+        }
+
+        // Route MEMBER_DETAIL switches through ShowDetailView so the same path
+        // an in-game card click takes runs: populates m_SelectedMember, fires
+        // the detail-shown event, and persists s_LastSelectedDeviceId. Without
+        // this, the web mirror's `mirror_set_panel` ended up at the detail
+        // panel with whatever member was last clicked in-game (or none), which
+        // surfaced on the website as a null detail view for self.
+        if (target == ETDLPanelContent.MEMBER_DETAIL && selectedDeviceRplIdInt != 0)
+        {
+            RplId deviceId = selectedDeviceRplIdInt;
+            AG0_TDLNetworkMember member = GetNetworkMemberById(deviceId);
+            if (member)
+            {
+                ShowDetailView(member, deviceId);
+                return;
+            }
+            // Member lookup miss — fall through to the plain SetPanelContent so
+            // the panel still switches; PopulateDetailView's own
+            // m_SelectedDeviceId-based refresh will pick the member up on the
+            // next aggregated-members tick once it's available.
+            m_SelectedDeviceId = deviceId;
+            s_LastSelectedDeviceId = deviceId;
+        }
+
+        SetPanelContent(target);
+    }
+
+    void ApplyMirrorSetChatContact(int rplIdInt, string name)
+    {
+        RplId rpl = rplIdInt;
+        SetChatContact(rpl, name);
+        // Open the chat panel to surface the change visually — matches the
+        // in-game flow of clicking a contact to start a thread.
+        SetPanelContent(ETDLPanelContent.DIRECT_CHAT);
+    }
+
+    void ApplyMirrorSetBrightness(float value)
+    {
+        if (value < 0)   value = 0;
+        if (value > 100) value = 100;
+        s_fBrightness = value;
+        if (m_BrightnessSliderComp)
+        {
+            s_bSyncingBrightness = true;
+            m_BrightnessSliderComp.SetValue(value);
+            s_bSyncingBrightness = false;
+        }
+        ApplyBrightnessToOverlay();
+        // Fan-out to the other frontend's overlay (menu vs world-space) so the
+        // dim state stays coherent across both surfaces.
+        s_OnBrightnessChanged.Invoke();
+    }
+
+    void ApplyMirrorSetMapView(float centerX, float centerZ, float zoom, bool tracking, bool trackUp)
+    {
+        AG0_TDLDisplayController.SetPlayerTracking(tracking);
+        AG0_TDLDisplayController.SetTrackUp(trackUp);
+        // Route through the fan-out so both frontends' map views sync to the same
+        // applied state. The dispatcher already iterates live controllers to call
+        // this method, but each per-controller call would otherwise only touch
+        // its own m_DisplayController — propagator covers everyone in one shot
+        // so the dispatcher's redundant loop is idempotent rather than partial.
+        // Center only propagated when tracking is off (in-game CenterOnPlayer
+        // overrides it every frame otherwise).
+        AG0_TDLDisplayController.PropagateMapState(
+            Vector(centerX, 0, centerZ),
+            zoom,
+            !tracking,
+            true);
+    }
+
+    void ApplyMirrorToggleBloodhound(bool enabled)
+    {
+        if (s_bBloodhoundEnabled == enabled)
+            return;
+        s_bBloodhoundEnabled = enabled;
+        UpdateBloodhoundButtonVisual();
+        if (!enabled && !s_bBloodhoundPinned)
+        {
+            if (m_wBloodhoundReadout)
+                m_wBloodhoundReadout.SetVisible(false);
+            if (m_DisplayController)
+            {
+                AG0_TDLMapView mv = m_DisplayController.GetMapView();
+                if (mv)
+                    mv.SetBloodhound(false, vector.Zero, vector.Zero);
+            }
+        }
     }
 }

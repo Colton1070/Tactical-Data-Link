@@ -1,0 +1,41 @@
+GenericEntity : "{E6CD00876650FEB6}Prefabs/Items/Core/VehicleRadioItem.et" {
+ ID "508AB2013EEE1E00"
+ components {
+  BaseRadioComponent "{68A36A8C717BFE60}" {
+   Transceivers {
+    RadioTransceiver "{68A36A8E983C7574}" {
+     ChannelFrequency 30000
+     "Transmitting Range" 20000
+     "Min tunable frequency" 30000
+     "Max tunable frequency" 88000
+     "Frequency resolution" 200
+    }
+    RadioTransceiver "{68A36A897A3A07E9}" {
+     ChannelFrequency 60000
+     "Transmitting Range" 10000
+     "Min tunable frequency" 30000
+     "Max tunable frequency" 512000
+    }
+    RadioTransceiver "{68A36A89E5C189B2}" {
+     ChannelFrequency 62000
+     "Transmitting Range" 10000
+     "Min tunable frequency" 30000
+     "Max tunable frequency" 512000
+    }
+    RadioTransceiver "{68A36A89DAC69AAC}" {
+     ChannelFrequency 32000
+     "Transmitting Range" 20000
+     "Min tunable frequency" 30000
+     "Max tunable frequency" 88000
+     "Frequency resolution" 200
+    }
+    RadioTransceiver "{68A36A89CEE429D5}" {
+     ChannelFrequency 62000
+     "Transmitting Range" 10000
+     "Min tunable frequency" 30000
+     "Max tunable frequency" 512000
+    }
+   }
+  }
+ }
+}

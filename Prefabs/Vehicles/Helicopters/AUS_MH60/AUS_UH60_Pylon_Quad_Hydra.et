@@ -1,0 +1,25 @@
+Vehicle : "{048D9D6B2DB1303D}Prefabs/Vehicles/Core/AUS_Helicopter_Base.et" {
+ ID "57DA6675519A417B"
+ components {
+  ActionsManagerComponent "{C97BE5489221AE18}" {
+   ActionContexts {
+    UserActionContext "{69076A2E58E99BFA}" {
+     ContextName "tdl_crypto"
+     Position PointInfo "{68FF6DA8EA80CCAA}" {
+      Offset -0.0736 1.453 2.7246
+     }
+    }
+   }
+   additionalActions {
+    AG0_VehicleRadioFillAction "{69076A2E33DC8E9D}" {
+     ParentContextList {
+      "tdl_crypto"
+     }
+     UIInfo SCR_ActionContextUIInfo "{68FF6DA8A9B621AB}" {
+     }
+     VisibilityRange 3
+    }
+   }
+  }
+ }
+}

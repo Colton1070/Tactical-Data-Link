@@ -56,6 +56,19 @@ class AG0_ATAKPluginBase
         m_bEnabled = false;
     }
 
+    //! Rebind the active controller without going through the full Enable
+    //! path. Plugin button relays call this just before dispatching
+    //! OnToolActivated so the plugin's RequestPluginPanel routes to the
+    //! controller that spawned the clicked button — not whichever frontend
+    //! called Enable last. Necessary because the plugin instance is shared
+    //! per-device across both frontends (menu + world-space), so the menu
+    //! closing (Disable → m_Controller = null) would otherwise strand the
+    //! world-space button with a null controller.
+    void SetController(AG0_TDLMenuController controller)
+    {
+        m_Controller = controller;
+    }
+
     protected void OnEnabled() {}
     protected void OnDisabled() {}
 

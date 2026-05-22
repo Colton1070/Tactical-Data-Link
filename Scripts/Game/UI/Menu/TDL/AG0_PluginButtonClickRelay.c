@@ -16,20 +16,33 @@ class AG0_PluginButtonClickRelay
 {
     protected AG0_ATAKPluginBase m_Plugin;
     protected Widget m_MenuRoot;
+    //! Captured at relay-creation time so OnClick can re-bind the plugin
+    //! back to this frontend's controller before dispatching. The plugin
+    //! instance is shared per-device across menu + world-space; whichever
+    //! frontend called Enable() last "owns" m_Controller, and the
+    //! menu closing nulls it. Without this re-bind, clicking the
+    //! world-space button after the menu has been opened-then-closed
+    //! would dispatch through a null m_Controller and silently no-op.
+    protected AG0_TDLMenuController m_Controller;
 
     //------------------------------------------------------------------------------------------------
-    void AG0_PluginButtonClickRelay(AG0_ATAKPluginBase plugin, Widget menuRoot)
+    void AG0_PluginButtonClickRelay(AG0_ATAKPluginBase plugin, Widget menuRoot, AG0_TDLMenuController controller)
     {
         m_Plugin = plugin;
         m_MenuRoot = menuRoot;
+        m_Controller = controller;
     }
 
     //------------------------------------------------------------------------------------------------
     //! Bound zero-arg to SCR_ModularButtonComponent.m_OnClicked. Dispatches
-    //! to the captured plugin with the captured menu root.
+    //! to the captured plugin with the captured menu root, after re-binding
+    //! the plugin's controller reference so RequestPluginPanel routes to
+    //! the frontend that spawned this button.
     void OnClick()
     {
-        if (m_Plugin && m_MenuRoot)
-            m_Plugin.OnToolActivated(m_MenuRoot);
+        if (!m_Plugin || !m_MenuRoot || !m_Controller)
+            return;
+        m_Plugin.SetController(m_Controller);
+        m_Plugin.OnToolActivated(m_MenuRoot);
     }
 }

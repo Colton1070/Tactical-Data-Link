@@ -1,0 +1,24 @@
+Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
+ ID "57DA6675519A417B"
+ components {
+  ActionsManagerComponent "{C97BE5489221AE18}" {
+   ActionContexts {
+    UserActionContext "{68FF6DA9DF888909}" {
+     ContextName "tdl_crypto"
+     Position PointInfo "{68FF6DA9D53D494B}" {
+      Offset 0.0621 2.5461 7.1587
+     }
+    }
+   }
+   additionalActions {
+    AG0_VehicleRadioFillAction "{68FF6DA046DAEE99}" {
+     ParentContextList {
+      "tdl_crypto"
+     }
+     UIInfo SCR_ActionContextUIInfo "{68FF6DA04206DA48}" {
+     }
+    }
+   }
+  }
+ }
+}

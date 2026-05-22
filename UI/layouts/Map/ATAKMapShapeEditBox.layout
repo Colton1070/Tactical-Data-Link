@@ -1,0 +1,212 @@
+FrameWidgetClass {
+ Name "MarkerEditRoot"
+ Slot FrameWidgetSlot "{5DA681954DE6635D}" {
+  Anchor 0 0 1 1
+  PositionX 0
+  OffsetLeft 0
+  PositionY 0
+  OffsetTop 0
+  SizeX 0
+  OffsetRight 0
+  SizeY 0
+  OffsetBottom 0
+  SizeToContent 1
+ }
+ Clipping False
+ {
+  FrameWidgetClass "{6961452B3C6689EB}" : "{DD15734EB89D74E2}UI/layouts/Map/MapMarkerBase.layout" {
+   Name "rootFrame0"
+   Slot FrameWidgetSlot "{5D2691F3AE61A7FC}" {
+   }
+   {
+    VerticalLayoutWidgetClass "{5D56BA46E7717DBF}" {
+     Prefab "{5D56BA46E7717DBF}"
+     {
+      FrameWidgetClass "{5E3E82F0B6DE3AC9}" {
+       Prefab "{5E3E82F0B6DE3AC9}"
+       {
+        ImageWidgetClass "{5E3E82F09B48A9B8}" {
+         Prefab "{5E3E82F09B48A9B8}"
+         "Is Visible" 1
+        }
+       }
+      }
+      TextWidgetClass "{5D269372DA54B302}" {
+       Prefab "{5D269372DA54B302}"
+       Text ""
+      }
+     }
+    }
+   }
+  }
+  FrameWidgetClass "{6961452B3C6689F6}" {
+   Name "SizeFrame"
+   Slot FrameWidgetSlot "{5E1EC62B6B3A089A}" {
+    Anchor 0 0 1 1
+    PositionX -2.91
+    PositionY 15.455
+    SizeX 124
+    OffsetRight 0
+    SizeY -100
+    OffsetBottom 0
+    SizeToContent 1
+   }
+   {
+    SmartPanelWidgetClass "{6961452B3C6689F7}" {
+     Name "Background0"
+     Slot FrameWidgetSlot "{5E20DAC96557C7F3}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX -900
+      OffsetRight 0
+      SizeY -470
+      OffsetBottom 0
+     }
+     Opacity 0.98
+     Color 0.0075 0.0123 0.0144 0
+     style rounded_4px
+    }
+    SizeLayoutWidgetClass "{6961452B3C6689F8}" {
+     Name "SizeLayout0"
+     Slot FrameWidgetSlot "{5E2C825DA2EDA3F6}" {
+      Anchor 0.5 0.5 0.5 0.5
+      OffsetLeft 0
+      OffsetTop 0
+      SizeX 1000
+      OffsetRight -1000
+      SizeY 500
+      OffsetBottom -500
+      Alignment 0.5 0.5
+      SizeToContent 1
+     }
+     WidthOverride 880
+     {
+      VerticalLayoutWidgetClass "{6961452B3C6689F9}" {
+       Name "MarkerEditVLayout"
+       Slot AlignableSlot "{5E2C825DA2FAB4C5}" {
+        HorizontalAlign 3
+        VerticalAlign 3
+       }
+       {
+        ButtonWidgetClass "{6961452B3C668982}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
+         Name "ShapeToolSpinBox"
+         Slot LayoutSlot "{69472DCC3EB9A6C1}" {
+          HorizontalAlign 3
+          Padding 4 4 4 4
+         }
+         components {
+          SCR_SpinBoxComponent "{5472C6CBC0640458}" {
+           m_sLabel "Shape"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+        }
+        ButtonWidgetClass "{6961452B3C668987}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
+         Name "StrokeColorSpinBox"
+         Slot LayoutSlot "{69472DCC3EB9A6C1}" {
+          HorizontalAlign 3
+          Padding 4 4 4 4
+         }
+         components {
+          SCR_SpinBoxComponent "{5472C6CBC0640458}" {
+           m_sLabel "#ar-mapmarker_colorhint"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+        }
+        ButtonWidgetClass "{6961452BFCC6B2D4}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
+         Name "StrokeWidthSpinBox"
+         Slot LayoutSlot "{69472DCC3EB9A6C1}" {
+          HorizontalAlign 3
+          Padding 4 4 4 4
+         }
+         components {
+          SCR_SpinBoxComponent "{5472C6CBC0640458}" {
+           m_sLabel "Stroke"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+        }
+        ButtonWidgetClass "{6961452BE76D952B}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
+         Name "FillToggle"
+         Slot LayoutSlot "{69472DCC3EB9A6C1}" {
+          HorizontalAlign 3
+          Padding 4 4 4 4
+         }
+         components {
+          SCR_SpinBoxComponent "{5472C6CBC0640458}" {
+           m_sLabel "Fill"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+        }
+        ButtonWidgetClass "{6961452B3C66898A}" : "{0022F0B45ADBC5AC}UI/layouts/WidgetLibrary/EditBox/WLib_EditBox.layout" {
+         Name "EditBoxRoot"
+         Slot LayoutSlot "{5E20DAC8EB0F7180}" {
+          HorizontalAlign 3
+          Padding 36 10 36 0
+         }
+         components {
+          SCR_EditBoxComponent "{547290FFBD5B33E9}" {
+           m_sLabel "#AR-MapMarker_TextHint"
+           m_fSizeWithLabel 44
+           m_sLabelLayout "{C5598C929C45420A}UI/layouts/Map/MapMarkerEditBoxLabel.layout"
+          }
+         }
+         {
+          VerticalLayoutWidgetClass "{5AA4D27F39EB2514}" {
+           Prefab "{5AA4D27F39EB2514}"
+           {
+            SizeLayoutWidgetClass "{5538C205B27B0F5D}" {
+             Prefab "{5538C205B27B0F5D}"
+             {
+              OverlayWidgetClass "{55367D8E531FD623}" {
+               Prefab "{55367D8E531FD623}"
+               {
+                HorizontalLayoutWidgetClass "{55367D8E4592BC6E}" {
+                 Prefab "{55367D8E4592BC6E}"
+                 {
+                  OverlayWidgetClass "{5538C2059A570E94}" {
+                   Prefab "{5538C2059A570E94}"
+                   {
+                    HorizontalLayoutWidgetClass "{58D095EE846E2B93}" {
+                     Prefab "{58D095EE846E2B93}"
+                     {
+                      EditBoxWidgetClass "{5538C2058B18F877}" {
+                       Prefab "{5538C2058B18F877}"
+                       components {
+                        EditBoxFilterComponent "{5538D70DF38310BC}" {
+                         m_iCharacterLimit 16
+                        }
+                       }
+                       "Font Size" 16
+                      }
+                     }
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

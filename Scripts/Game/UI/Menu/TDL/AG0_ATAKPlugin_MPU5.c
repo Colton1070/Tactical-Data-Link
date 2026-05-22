@@ -12,6 +12,12 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     protected TextWidget m_wNetworkName;
     protected TextWidget m_wNodeCount;
     protected ref array<Widget> m_aNodeWidgets = {};
+    // Parallel to m_aNodeWidgets — captures each spawned entry's source
+    // RplId so BuildNodeList can restore gamepad focus to the same
+    // member's entry after the periodic refresh tears down and rebuilds.
+    // Without this, focus on a node entry gets dropped (typically to a
+    // widget outside the panel) every UPDATE_INTERVAL tick.
+    protected ref array<RplId> m_aNodeRplIds = {};
     protected ref array<ref AG0_KickButtonClickRelay> m_aKickRelays = {};
     
     // Cached references
@@ -77,11 +83,15 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
             m_wPTTOverlay = GetGame().GetWorkspace().CreateWidgets(PTT_OVERLAY_LAYOUT, overlayArea);
             if (m_wPTTOverlay)
             {
-                m_wPTTFrequency = TextWidget.Cast(m_wPTTOverlay.FindAnyWidget("Frequency"));
-                m_wPTTIcon = ImageWidget.Cast(m_wPTTOverlay.FindAnyWidget("PTTIcon"));
+                // PTTOverlay.layout's freq text widget is named "PTTText".
+                // m_wPTTIcon is intentionally left null — the layout's icon
+                // widget is unnamed ("Image0") and there are two, so a
+                // safe lookup needs a layout rename. Until then the icon
+                // stays static and the field is unused.
+                m_wPTTFrequency = TextWidget.Cast(m_wPTTOverlay.FindAnyWidget("PTTText"));
             }
         }
-        
+
         UpdatePTTOverlay();
     }
     
@@ -120,17 +130,35 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     //------------------------------------------------------------------------------------------------
     protected void UpdatePTTOverlay()
     {
-        if (!m_wPTTOverlay || !m_MPU5Device) 
+        if (!m_wPTTOverlay || !m_MPU5Device)
             return;
-        
+
         if (m_wPTTFrequency)
-        {
-            int freq = GetMPU5Frequency();
-            if (freq > 0)
-                m_wPTTFrequency.SetText(string.Format("%1", freq));
-            else
-                m_wPTTFrequency.SetText("---");
-        }
+            m_wPTTFrequency.SetText(FormatFrequencyText(GetMPU5Frequency()));
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Format a kHz integer as "30.500 MHz" with three-digit kHz padding.
+    //! Returns "---" when the freq is zero / negative (radio not bound or
+    //! transceiver missing). Manual leading-zero padding because Enfusion's
+    //! string.Format has no width specifier — without it, 30005 kHz would
+    //! render as "30.5 MHz" (visually identical to 30500 kHz), which is
+    //! exactly the kind of off-by-an-order-of-magnitude bug operators
+    //! shouldn't be reading off the overlay.
+    protected string FormatFrequencyText(int freqKHz)
+    {
+        if (freqKHz <= 0)
+            return "---";
+
+        int mhz = freqKHz / 1000;
+        int khz = freqKHz % 1000;
+        string khzStr = khz.ToString();
+        if (khz < 10)
+            khzStr = "00" + khzStr;
+        else if (khz < 100)
+            khzStr = "0" + khzStr;
+
+        return string.Format("%1.%2 MHz", mhz, khzStr);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -212,21 +240,71 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     //------------------------------------------------------------------------------------------------
     protected void BuildNodeList()
     {
-        if (!m_wNodeList || !m_MPU5Device) 
+        if (!m_wNodeList || !m_MPU5Device)
             return;
-        
+
+        // Capture which member's entry the gamepad cursor was focused on
+        // before tearing the list down. The rebuild removes the focused
+        // widget from the hierarchy, which throws focus to whatever the
+        // engine picks next — usually a widget outside the panel.
+        // Restoring to the same RplId after rebuild keeps the user where
+        // they were navigating.
+        RplId focusedRplId = CaptureFocusedNodeRplId();
+
         ClearNodeWidgets();
-        
+
         AG0_TDLNetworkMembers members = m_MPU5Device.GetNetworkMembersData();
-        if (!members) 
+        if (!members)
             return;
-        
+
         map<RplId, ref AG0_TDLNetworkMember> memberMap = members.ToMap();
-        
+
         foreach (RplId rplId, AG0_TDLNetworkMember member : memberMap)
         {
             CreateNodeEntry(rplId, member);
         }
+
+        if (focusedRplId != RplId.Invalid())
+            RestoreFocusToNode(focusedRplId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Walk up from the currently-focused widget and return the RplId of
+    //! the node entry the focus is inside, or RplId.Invalid() if focus is
+    //! elsewhere (close button, network name, outside the panel entirely).
+    //! Used by BuildNodeList to remember which member's row had focus
+    //! before the periodic refresh tears the list down.
+    protected RplId CaptureFocusedNodeRplId()
+    {
+        Widget focused = GetGame().GetWorkspace().GetFocusedWidget();
+        if (!focused)
+            return RplId.Invalid();
+
+        Widget cur = focused;
+        while (cur)
+        {
+            int idx = m_aNodeWidgets.Find(cur);
+            if (idx != -1 && idx < m_aNodeRplIds.Count())
+                return m_aNodeRplIds[idx];
+            cur = cur.GetParent();
+        }
+        return RplId.Invalid();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Restore focus to the node entry for the given RplId, if present in
+    //! the freshly-rebuilt list. No-op when the member has left the
+    //! network and their entry is gone — focus then stays wherever the
+    //! engine moved it during the rebuild (acceptable; the user can
+    //! navigate back manually).
+    protected void RestoreFocusToNode(RplId rplId)
+    {
+        int idx = m_aNodeRplIds.Find(rplId);
+        if (idx == -1 || idx >= m_aNodeWidgets.Count())
+            return;
+        Widget w = m_aNodeWidgets[idx];
+        if (w)
+            GetGame().GetWorkspace().SetFocusedWidget(w);
     }
     
     protected void CreateNodeEntry(RplId rplId, AG0_TDLNetworkMember member)
@@ -267,6 +345,7 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
         }
 
         m_aNodeWidgets.Insert(nodeEntry);
+        m_aNodeRplIds.Insert(rplId);
     }
 
     protected void ClearNodeWidgets()
@@ -277,6 +356,7 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
                 w.RemoveFromHierarchy();
         }
         m_aNodeWidgets.Clear();
+        m_aNodeRplIds.Clear();
         m_aKickRelays.Clear();
     }
     
@@ -302,17 +382,14 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     //------------------------------------------------------------------------------------------------
     protected int GetMPU5Frequency()
     {
-        if (!m_TDLRadio) 
+        if (!m_TDLRadio)
             return 0;
-        
-        BaseRadioComponent baseRadio = m_TDLRadio.GetRadioComponent();
-        if (!baseRadio) 
-            return 0;
-        
-        BaseTransceiver transceiver = baseRadio.GetTransceiver(0);
-        if (!transceiver) 
-            return 0;
-        
-        return transceiver.GetFrequency();
+        // Pull from AG0_TDLRadioComponent.GetCurrentFrequency rather than the
+        // raw BaseTransceiver — that wrapper returns the live hopped value
+        // when frequency-hop is enabled, falling back to the fixed tsv
+        // frequency otherwise. Going through the transceiver directly would
+        // always show the base frequency, which is misleading when the
+        // radio is mid-hop.
+        return m_TDLRadio.GetCurrentFrequency(0);
     }
 }

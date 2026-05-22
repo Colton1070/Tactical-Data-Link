@@ -242,22 +242,96 @@ class AG0_TDLDisplayController
     
     static void SetPlayerTracking(bool tracking)
     {
+        // Log every transition so we can see WHO and WHEN someone flips tracking
+        // back on mid-pan — if the web mirror snaps to player position after a
+        // user-issued pan with tracking:false, this log fires for the offending
+        // call. Same-value writes don't log (no transition, no noise).
+        if (s_bPlayerTracking != tracking)
+        {
+            Print(string.Format("[TDL_MIRROR_TRACKSET] s_bPlayerTracking %1 -> %2",
+                s_bPlayerTracking, tracking), LogLevel.DEBUG);
+        }
         s_bPlayerTracking = tracking;
     }
-    
+
     static bool GetPlayerTracking()
     {
         return s_bPlayerTracking;
     }
-    
+
     static void SetTrackUp(bool trackUp)
     {
         s_bTrackUp = trackUp;
     }
-    
+
     static bool GetTrackUp()
     {
         return s_bTrackUp;
+    }
+
+    //! Cross-class accessors for the persisted map view state. Used by the web-
+    //! mirror command dispatcher to fall back to current values when a partial
+    //! mirror_set_map_view payload omits a field — direct static access from
+    //! outside the class isn't safe under Enfusion's default member visibility.
+    static float GetSavedZoom() { return s_fZoom; }
+    static vector GetSavedCenter() { return s_vCenter; }
+
+    //! Fan-out helper: push a map view mutation to every live frontend's
+    //! AG0_TDLMapView so world-space and fullscreen menu stay coherent. Both
+    //! frontends carry their own AG0_TDLMapView instance; without explicit
+    //! propagation, an input on one (in-game drag, web command, gamepad pan)
+    //! leaves the sibling stale, the snapshot reflects whichever frontend the
+    //! BuildMirrorSnapshot primary happens to be, and the user sees state
+    //! flicker or stick depending on which surface they're looking at.
+    //!
+    //! `centerValid` / `zoomValid` let callers send partial updates — e.g. a
+    //! zoom-only mutation passes `centerValid=false, zoomValid=true` and the
+    //! center field is ignored on every frontend.
+    static void PropagateMapState(vector center, float zoom, bool centerValid, bool zoomValid)
+    {
+        array<ref AG0_TDLMenuController> live = AG0_TDLMenuController.GetLiveControllers();
+        int frontendsTotal = 0;
+        int displayControllersFound = 0;
+        int mapViewsFound = 0;
+        int mapViewsUpdated = 0;
+        foreach (AG0_TDLMenuController c : live)
+        {
+            if (!c)
+                continue;
+            frontendsTotal = frontendsTotal + 1;
+            AG0_TDLDisplayController dc = c.GetDisplayController();
+            if (!dc)
+                continue;
+            displayControllersFound = displayControllersFound + 1;
+            AG0_TDLMapView mv = dc.GetMapView();
+            if (!mv)
+                continue;
+            mapViewsFound = mapViewsFound + 1;
+            if (centerValid)
+                mv.SetCenter(center);
+            if (zoomValid)
+                mv.SetZoom(zoom);
+            mapViewsUpdated = mapViewsUpdated + 1;
+        }
+        // Also write to the persisted statics so Cleanup/Init restore round-trips
+        // through the same canonical values.
+        if (centerValid)
+            s_vCenter = center;
+        if (zoomValid)
+            s_fZoom = zoom;
+
+        // Diagnostic — only fires when NO frontend received the update. A
+        // partial fan-out (some frontend in the registry without a display
+        // controller, common when multiple held devices spin up at different
+        // times) is fine as long as at least one visible frontend got the
+        // change. Total-zero is the real failure mode where the user wouldn't
+        // see anything happen in-game.
+        if (mapViewsUpdated == 0 && frontendsTotal > 0)
+        {
+            Print(string.Format("[TDL_MIRROR_PROP] TOTAL FAILURE no frontend updated center=%1 zoom=%2 frontends=%3 displayCtrls=%4 mapViews=%5",
+                center, zoom, frontendsTotal, displayControllersFound, mapViewsFound),
+                LogLevel.WARNING);
+        }
     }
     
     //------------------------------------------------------------------------------------------------
@@ -343,7 +417,9 @@ class AG0_TDLDisplayController
         if (!player)
             return;
         
-        // Use STATIC state for tracking/rotation
+        // Tracking-mode auto-center: re-pin the map view to the player every
+        // frame the static flag is on. Matches the in-game ATAK behavior so
+        // when the player moves, the held device's map follows.
         if (s_bPlayerTracking)
             m_MapView.CenterOnPlayer();
         
@@ -356,7 +432,37 @@ class AG0_TDLDisplayController
         {
             m_MapView.SetRotation(0);
         }
-        
+
+        // Divergence sync — propagate local m_MapView state to other live
+        // frontends when it changed. SKIPPED when tracking is on: the
+        // CenterOnPlayer call above intentionally diverges every frame as
+        // the player moves, and both frontends do their own CenterOnPlayer
+        // so they stay synced without us writing player position to s_vCenter
+        // each frame (which would otherwise spam PropagateMapState 60×/sec
+        // and clobber the "last explicit pan target" persisted in s_vCenter).
+        // Zoom and tracking-off pan are the only sources of legitimate
+        // divergence the propagator needs to handle.
+        if (!s_bPlayerTracking)
+        {
+            vector localCenter = m_MapView.GetCenter();
+            float  localZoom   = m_MapView.GetZoom();
+            bool centerDiff =
+                Math.AbsFloat(localCenter[0] - s_vCenter[0]) > 0.1
+             || Math.AbsFloat(localCenter[2] - s_vCenter[2]) > 0.1;
+            bool zoomDiff = Math.AbsFloat(localZoom - s_fZoom) > 0.001;
+            if (centerDiff || zoomDiff)
+                PropagateMapState(localCenter, localZoom, centerDiff, zoomDiff);
+        }
+        else
+        {
+            // Tracking-on: zoom can still change via in-game zoom buttons
+            // independently of the player following. Sync just the zoom.
+            float localZoom = m_MapView.GetZoom();
+            bool zoomDiff = Math.AbsFloat(localZoom - s_fZoom) > 0.001;
+            if (zoomDiff)
+                PropagateMapState(vector.Zero, localZoom, false, true);
+        }
+
         // Update heading indicator
         ImageWidget headingImg = ImageWidget.Cast(m_wHeadingIndicator);
         if (headingImg)

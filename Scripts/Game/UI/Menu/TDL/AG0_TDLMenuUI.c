@@ -147,6 +147,10 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             // Route map clicks to the controller — marker placement (KBM)
             // is shared between frontends.
             m_DragHandler.m_OnClick.Insert(OnMapClickedDelegated);
+            // Cursor-move samples feed the shape draw session's rubber-band
+            // ghost. Only relevant while shape mode is armed; controller
+            // gates the forward, so wiring it unconditionally is cheap.
+            m_DragHandler.m_OnCursorMove.Insert(OnMapCursorMovedDelegated);
         }
         
         // Side panel structure
@@ -391,6 +395,29 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         // Handle input
         HandleInput();
 
+        // Cursor poll for the shape draw session's rubber-band ghost. Cheap
+        // when the cursor is idle (early-out on unchanged position) and when
+        // shape mode is inactive (delegate gates on its own state). Runs
+        // before controller.Tick so the ghost geometry is fresh by the time
+        // the display controller's frame draws.
+        if (m_DragHandler)
+        {
+            m_DragHandler.TickCursorPoll();
+            // Pan suppression — true while TDLDraw is held in any
+            // map-interaction sub-mode (freehand draw, delete sweep).
+            // Lets the user pan freely between interactions without
+            // releasing the tool selection.
+            if (m_MenuController)
+                m_DragHandler.SetFreehandActive(m_MenuController.IsAnyDrawInteractionActive(m_InputManager));
+        }
+
+        // Fallback cursor push — covers gamepad (no mouse movement to
+        // drive the cursor) and idle mouse (held still beyond the stale
+        // threshold). Runs after TickCursorPoll so a fresh mouse-move
+        // push this frame wins; otherwise canvas-center is pushed.
+        if (m_MenuController)
+            m_MenuController.PushFallbackCursorIfNeeded(m_InputManager);
+
         // Controller tick — drives plugin OnMenuUpdate (post Phase 2) and
         // later phases will fold image-card rendering / camera button /
         // marker action poll into this same call. Shared with world-space.
@@ -589,6 +616,19 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         m_MenuController.OnMapClickedForMarkerPlacement(absMouseX, absMouseY);
         m_MenuController.OnMapClickedForBloodhound(absMouseX, absMouseY);
     }
+
+    //------------------------------------------------------------------------------------------------
+    //! Cursor-move samples from the drag handler. Only meaningful when the
+    //! shape draw session wants to update its rubber-band ghost; controller
+    //! is responsible for gating so the dispatch stays cheap when shape
+    //! mode is inactive.
+    protected void OnMapCursorMovedDelegated(int absMouseX, int absMouseY)
+    {
+        if (!m_MenuController)
+            return;
+        m_MenuController.OnMapCursorMovedForShape(absMouseX, absMouseY);
+    }
+
     
     //------------------------------------------------------------------------------------------------
     // PANEL MANAGEMENT — controller owns the state machine. This wrapper
