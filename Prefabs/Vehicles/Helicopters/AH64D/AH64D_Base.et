@@ -1,7 +1,7 @@
 Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
  ID "57DA6675519A417B"
  components {
-  AG0_TDLDeviceComponent "{696E6BDB43088116}" {
+  AG0_TDLDeviceComponent "{6970B85DFBD5880B}" {
    m_eCapabilities 51
    m_eWaveform 24
    m_bUseTDLRadio 0
@@ -13,26 +13,28 @@ Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
   }
   ActionsManagerComponent "{C97BE5489221AE18}" {
    ActionContexts {
-    UserActionContext "{68FF6DA9DF888909}" {
+    UserActionContext "{6970B85D808CACDE}" {
+     UIInfo SCR_ActionContextUIInfo "{6970B85E7BDE74BB}" {
+     }
      ContextName "tdl_crypto"
-     Position PointInfo "{68FF6DA9D53D494B}" {
-      Offset 0.0621 2.5461 7.1587
+     Position PointInfo "{6970B85E73F55DDC}" {
+      Offset -0.4382 2.2931 1.926
      }
     }
    }
    additionalActions {
-    AG0_VehicleRadioFillAction "{68FF6DA046DAEE99}" {
+    AG0_RadioFillKeyUserAction "{6970B85E001B3C86}" {
      ParentContextList {
       "tdl_crypto"
      }
-     UIInfo SCR_ActionContextUIInfo "{68FF6DA04206DA48}" {
+     UIInfo SCR_ActionContextUIInfo "{6970B85EF21F3932}" {
      }
     }
-    AG0_VehicleTDLNetworkAction "{696E6BDBF380E2FE}" {
+    AG0_VehicleTDLNetworkAction "{6970B85EEB68B9FC}" {
      ParentContextList {
       "tdl_crypto"
      }
-     UIInfo SCR_ActionContextUIInfo "{696E6BDBF380E218}" {
+     UIInfo SCR_ActionContextUIInfo "{6970B85EE5296EFD}" {
      }
      m_bPilotOnly 0
      m_aDefinedCompartmentSectionsOnly {
@@ -40,11 +42,11 @@ Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
      }
      m_eForceWaveform BFT2
     }
-    AG0_VehicleTDLNetworkAction "{696F4CCB3018E556}" {
+    AG0_VehicleTDLNetworkAction "{6970B85EC824622E}" {
      ParentContextList {
       "tdl_crypto"
      }
-     UIInfo SCR_ActionContextUIInfo "{696F4CCB3018EE80}" {
+     UIInfo SCR_ActionContextUIInfo "{6970B85EC82B83F1}" {
      }
      m_bPilotOnly 0
      m_aDefinedCompartmentSectionsOnly {
@@ -53,11 +55,11 @@ Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
      m_bCreateNetwork 1
      m_eForceWaveform LINK16
     }
-    AG0_VehicleTDLNetworkAction "{696F4CCB271EE7C3}" {
+    AG0_VehicleTDLNetworkAction "{6970B85F6F8A52AF}" {
      ParentContextList {
       "tdl_crypto"
      }
-     UIInfo SCR_ActionContextUIInfo "{696F4CCB271EE7A3}" {
+     UIInfo SCR_ActionContextUIInfo "{6970B85F6F8A5210}" {
      }
      m_bPilotOnly 0
      m_aDefinedCompartmentSectionsOnly {

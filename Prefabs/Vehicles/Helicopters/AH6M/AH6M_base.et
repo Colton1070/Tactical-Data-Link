@@ -1,6 +1,16 @@
 Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
  ID "57DA6675519A417B"
  components {
+  AG0_TDLDeviceComponent "{6970B85FB51CB055}" {
+   m_eCapabilities 51
+   m_eWaveform 24
+   m_bUseTDLRadio 0
+   m_fNetworkRange 10000
+   m_sMarkerImageset "{B365115DCD2C393A}UI/Textures/Icons/icons_wrapperUI-64TDL.imageset"
+   m_sMarkerIconQuad "tdl_dot"
+   m_bOverrideMarkerColor 1
+   m_MarkerColor 0.157 0.624 0.624 1
+  }
   ActionsManagerComponent "{C97BE5489221AE18}" {
    ActionContexts {
     UserActionContext "{68FF6DA93A568BA0}" {
@@ -18,6 +28,43 @@ Vehicle : "{CBD8C2393BE87581}Prefabs/Vehicles/Core/Helicopter_Base.et" {
      UIInfo SCR_ActionContextUIInfo "{68FF6DA900CFC06F}" {
      }
      VisibilityRange 3
+    }
+    AG0_VehicleTDLNetworkAction "{6970B85F849ACF1C}" {
+     ParentContextList {
+      "tdl_crypto"
+     }
+     UIInfo SCR_ActionContextUIInfo "{6970B8407CCA5ABB}" {
+     }
+     m_bPilotOnly 0
+     m_aDefinedCompartmentSectionsOnly {
+      0
+     }
+     m_eForceWaveform BFT2
+    }
+    AG0_VehicleTDLNetworkAction "{6970B8404D227429}" {
+     ParentContextList {
+      "tdl_crypto"
+     }
+     UIInfo SCR_ActionContextUIInfo "{6970B8404D227B8A}" {
+     }
+     m_bPilotOnly 0
+     m_aDefinedCompartmentSectionsOnly {
+      0
+     }
+     m_bCreateNetwork 1
+     m_eForceWaveform LINK16
+    }
+    AG0_VehicleTDLNetworkAction "{6970B84043818454}" {
+     ParentContextList {
+      "tdl_crypto"
+     }
+     UIInfo SCR_ActionContextUIInfo "{6970B84043818432}" {
+     }
+     m_bPilotOnly 0
+     m_aDefinedCompartmentSectionsOnly {
+      0
+     }
+     m_eForceWaveform LINK16
     }
    }
   }

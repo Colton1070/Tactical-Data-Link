@@ -12,15 +12,15 @@ class AG0_MapMarkerTDL : SCR_MapMarkerEntity
 	
     void SetDeviceRplId(RplId deviceRplId)
     {
-		PrintFormat("Setting deviceRplId for marker to %1", deviceRplId);
         m_DeviceRplId = deviceRplId;
         Replication.BumpMe(); // Trigger replication to clients
     }
-	
+
 	void OnDeviceRplIdChanged()
 	{
-		PrintFormat("Setting deviceRplId locally for marker to %1", m_DeviceRplId);
-	    SetLocalVisible(false); // Start hidden, let update cycle show if needed
+		// Start hidden — the next OnUpdatePosition / RefreshAllMarkerVisibility
+		// tick will flip visibility on if the local player can see the device.
+		SetLocalVisible(false);
 	}
 
 	override void EOnInit(IEntity owner)
@@ -46,14 +46,16 @@ class AG0_MapMarkerTDL : SCR_MapMarkerEntity
 	protected override void OnUpdatePosition()
 	{
 	    super.OnUpdatePosition();
-	    PrintFormat("Device marker %1 changed position: ", m_DeviceRplId);
-	    // Only check on clients with valid device ID
+
+	    // Templates with no bound RplId are filtered at registration; if we
+	    // still see an invalid id here it's a marker mid-replication and we
+	    // simply hold the last-known visibility until the next tick.
 	    if (m_DeviceRplId == RplId.Invalid())
 	        return;
-	        
+
 	    SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
 	    if (!pc) return;
-	    
+
 	    bool shouldShow = pc.CanSeeDevice(m_DeviceRplId);
 	    SetLocalVisible(shouldShow);
 	}

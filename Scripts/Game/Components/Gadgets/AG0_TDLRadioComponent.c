@@ -26,24 +26,11 @@ class AG0_TDLRadioComponent : SCR_RadioComponent
 	
 	[RplProp(onRplName: "OnKeyReplicated")]
 	protected string m_sCurrentCryptoKey;
-	
-	[RplProp()]
-	protected int m_iCurrentNetworkID = -1;
-	
-	[RplProp()]
-	protected ref array<RplId> m_aConnectedRadioIDs = {};
-	
+
 	protected string m_sDefaultCryptoKey;
-	
+
 	protected RplIdentity mfkerRplIdentity;
 	protected RplIdentity serverRplIdentity;
-	
-	
-	[RplProp()]
-	protected ref array<ref AG0_TDLNetworkMember> m_mArrayConnectedMembers = new array<ref AG0_TDLNetworkMember>();
-	
-	[RplProp()]
-	protected ref array<RplId> m_mConnectedMembers = new array<RplId>();
 	
 	[Attribute(defvalue: "1", desc: "Block transmit while receiving on same frequency (half-duplex operation)", category: "TDL Radio")]
 	protected bool m_bHalfDuplexEnabled;

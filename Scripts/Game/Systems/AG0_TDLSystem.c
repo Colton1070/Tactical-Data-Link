@@ -9,13 +9,25 @@ class AG0_TDLBridgeLink
 {
     int m_iNetworkA;
     int m_iNetworkB;
+    // BRIDGE-capable device on whichever network it happens to be joined to.
+    // Informational — used for logging and any UI that wants to surface
+    // "who's bridging." Consumer-side reachability gating uses the player ID
+    // below so we can resolve a per-network device on demand.
     RplId m_BridgeDeviceRplId;
+    // PlayerID of the user whose carried devices span the two networks. The
+    // bridge is the player, not the device — to be usable from a given member
+    // of network A, the member must be able to mesh-reach the PLAYER's
+    // network-A device (which may be a different device than the one stored
+    // in m_BridgeDeviceRplId, since a player carrying e.g. a PRC 161 on
+    // LINK16 and an MPU5 on MPU5 has the BRIDGE bit on only one of them).
+    int m_iBridgingPlayerId;
 
-    void AG0_TDLBridgeLink(int netA, int netB, RplId bridgeDevice)
+    void AG0_TDLBridgeLink(int netA, int netB, RplId bridgeDevice, int playerId)
     {
         m_iNetworkA = netA;
         m_iNetworkB = netB;
         m_BridgeDeviceRplId = bridgeDevice;
+        m_iBridgingPlayerId = playerId;
     }
 
     bool InvolvesNetwork(int networkId)
@@ -29,6 +41,8 @@ class AG0_TDLBridgeLink
         if (networkId == m_iNetworkB) return m_iNetworkA;
         return -1;
     }
+
+    int GetBridgingPlayerId() { return m_iBridgingPlayerId; }
 }
 
 class AG0_TDLNetwork
@@ -94,6 +108,11 @@ class AG0_TDLNetwork
     string GetNetworkName() { return m_sNetworkName; }
     string GetNetworkPassword() { return m_sNetworkPassword; }
     int GetWaveform() { return m_eWaveform; }
+
+    // Derived from waveform — satellite-ness is intrinsic to the waveform
+    // tech, not stored on the network. A network with SATCOM_WAVEFORMS bits
+    // in its mask is a satellite network; otherwise terrestrial.
+    bool IsSatellite() { return AG0_TDLWaveformInfo.IsSatellite(m_eWaveform); }
     array<AG0_TDLDeviceComponent> GetNetworkDevices() { return m_aNetworkDevices; }
     map<RplId, ref AG0_TDLNetworkMember> GetDeviceData() { return m_mDeviceData; }
     set<int> GetLastNotifiedPlayerIds() { return m_aLastNotifiedPlayerIds; }
@@ -1199,6 +1218,22 @@ class AG0_TDLSystem : WorldSystem
 	        return;
 	    }
 
+	    // Template-instance guard: GM spawn-catalog entries carry our component
+	    // but never get a bound RplId (they're parented to GameMode_GameMaster_Full,
+	    // origin <0,0,0>, used only as the prototype the GM clones from). Bringing
+	    // them into the registry pollutes connectivity calcs, spatial grids, and
+	    // the marker pipeline — marker creation downstream fails on the invalid
+	    // RplId and leaves orphan markers floating. Real spawned-from-template
+	    // instances arrive with a valid RplId by the time the 2500ms deferred
+	    // RegisterWithTDLSystem fires, so this gate excludes templates without
+	    // affecting normal devices.
+	    if (device.GetDeviceRplId() == RplId.Invalid())
+	    {
+	        Print(string.Format("TDL_DEVICE_REGISTRATION: Skipping device with invalid RplId (likely GM catalog template) owner=%1",
+	            device.GetOwner()), LogLevel.DEBUG);
+	        return;
+	    }
+
 	    // Mod-conflict guard: if another AG0_TDLDeviceComponent already registered
 	    // on the SAME owner entity, REJECT this duplicate registration. Why
 	    // first-wins instead of last-writer-wins:
@@ -1244,12 +1279,14 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    m_fTimeSinceGridRebuild = 999.0;
 	    
+	    // Shutdown order can null-out callback entries before device OnDelete drains
 	    foreach (AG0_TDLMapMarkerEntry markerEntry : m_MarkerCallbacks)
 	    {
+	        if (!markerEntry) continue;
 	        markerEntry.OnDeviceRegistered(device);
 	    }
 	}
-    
+
     //------------------------------------------------------------------------------------------------
     void UnregisterDevice(AG0_TDLDeviceComponent device)
 	{
@@ -1296,16 +1333,26 @@ class AG0_TDLSystem : WorldSystem
 	    if (networksRemoved > 0)
 	        Print(string.Format("TDL_NETWORK_CLEANUP: Removed %1 empty networks", networksRemoved), LogLevel.DEBUG);
 	    
+	    // Shutdown order can null-out callback entries before device OnDelete drains
 	    foreach (AG0_TDLMapMarkerEntry markerEntry : m_MarkerCallbacks)
 	    {
+	        if (!markerEntry) continue;
 	        markerEntry.OnDeviceUnregistered(device);
 	    }
 	}
     
     //------------------------------------------------------------------------------------------------
     // Network creation and management
+    //
+    // waveformOverride: when 0 (default), the new network inherits the creator's
+    // full waveform mask, preserving existing single-network-per-create
+    // behavior. When non-zero, the network is born with ONLY that waveform bit
+    // — used by the vehicle action's m_eForceWaveform path so a device with
+    // BFT2 + LINK16 can author a LINK16-only network without dragging its
+    // satellite bit into a terrestrial mesh. Caller is responsible for
+    // validating that the override is a subset of the creator's mask.
     //------------------------------------------------------------------------------------------------
-    int CreateNetwork(AG0_TDLDeviceComponent creator, string networkName, string password)
+    int CreateNetwork(AG0_TDLDeviceComponent creator, string networkName, string password, int waveformOverride = 0)
 	{
 	    if (!Replication.IsServer()) return -1;
 	    if (!creator || !creator.CanAccessNetwork())
@@ -1324,37 +1371,58 @@ class AG0_TDLSystem : WorldSystem
 	        return -1;
 	    }
 
-	    Print(string.Format("TDL_NETWORK_CREATE: Attempting to create network '%1' by %2", networkName, playerName), LogLevel.DEBUG);
-	    
-	    // Check for existing network with same credentials AND compatible waveform.
-	    // Same name+password on a different waveform is a distinct network — allow creation.
+	    int effectiveWaveform = waveformOverride;
+	    if (effectiveWaveform == 0)
+	        effectiveWaveform = creator.GetWaveform();
+
+	    // Satellite-ness derives from the effective waveform, not the device.
+	    // A device with mixed BFT2 + LINK16 waveforms creates satellite vs
+	    // terrestrial networks depending on which bit the action targets via
+	    // waveformOverride.
+	    bool isSatellite = AG0_TDLWaveformInfo.IsSatellite(effectiveWaveform);
+
+	    Print(string.Format("TDL_NETWORK_CREATE: Attempting to create network '%1' by %2 (waveform=%3, satellite=%4)",
+	        networkName, playerName, effectiveWaveform, isSatellite), LogLevel.DEBUG);
+
+	    // Check for existing network with same credentials AND compatible
+	    // waveform. Network's IsSatellite is derived from its waveform mask
+	    // so the satellite-ness compatibility check is folded into the
+	    // waveform-bit intersection — a candidate network can only match if
+	    // it shares a waveform bit with effectiveWaveform, and those bits
+	    // intrinsically have matching satellite-ness.
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        if (network.GetNetworkName() == networkName && network.GetNetworkPassword() == password
-	            && (creator.GetWaveform() & network.GetWaveform()) != 0)
+	            && (effectiveWaveform & network.GetWaveform()) != 0
+	            && network.IsSatellite() == isSatellite)
 	        {
 	            Print(string.Format("TDL_NETWORK_CREATE: Network '%1' already exists with compatible waveform, joining instead", networkName), LogLevel.DEBUG);
-	            JoinNetwork(creator, networkName, password);
+	            JoinNetwork(creator, networkName, password, waveformOverride);
 	            return network.GetNetworkID();
 	        }
 	    }
-	    
-	    // Create new network — inherits waveform from the creating device
-	    AG0_ETDLWaveform creatorWaveform = creator.GetWaveform();
-	    AG0_TDLNetwork newNetwork = new AG0_TDLNetwork(m_iNextNetworkID++, networkName, password, creatorWaveform);
+
+	    AG0_TDLNetwork newNetwork = new AG0_TDLNetwork(m_iNextNetworkID++, networkName, password, effectiveWaveform);
 	    newNetwork.AddDevice(creator, deviceRplId, creator.GetDisplayName(), position);
 	    m_aNetworks.Insert(newNetwork);
-	    
-	    Print(string.Format("TDL_NETWORK_CREATE: Successfully created network '%1' (ID: %2, Waveform: %3)", 
-	        networkName, newNetwork.GetNetworkID(), creatorWaveform), LogLevel.DEBUG);
-	    
-	    NotifyNetworkJoined(creator, newNetwork.GetNetworkID(), newNetwork.GetDeviceData());
+
+	    Print(string.Format("TDL_NETWORK_CREATE: Successfully created network '%1' (ID: %2, Waveform: %3, Satellite: %4)",
+	        networkName, newNetwork.GetNetworkID(), effectiveWaveform, isSatellite), LogLevel.DEBUG);
+
+	    NotifyNetworkJoined(creator, newNetwork.GetNetworkID(), newNetwork.GetWaveform(), newNetwork.GetDeviceData());
 		ApiNotifyNetworkCreated(newNetwork, playerName);
-	    
+
 	    return newNetwork.GetNetworkID();
 	}
     
-    bool JoinNetwork(AG0_TDLDeviceComponent device, string networkName, string password)
+    // waveformOverride: when 0, uses the device's full waveform mask for
+    // compatibility checks. When non-zero, only that single bit is considered
+    // — symmetric with CreateNetwork's override so a vehicle action's
+    // designated-waveform path can target a specific network type even on a
+    // multi-waveform device. Satellite create-on-join: when the joining device
+    // is satellite-mode and no matching network exists, this falls through to
+    // CreateNetwork. Terrestrial behavior is unchanged.
+    bool JoinNetwork(AG0_TDLDeviceComponent device, string networkName, string password, int waveformOverride = 0)
 	{
 	    if (!Replication.IsServer()) return false;
 	    if (!device || !device.CanAccessNetwork())
@@ -1372,38 +1440,77 @@ class AG0_TDLSystem : WorldSystem
 	        Print("TDL_NETWORK_JOIN: Invalid device RplId", LogLevel.DEBUG);
 	        return false;
 	    }
-	    
-	    Print(string.Format("TDL_NETWORK_JOIN: %1 attempting to join network '%2'", playerName, networkName), LogLevel.DEBUG);
-	    
+
+	    int effectiveWaveform = waveformOverride;
+	    if (effectiveWaveform == 0)
+	        effectiveWaveform = device.GetWaveform();
+
+	    // Satellite-ness derives from the effective waveform. A multi-waveform
+	    // device targeting LINK16 (terrestrial) via override and the same
+	    // device targeting BFT2 (satellite) via override produce categorically
+	    // different operations — this gate ensures they're tested against the
+	    // right kind of existing network.
+	    bool isSatellite = AG0_TDLWaveformInfo.IsSatellite(effectiveWaveform);
+
+	    Print(string.Format("TDL_NETWORK_JOIN: %1 attempting to join network '%2' (waveform=%3, satellite=%4)",
+	        playerName, networkName, effectiveWaveform, isSatellite), LogLevel.DEBUG);
+
 	    // Find matching networks
 	    array<AG0_TDLNetwork> matchingNetworks = new array<AG0_TDLNetwork>();
-	    
+
 	    foreach (AG0_TDLNetwork network : m_aNetworks)
 	    {
 	        if (network.GetNetworkName() == networkName && network.GetNetworkPassword() == password)
 	            matchingNetworks.Insert(network);
 	    }
-	    
+
 	    if (matchingNetworks.IsEmpty())
 	    {
+	        // Satellite create-on-join: a satellite-mode device joining a
+	        // name+password that doesn't exist yet auto-creates it. This
+	        // matches the real BFT-2 mental model where you don't really
+	        // "create" or "join" a satellite network in the terrestrial sense
+	        // — you just configure your terminal for a group ID and you're on
+	        // it. Terrestrial joins continue to fail loudly so existing
+	        // behavior is preserved.
+	        if (isSatellite)
+	        {
+	            Print(string.Format("TDL_NETWORK_JOIN: Satellite create-on-join — no matching network '%1', creating one", networkName), LogLevel.DEBUG);
+	            int newId = CreateNetwork(device, networkName, password, waveformOverride);
+	            return newId > 0;
+	        }
+
 	        Print(string.Format("TDL_NETWORK_JOIN: No matching networks found for '%1'", networkName), LogLevel.DEBUG);
 	        return false;
 	    }
-	    
+
 	    Print(string.Format("TDL_NETWORK_JOIN: Found %1 matching networks", matchingNetworks.Count()), LogLevel.DEBUG);
-	    
-	    // Check if in range of any existing network device — waveform must be compatible
+
+	    // Check if in range of any existing network device — waveform must be
+	    // compatible AND satellite-ness must match (terrestrial radio can't
+	    // physically uplink to a satellite network, and vice versa).
 	    foreach (AG0_TDLNetwork network : matchingNetworks)
 	    {
-	        // Waveform gate: joining device must share at least one waveform bit with the network
-	        if ((device.GetWaveform() & network.GetWaveform()) == 0)
+	        if ((effectiveWaveform & network.GetWaveform()) == 0)
 	        {
 	            Print(string.Format("TDL_NETWORK_JOIN: Device waveform %1 incompatible with network waveform %2, skipping",
-	                device.GetWaveform(), network.GetWaveform()), LogLevel.DEBUG);
+	                effectiveWaveform, network.GetWaveform()), LogLevel.DEBUG);
 	            continue;
 	        }
-	        
-	        if (IsDeviceInNetworkRange(device, network))
+
+	        if (network.IsSatellite() != isSatellite)
+	        {
+	            Print(string.Format("TDL_NETWORK_JOIN: Satellite-mode mismatch (device=%1, network=%2), skipping",
+	                isSatellite, network.IsSatellite()), LogLevel.DEBUG);
+	            continue;
+	        }
+
+	        // Satellite networks bypass spatial range — the hub abstraction
+	        // means the device is always "in range" of the network as long as
+	        // it has a satellite uplink (which it does by virtue of being
+	        // satellite-mode and powered).
+	        bool inRange = isSatellite || IsDeviceInNetworkRange(device, network);
+	        if (inRange)
 	        {
 	            Print(string.Format("TDL_NETWORK_JOIN: Device in range of network '%1', joining", network.GetNetworkName()), LogLevel.DEBUG);
 	            network.AddDevice(device, deviceRplId, device.GetDisplayName(), position);
@@ -1417,51 +1524,98 @@ class AG0_TDLSystem : WorldSystem
 	    return false;
 	}
     
+    // No-arg variant: removes the device from EVERY network it's currently in.
+    // The old single-network world only ever had one membership so the loop
+    // broke after the first hit; for the multi-network world the device may
+    // appear in several networks (e.g. a ground station on LINK16 + BFT2) and
+    // the no-arg call is the "drop everything" semantic. Targeted single-
+    // network leaves use LeaveNetworkById below.
     void LeaveNetwork(AG0_TDLDeviceComponent device)
     {
         if (!Replication.IsServer()) return;
 
+        array<AG0_TDLNetwork> networksToLeave = new array<AG0_TDLNetwork>();
         foreach (AG0_TDLNetwork network : m_aNetworks)
         {
             if (network.GetNetworkDevices().Contains(device))
-            {
-                // Capture the id from the network — never from device.GetCurrentNetworkID(),
-                // which may have been pre-cleared to -1 by the user action's server-side run.
-                // Capture stableId here too so the API can correctly key the deletion
-                // event after the network ref is gone.
-                int leftNetworkId = network.GetNetworkID();
-                string leftNetworkStableId = network.GetStableId();
-                string leftNetworkName = network.GetNetworkName();
-
-                network.RemoveDevice(device);
-                NotifyNetworkLeft(device, leftNetworkId);
-				ApiNotifyDeviceLeft(leftNetworkId, leftNetworkStableId, leftNetworkName, device.GetDisplayName());
-
-                if (network.HasDevices())
-                {
-                    NotifyNetworkMembersUpdated(network);
-                }
-                else
-                {
-                    // Tell the web API the network is gone BEFORE removing it locally.
-                    // Without this call the web map keeps the now-empty network as a
-                    // zombie entry — and any device that subsequently joins or has its
-                    // callsign updated appears to be "in two networks" because the
-                    // zombie membership never gets refreshed or removed. This is the
-                    // same omission that caused both the leave→create double-network
-                    // bug AND the "callsign doesn't propagate" symptom against the web
-                    // map (the zombie membership's callsign field has no live device
-                    // backing it server-side, so it never updates).
-                    //
-                    // Mirrors the symmetric call in the empty-network cleanup loop
-                    // (~line 793) which already does this for the periodic-tick path.
-                    ApiNotifyNetworkDeleted(leftNetworkId, leftNetworkStableId, leftNetworkName);
-                    m_aNetworks.RemoveItem(network);
-                }
-
-                break;
-            }
+                networksToLeave.Insert(network);
         }
+
+        foreach (AG0_TDLNetwork network : networksToLeave)
+        {
+            DoLeaveNetwork(device, network);
+        }
+    }
+
+    // Targeted variant: removes the device from a single specific network.
+    // Used by the vehicle action with a designated waveform, and by anything
+    // that needs to surgically detach without touching other memberships.
+    void LeaveNetworkById(AG0_TDLDeviceComponent device, int networkId)
+    {
+        if (!Replication.IsServer()) return;
+        if (networkId <= 0) return;
+
+        AG0_TDLNetwork network = FindNetworkByID(networkId);
+        if (!network) return;
+        if (!network.GetNetworkDevices().Contains(device)) return;
+
+        DoLeaveNetwork(device, network);
+    }
+
+    // Waveform-targeted variant: finds the first joined network whose waveform
+    // mask shares a bit with `waveform` and removes the device from it. Used
+    // by vehicle actions whose m_eForceWaveform pins the operation to a
+    // specific waveform — the action layer doesn't know networkIDs, only the
+    // waveform it cares about, and asks the system to resolve.
+    void LeaveNetworkByWaveform(AG0_TDLDeviceComponent device, int waveform)
+    {
+        if (!Replication.IsServer()) return;
+        if (!device) return;
+        if (waveform == 0) return;
+
+        array<int> joinedIds = device.GetJoinedNetworkIDs();
+        foreach (int netId : joinedIds)
+        {
+            AG0_TDLNetwork network = FindNetworkByID(netId);
+            if (!network) continue;
+            if ((network.GetWaveform() & waveform) == 0) continue;
+            DoLeaveNetwork(device, network);
+            return;
+        }
+    }
+
+    // Shared body for the two variants above. Pulled out so the API-event and
+    // empty-network-cleanup logic stays in lockstep across both call paths;
+    // the only difference between the no-arg and targeted variants is which
+    // network(s) get fed into this helper.
+    protected void DoLeaveNetwork(AG0_TDLDeviceComponent device, AG0_TDLNetwork network)
+    {
+        // Capture identifiers BEFORE removing the device, because the network
+        // object may be destroyed in the empty-cleanup branch below and we
+        // still need stableId for the ApiNotifyNetworkDeleted call.
+        int leftNetworkId = network.GetNetworkID();
+        string leftNetworkStableId = network.GetStableId();
+        string leftNetworkName = network.GetNetworkName();
+
+        network.RemoveDevice(device);
+        NotifyNetworkLeft(device, leftNetworkId);
+        ApiNotifyDeviceLeft(leftNetworkId, leftNetworkStableId, leftNetworkName, device.GetDisplayName());
+
+        if (network.HasDevices())
+        {
+            NotifyNetworkMembersUpdated(network);
+            return;
+        }
+
+        // Empty-network cleanup. Tell the web API the network is gone BEFORE
+        // removing it locally — otherwise the web map keeps the now-empty
+        // network as a zombie entry, and any device that subsequently joins
+        // or has its callsign updated appears "in two networks" because the
+        // zombie membership never gets refreshed or removed. Mirrors the
+        // symmetric call in the empty-network cleanup loop (~line 793) which
+        // already does this for the periodic-tick path.
+        ApiNotifyNetworkDeleted(leftNetworkId, leftNetworkStableId, leftNetworkName);
+        m_aNetworks.RemoveItem(network);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1470,76 +1624,114 @@ class AG0_TDLSystem : WorldSystem
     bool IsDeviceInNetworkRange(AG0_TDLDeviceComponent device, AG0_TDLNetwork network)
     {
         if (!device || !network) return false;
-        
+
         m_aProcessedDevices.Clear();
         m_aConnectedDevices.Clear();
-        
+
         foreach (AG0_TDLDeviceComponent networkDevice : network.GetNetworkDevices())
         {
             if (networkDevice == device) return true;
-            
-            FindConnectedDevices(networkDevice, device);
-            
+
+            FindConnectedDevices(networkDevice, device, network);
+
             if (m_aConnectedDevices.Contains(device))
                 return true;
         }
-        
+
         return false;
     }
     
-    bool AreDevicesConnected(AG0_TDLDeviceComponent deviceA, AG0_TDLDeviceComponent deviceB)
+    // context: when non-null, restricts the waveform-intersection to bits the
+    // network actually operates on. Required so two helicopters with BFT2 +
+    // LINK16 capability that are only joined to a LINK16 network don't get a
+    // satellite-shortcut connection — the BFT2 bit is in both their masks
+    // but the network they're on doesn't carry it, so the satellite path
+    // isn't live. Caller passes the network being evaluated; the legacy
+    // no-context overload preserves the old "any shared waveform" semantic
+    // for the few call sites without a network in scope.
+    bool AreDevicesConnected(AG0_TDLDeviceComponent deviceA, AG0_TDLDeviceComponent deviceB, AG0_TDLNetwork context = null)
 	{
 	    if (!deviceA || !deviceB) return false;
 	    if (!deviceA.CanAccessNetwork() || !deviceB.CanAccessNetwork()) return false;
-	    
+
 	    // Waveform gate: devices must share at least one waveform bit to link at the RF layer
-	    if ((deviceA.GetWaveform() & deviceB.GetWaveform()) == 0)
+	    int sharedWaveforms = deviceA.GetWaveform() & deviceB.GetWaveform();
+	    if (sharedWaveforms == 0)
 	        return false;
-	    
+
+	    // Scope by network when provided. A capability-level shared waveform
+	    // (BFT2 on both devices) is only an active link if it's also a
+	    // waveform the current network carries. Without this, two helicopters
+	    // with BFT2 capability that are only on a LINK16 network would still
+	    // "connect" via the satellite shortcut despite neither being logged
+	    // into a BFT2 network.
+	    if (context)
+	    {
+	        sharedWaveforms = sharedWaveforms & context.GetWaveform();
+	        if (sharedWaveforms == 0)
+	            return false;
+	    }
+
+	    // If any in-scope shared waveform is satellite-tier (BFT2, etc.) the
+	    // pair has a satellite path available — the implicit hub (Iridium
+	    // constellation or equivalent NOC) makes range a non-factor for that
+	    // link. Devices that share only terrestrial waveforms within scope
+	    // fall through to the LOS distance check.
+	    if (AG0_TDLWaveformInfo.IsSatellite(sharedWaveforms))
+	    {
+	        LogConnectivityCheck(deviceA, deviceB, true, 0, 0);
+	        return true;
+	    }
+
 	    vector posA = deviceA.GetOwner().GetOrigin();
 	    vector posB = deviceB.GetOwner().GetOrigin();
-	    
+
 	    float rangeA = deviceA.GetEffectiveNetworkRange();
 	    float rangeB = deviceB.GetEffectiveNetworkRange();
 	    float maxPossibleRange = Math.Max(rangeA, rangeB);
-	    
+
 	    // OPTIMIZATION: Early rejection using axis-aligned bounding box (AABB)
 	    if (Math.AbsFloat(posA[0] - posB[0]) > maxPossibleRange) return false;
 	    if (Math.AbsFloat(posA[1] - posB[1]) > maxPossibleRange) return false;
 	    if (Math.AbsFloat(posA[2] - posB[2]) > maxPossibleRange) return false;
-	    
+
 	    float distance = vector.Distance(posA, posB);
 	    float maxRange = Math.Min(rangeA, rangeB);
-	    
+
 	    bool connected = distance <= maxRange;
-	    
+
 	    LogConnectivityCheck(deviceA, deviceB, connected, distance, maxRange);
-	    
+
 	    return connected;
 	}
     
-    protected void FindConnectedDevices(AG0_TDLDeviceComponent source, AG0_TDLDeviceComponent target)
+    // context: forwarded to AreDevicesConnected so the chain-walk only follows
+    // links that the network actually carries. Without this a capability-level
+    // satellite waveform on intermediate devices would let two terrestrial-
+    // network helicopters "connect" through a satellite-shortcut they aren't
+    // actually using.
+    protected void FindConnectedDevices(AG0_TDLDeviceComponent source, AG0_TDLDeviceComponent target, AG0_TDLNetwork context = null)
     {
         if (m_aProcessedDevices.Contains(source)) return;
-        
+
         m_aProcessedDevices.Insert(source);
-        
+
         if (!source.CanAccessNetwork()) return;
-        
-        if (AreDevicesConnected(source, target))
+
+        if (AreDevicesConnected(source, target, context))
         {
             m_aConnectedDevices.Insert(target);
             return;
         }
-        
+
         foreach (AG0_TDLDeviceComponent device : m_aRegisteredNetworkDevices)
         {
             if (device == source || m_aProcessedDevices.Contains(device)) continue;
             if (!device.CanAccessNetwork()) continue;
-            
-            if (AreDevicesConnected(source, device))
+
+            if (AreDevicesConnected(source, device, context))
             {
-                FindConnectedDevices(device, target);
+                FindConnectedDevices(device, target, context);
             }
         }
     }
@@ -1608,14 +1800,21 @@ class AG0_TDLSystem : WorldSystem
             {
                 AG0_TDLNetwork networkB = m_aNetworks[j];
                 
-                if (networkA.GetNetworkName() != networkB.GetNetworkName() || 
+                if (networkA.GetNetworkName() != networkB.GetNetworkName() ||
                     networkA.GetNetworkPassword() != networkB.GetNetworkPassword())
                     continue;
-                
+
                 // Only merge networks that share at least one waveform bit.
                 // Incompatible-waveform networks with matching credentials are bridged,
                 // not merged — bridging is handled separately by UpdateBridgeLinks().
                 if ((networkA.GetWaveform() & networkB.GetWaveform()) == 0)
+                    continue;
+
+                // Satellite and terrestrial networks with matching credentials
+                // are categorically distinct — never merge across that line.
+                // A BFT-2 SATCOM network and a coincidentally-named LINK16
+                // mesh stay independent even if some device authored both.
+                if (networkA.IsSatellite() != networkB.IsSatellite())
                     continue;
                 
                 bool canMerge = false;
@@ -1709,12 +1908,19 @@ class AG0_TDLSystem : WorldSystem
                     hasBridgeCapability = true;
                     bridgeDeviceRplId = device.GetDeviceRplId();
                 }
-                
+
                 if (!device.IsPowered()) continue;
-                
-                int netId = device.GetCurrentNetworkID();
-                if (netId > 0 && playerNetworkIds.Find(netId) == -1)
-                    playerNetworkIds.Insert(netId);
+
+                // Multi-network devices contribute every network they're on,
+                // not just a "primary" — a single device with LINK16 + BFT2
+                // memberships now correctly registers both for bridge-pair
+                // enumeration in the inner double-loop below.
+                array<int> deviceNetIds = device.GetJoinedNetworkIDs();
+                foreach (int netId : deviceNetIds)
+                {
+                    if (netId > 0 && playerNetworkIds.Find(netId) == -1)
+                        playerNetworkIds.Insert(netId);
+                }
             }
             
             // Need at least 2 distinct networks and BRIDGE capability to form a link
@@ -1742,7 +1948,7 @@ class AG0_TDLSystem : WorldSystem
                     
                     if (!alreadyLinked)
                     {
-                        m_aBridgeLinks.Insert(new AG0_TDLBridgeLink(netA, netB, bridgeDeviceRplId));
+                        m_aBridgeLinks.Insert(new AG0_TDLBridgeLink(netA, netB, bridgeDeviceRplId, playerId));
                         Print(string.Format("TDL_BRIDGE: Active link Network %1 <-> Network %2 via player %3",
                             netA, netB, playerMgr.GetPlayerName(playerId)), LogLevel.DEBUG);
                     }
@@ -1755,20 +1961,50 @@ class AG0_TDLSystem : WorldSystem
     // Append members from bridged networks into a device's connectedMembers map.
     // Called from UpdateNetworkConnectivity before NotifyNetworkConnectivity so that
     // bridged SA flows through the existing notification path transparently.
+    //
+    // Reachability gate: the bridge is "the player and their two radios," not a
+    // network-scope fact. For a member of our network to receive the foreign
+    // picture they must be able to mesh-reach (via m_aConnectedDevices) one of
+    // the bridging player's our-network devices. Without this, a far-network
+    // member with no path to the bridging player would still see the bridged
+    // picture, which is unphysical — you can't get SA from a gateway you can't
+    // talk to.
     //------------------------------------------------------------------------------------------------
     protected void AppendBridgedMembers(AG0_TDLNetwork network, AG0_TDLDeviceComponent device,
                                         inout map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
     {
         int myNetworkId = network.GetNetworkID();
-        
+        PlayerManager playerMgr = GetGame().GetPlayerManager();
+
         foreach (AG0_TDLBridgeLink link : m_aBridgeLinks)
         {
             if (!link.InvolvesNetwork(myNetworkId)) continue;
-            
+
             int foreignNetworkId = link.GetOtherNetwork(myNetworkId);
             AG0_TDLNetwork foreignNetwork = FindNetworkByID(foreignNetworkId);
             if (!foreignNetwork) continue;
-            
+
+            // Resolve the bridging player and find their device(s) joined to
+            // OUR network. If none are mesh-reachable from `device` in this
+            // network, the bridge isn't usable from here — skip this link.
+            if (!playerMgr) continue;
+            IEntity bridgingPlayer = playerMgr.GetPlayerControlledEntity(link.GetBridgingPlayerId());
+            if (!bridgingPlayer) continue;
+
+            array<AG0_TDLDeviceComponent> bridgingPlayerDevices = GetPlayerAllTDLDevices(bridgingPlayer);
+            bool canReachBridge = false;
+            foreach (AG0_TDLDeviceComponent bridgingPlayerDevice : bridgingPlayerDevices)
+            {
+                if (!bridgingPlayerDevice) continue;
+                if (!bridgingPlayerDevice.IsInNetworkById(myNetworkId)) continue;
+                if (m_aConnectedDevices.Contains(bridgingPlayerDevice))
+                {
+                    canReachBridge = true;
+                    break;
+                }
+            }
+            if (!canReachBridge) continue;
+
             foreach (AG0_TDLDeviceComponent foreignDevice : foreignNetwork.GetNetworkDevices())
             {
                 RplId foreignRplId = foreignDevice.GetDeviceRplId();
@@ -1798,11 +2034,10 @@ class AG0_TDLSystem : WorldSystem
                 IEntity foreignPlayer = GetPlayerFromDevice(foreignDevice);
                 int aggregatedCaps = 0;
                 int foreignOwnerPlayerId = -1;
-                if (foreignPlayer)
+                if (foreignPlayer && playerMgr)
                 {
-                    PlayerManager playerMgr = GetGame().GetPlayerManager();
                     foreignOwnerPlayerId = playerMgr.GetPlayerIdFromControlledEntity(foreignPlayer);
-                    
+
                     array<AG0_TDLDeviceComponent> foreignPlayerDevices = GetPlayerAllTDLDevices(foreignPlayer);
                     foreach (AG0_TDLDeviceComponent dev : foreignPlayerDevices)
                     {
@@ -1943,9 +2178,23 @@ class AG0_TDLSystem : WorldSystem
 							}
 							connectedData.SetOwnerPlayerId(ownerPlayerId);
 	                        
-	                        float effectiveRange = Math.Min(device.GetEffectiveNetworkRange(), 
-							                                connectedDevice.GetEffectiveNetworkRange());
-							float signalStrength = Math.Clamp(100.0 * (1.0 - (distance / effectiveRange)), 0.0, 100.0);
+	                        float signalStrength;
+	                        // Satellite pegs only when the network we're
+	                        // building connectivity for actually carries a
+	                        // satellite waveform AND the pair shares that bit.
+	                        // Capability-level satellite sharing without the
+	                        // network carrying it is not an active link.
+	                        int sharedWaveforms = device.GetWaveform() & connectedDevice.GetWaveform() & network.GetWaveform();
+	                        if (AG0_TDLWaveformInfo.IsSatellite(sharedWaveforms))
+	                        {
+	                            signalStrength = 100.0;
+	                        }
+	                        else
+	                        {
+	                            float effectiveRange = Math.Min(device.GetEffectiveNetworkRange(),
+	                                                            connectedDevice.GetEffectiveNetworkRange());
+	                            signalStrength = Math.Clamp(100.0 * (1.0 - (distance / effectiveRange)), 0.0, 100.0);
+	                        }
 							connectedData.SetSignalStrength(signalStrength);
 	                        
 	                        connectedMembers.Set(connectedRplId, connectedData);
@@ -2051,8 +2300,8 @@ class AG0_TDLSystem : WorldSystem
 	    {
 	        if (device == source || m_aProcessedDevices.Contains(device)) continue;
 	        if (!device.CanAccessNetwork()) continue;
-	        
-	        if (AreDevicesConnected(source, device))
+
+	        if (AreDevicesConnected(source, device, network))
 	        {
 	            if (!m_aConnectedDevices.Contains(device))
 	                m_aConnectedDevices.Insert(device);
@@ -2614,16 +2863,19 @@ class AG0_TDLSystem : WorldSystem
     //------------------------------------------------------------------------------------------------
     // RPC notifications
     //------------------------------------------------------------------------------------------------
-    protected void NotifyNetworkJoined(AG0_TDLDeviceComponent device, int networkID, map<RplId, ref AG0_TDLNetworkMember> memberData)
+    // Passes the network's waveform through so the device can maintain its
+    // m_iJoinedWaveformsMask (used by client-side action visibility checks
+    // without a server round-trip).
+    protected void NotifyNetworkJoined(AG0_TDLDeviceComponent device, int networkID, int networkWaveform, map<RplId, ref AG0_TDLNetworkMember> memberData)
     {
         array<RplId> deviceIDs = new array<RplId>();
-        foreach (RplId rplId, AG0_TDLNetworkMember member : memberData) 
-        { 
-            deviceIDs.Insert(rplId); 
+        foreach (RplId rplId, AG0_TDLNetworkMember member : memberData)
+        {
+            deviceIDs.Insert(rplId);
         }
-        device.OnNetworkJoined(networkID, deviceIDs);
+        device.OnNetworkJoined(networkID, networkWaveform, deviceIDs);
     }
-    
+
     protected void NotifyNetworkMembersUpdated(AG0_TDLNetwork network)
     {
 		PlayerManager playerMgr = GetGame().GetPlayerManager();
@@ -2631,7 +2883,7 @@ class AG0_TDLSystem : WorldSystem
 
         foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
         {
-            NotifyNetworkJoined(device, network.GetNetworkID(), network.GetDeviceData());
+            NotifyNetworkJoined(device, network.GetNetworkID(), network.GetWaveform(), network.GetDeviceData());
 
 			if (playerMgr)
 			{
@@ -2655,15 +2907,18 @@ class AG0_TDLSystem : WorldSystem
     }
     
     //! Notify the owning player's controller that a device left a specific network.
-    //! The caller MUST pass the actual networkId because device.GetCurrentNetworkID() may
-    //! have been pre-cleared to -1 on the server side (e.g. the user action's
-    //! LeaveNetworkTDL() runs on both client and server, and optimistically resets
-    //! m_iCurrentNetworkID before this path runs). Relying on the device's ID causes the
-    //! NotifyClearNetwork RPC to silently skip, which leaves ghost members in the
-    //! player's client-side m_mTDLNetworkMembersMap until the next stale-sweep tick.
+    //! The caller MUST pass the actual networkId because the device's joined-networks
+    //! list may have been pre-cleared on the server side (e.g. the user action's
+    //! LeaveNetworkTDL() runs on both client and server, and optimistically clears
+    //! the local set before this path runs). Relying on the device's primary ID
+    //! causes the NotifyClearNetwork RPC to silently skip, which leaves ghost
+    //! members in the player's client-side m_mTDLNetworkMembersMap until the
+    //! next stale-sweep tick. The networkId is now also propagated into the
+    //! device's OnNetworkLeft so a multi-network device removes only the
+    //! correct slot from its per-network state.
     protected void NotifyNetworkLeft(AG0_TDLDeviceComponent device, int networkId)
 	{
-	    device.OnNetworkLeft();
+	    device.OnNetworkLeft(networkId);
 
 	    IEntity player = GetPlayerFromDevice(device);
 	    if (!player) return;
@@ -2706,7 +2961,7 @@ class AG0_TDLSystem : WorldSystem
 	        deviceIDs.Insert(rplId);
 	    }
 
-	    device.OnNetworkConnectivityUpdated(deviceIDs);
+	    device.OnNetworkConnectivityUpdated(networkId, deviceIDs);
 
 	    array<ref AG0_TDLNetworkMember> membersArray = {};
 	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
@@ -2716,9 +2971,9 @@ class AG0_TDLSystem : WorldSystem
 
 	    if (device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
 	    {
-	        device.SetLocalNetworkMembers(membersArray);
-	        Print(string.Format("TDL_SYSTEM: Sent %1 members directly to INFORMATION device %2",
-	            membersArray.Count(), device.GetOwner()), LogLevel.DEBUG);
+	        device.SetLocalNetworkMembers(networkId, membersArray);
+	        Print(string.Format("TDL_SYSTEM: Sent %1 members for network %2 directly to INFORMATION device %3",
+	            membersArray.Count(), networkId, device.GetOwner()), LogLevel.DEBUG);
 	    }
 
 	    IEntity player = GetPlayerFromDevice(device);
@@ -3280,8 +3535,8 @@ class AG0_TDLSystem : WorldSystem
         {
             if (otherDevice == device) continue;
             if (!otherDevice.CanAccessNetwork()) continue;
-            
-            if (system.AreDevicesConnected(device, otherDevice))
+
+            if (system.AreDevicesConnected(device, otherDevice, network))
             {
                 RplId otherRplId = otherDevice.GetDeviceRplId();
                 if (otherRplId != RplId.Invalid())

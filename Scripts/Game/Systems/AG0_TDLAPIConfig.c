@@ -219,11 +219,17 @@ class AG0_TDLApiSubmitShapeCallback : RestCallback
 //------------------------------------------------------------------------------------------------
 class AG0_TDLApiDeleteShapeCallback : RestCallback
 {
+	protected AG0_TDLApiManager m_Manager;
 	protected string m_sShapeId;
 
 	//------------------------------------------------------------------------------------------------
-	void AG0_TDLApiDeleteShapeCallback(string shapeId)
+	//! Manager ref is required so the delete path can release the hot-gate
+	//! slot it claimed in SubmitShapeDelete and feed the shapes breaker.
+	//! Without it a sustained outage of delete traffic would slowly leak
+	//! gate slots until the manager could no longer send anything.
+	void AG0_TDLApiDeleteShapeCallback(AG0_TDLApiManager manager, string shapeId)
 	{
+		m_Manager = manager;
 		m_sShapeId = shapeId;
 		SetOnSuccess(OnSuccessHandler);
 		SetOnError(OnErrorHandler);
@@ -232,6 +238,8 @@ class AG0_TDLApiDeleteShapeCallback : RestCallback
 	//------------------------------------------------------------------------------------------------
 	void OnSuccessHandler(RestCallback cb)
 	{
+		if (m_Manager)
+			m_Manager.OnDeleteShapeCompleted(true, 0);
 		Print(string.Format("[TDL_SHAPES] DeleteShape API ok for %1", m_sShapeId), LogLevel.DEBUG);
 	}
 
@@ -239,6 +247,8 @@ class AG0_TDLApiDeleteShapeCallback : RestCallback
 	void OnErrorHandler(RestCallback cb)
 	{
 		int errorCode = cb.GetHttpCode();
+		if (m_Manager)
+			m_Manager.OnDeleteShapeCompleted(false, errorCode);
 		// 404 is fine — the shape might be LOCAL-origin (never persisted)
 		// or already gone server-side via another path.
 		LogLevel level = LogLevel.WARNING;
@@ -444,6 +454,188 @@ class AG0_TDLImageDeliverFetchSink : AG0_TDLPhotoFetchCallback
 }
 
 //------------------------------------------------------------------------------------------------
+//! In-flight slot tracker for a single RestContext. The engine's HTTP layer
+//! rejects new requests once 64 are outstanding on a context (confirmed by
+//! BI 2025-07-24; surfaces in logs as "Failed to queue up request, request
+//! limit reached for host ..."). That rejection is silent at the script
+//! layer — RestCallback.OnError does NOT fire, so callers think their POST
+//! went out when it never made it past the queue check. Each context wraps
+//! a gate with a soft cap well below 64; acquire on every call site, release
+//! in both success and error handlers.
+//!
+//! Acquire failure increments a drop counter and Tick() emits one aggregate
+//! "saturated" line per ~10s window, so a sustained host-side outage produces
+//! a handful of summary lines instead of one per dropped call.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLOutboundGate
+{
+	protected string m_sLabel;
+	protected int m_iSoftCap;
+	protected int m_iInFlight;
+
+	protected int m_iDroppedSinceLog;
+	protected float m_fTimeSinceSatLog;
+	protected const float SATURATION_LOG_INTERVAL = 10.0;
+
+	//------------------------------------------------------------------------------------------------
+	void AG0_TDLOutboundGate(string label, int softCap)
+	{
+		m_sLabel = label;
+		m_iSoftCap = softCap;
+		m_iInFlight = 0;
+		m_iDroppedSinceLog = 0;
+		m_fTimeSinceSatLog = SATURATION_LOG_INTERVAL;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Reserve a slot. Returns false when the soft cap is hit; caller is
+	//! expected to bail without touching the RestContext. Pairs with
+	//! Release() on the callback side — both success and error paths must
+	//! release or the gate leaks and eventually wedges shut.
+	bool TryAcquire()
+	{
+		if (m_iInFlight >= m_iSoftCap)
+		{
+			m_iDroppedSinceLog = m_iDroppedSinceLog + 1;
+			return false;
+		}
+		m_iInFlight = m_iInFlight + 1;
+		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void Release()
+	{
+		if (m_iInFlight > 0)
+			m_iInFlight = m_iInFlight - 1;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	int GetInFlight() { return m_iInFlight; }
+
+	//------------------------------------------------------------------------------------------------
+	//! Wall-clock-independent on purpose — driven by the caller's Update
+	//! timeSlice, so a stalled engine simply extends the log window rather
+	//! than firing a backlog of "saturated" lines the moment ticking resumes.
+	void Tick(float timeSlice)
+	{
+		m_fTimeSinceSatLog = m_fTimeSinceSatLog + timeSlice;
+		if (m_iDroppedSinceLog == 0)
+			return;
+		if (m_fTimeSinceSatLog < SATURATION_LOG_INTERVAL)
+			return;
+		Print(string.Format("[TDL_API] %1 outbound saturated — dropped %2 call(s) since last log (in-flight=%3 cap=%4)",
+			m_sLabel, m_iDroppedSinceLog, m_iInFlight, m_iSoftCap), LogLevel.WARNING);
+		m_iDroppedSinceLog = 0;
+		m_fTimeSinceSatLog = 0;
+	}
+}
+
+//------------------------------------------------------------------------------------------------
+//! Per-endpoint circuit breaker. After TRIP_THRESHOLD consecutive failures,
+//! refuses to send for an exponentially growing window (1s → 2s → 4s → … →
+//! 30s plateau). Sized for the outage shape observed 2026-05-23 where the
+//! host's outbound link flapped for ~30s windows and the mod fired hundreds
+//! of doomed /submit calls into the engine's 64-slot queue, starving even
+//! BI's own lobby heartbeat in the process.
+//!
+//! Independent of [[AG0_TDLOutboundGate]] — the gate stops "too many in
+//! flight right now"; the breaker stops "endpoint is known broken, stop
+//! pestering it for a while". A single failure outside an outage is fine;
+//! only consecutive failures trip.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLEndpointBreaker
+{
+	protected string m_sLabel;
+	protected int m_iConsecutiveFailures;
+	protected float m_fBackoffRemaining;
+	protected float m_fCurrentBackoff;
+
+	protected const int TRIP_THRESHOLD = 5;
+	protected const float BACKOFF_BASE = 1.0;
+	protected const float BACKOFF_CAP = 30.0;
+
+	//------------------------------------------------------------------------------------------------
+	void AG0_TDLEndpointBreaker(string label)
+	{
+		m_sLabel = label;
+		m_iConsecutiveFailures = 0;
+		m_fBackoffRemaining = 0;
+		m_fCurrentBackoff = 0;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	bool AllowSend()
+	{
+		return m_fBackoffRemaining <= 0;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void Tick(float timeSlice)
+	{
+		if (m_fBackoffRemaining <= 0)
+			return;
+		m_fBackoffRemaining = m_fBackoffRemaining - timeSlice;
+		if (m_fBackoffRemaining < 0)
+			m_fBackoffRemaining = 0;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! First success after a trip clears the whole breaker state. A handful
+	//! of in-flight callbacks finishing successfully during a partial outage
+	//! is enough to declare the endpoint healthy again — the breaker is
+	//! optimistic by design, so the cost of a wrong "recovered" call is at
+	//! most TRIP_THRESHOLD more failures before it re-trips.
+	void OnSuccess()
+	{
+		if (m_iConsecutiveFailures >= TRIP_THRESHOLD)
+		{
+			Print(string.Format("[TDL_API] %1 recovered after %2 consecutive failure(s)",
+				m_sLabel, m_iConsecutiveFailures), LogLevel.NORMAL);
+		}
+		m_iConsecutiveFailures = 0;
+		m_fCurrentBackoff = 0;
+		m_fBackoffRemaining = 0;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Anything that didn't round-trip cleanly is a failure: timeout, 5xx,
+	//! transport error, all count. 401 is a separate concern handled by the
+	//! caller (it kills the api key); from the breaker's perspective the
+	//! endpoint just isn't healthy.
+	//!
+	//! Logging strategy: emit one WARNING when the breaker transitions from
+	//! "open" to "tripped" (or doubles its backoff at the end of a retry
+	//! window), not on every failure. In-flight callbacks that fail after
+	//! the breaker is already in backoff stay silent — they're just the
+	//! tail of the burst that tripped us in the first place.
+	void OnFailure()
+	{
+		m_iConsecutiveFailures = m_iConsecutiveFailures + 1;
+		if (m_iConsecutiveFailures < TRIP_THRESHOLD)
+			return;
+
+		bool wasInBackoff = m_fBackoffRemaining > 0;
+
+		if (m_fCurrentBackoff <= 0)
+			m_fCurrentBackoff = BACKOFF_BASE;
+		else if (!wasInBackoff)
+			m_fCurrentBackoff = m_fCurrentBackoff * 2;
+
+		if (m_fCurrentBackoff > BACKOFF_CAP)
+			m_fCurrentBackoff = BACKOFF_CAP;
+
+		m_fBackoffRemaining = m_fCurrentBackoff;
+
+		if (!wasInBackoff)
+		{
+			Print(string.Format("[TDL_API] %1 backing off %2s (%3 consecutive failures)",
+				m_sLabel, m_fCurrentBackoff, m_iConsecutiveFailures), LogLevel.WARNING);
+		}
+	}
+}
+
+//------------------------------------------------------------------------------------------------
 // TDL API Manager
 // Handles config loading/saving and API communication
 // SERVER-SIDE ONLY
@@ -454,7 +646,17 @@ class AG0_TDLApiManager
     protected static const string CONFIG_FOLDER = "$profile:TDL";
     protected static const string CONFIG_FILE = "$profile:TDL/api_config.json";
     protected static const string API_BASE_URL = "https://tdl.blufor.info/api/mod";
-    
+    // Terrain endpoints live on their own RestContext so a slow/large terrain
+    // GET can't burn slots out from under the chatty /submit + /queue traffic.
+    // Each context has its own 64-slot pool — see [[AG0_TDLOutboundGate]].
+    protected static const string API_TERRAIN_BASE_URL = "https://tdl.blufor.info/api/mod/terrain";
+
+    // Soft caps below the engine's 64-pending hard ceiling. 24 leaves
+    // ample headroom on the hot path for any incidental traffic; 8 is
+    // enough for the at-most-two-concurrent terrain GETs plus headroom.
+    protected static const int HOT_GATE_SOFT_CAP = 24;
+    protected static const int TERRAIN_GATE_SOFT_CAP = 8;
+
     // State
     protected ref AG0_TDLApiConfigData m_Config;
     protected bool m_bInitialized = false;
@@ -501,7 +703,21 @@ class AG0_TDLApiManager
     protected int m_iFailedSubmits = 0;
     protected int m_iSuccessfulPolls = 0;
     protected int m_iFailedPolls = 0;
-    
+
+    // Per-context in-flight gates. One per RestContext base URL because the
+    // engine's 64-pending ceiling is enforced per context, not globally.
+    protected ref AG0_TDLOutboundGate m_HotGate;
+    protected ref AG0_TDLOutboundGate m_TerrainGate;
+
+    // Per-endpoint circuit breakers. Independent so a wedged /shapes endpoint
+    // doesn't suppress /submit traffic and vice versa. Shape POST/DELETE
+    // share the poll breaker because they fail together on host-level
+    // outages (which is the case we care about).
+    protected ref AG0_TDLEndpointBreaker m_BreakerSubmit;
+    protected ref AG0_TDLEndpointBreaker m_BreakerQueue;
+    protected ref AG0_TDLEndpointBreaker m_BreakerShapes;
+    protected ref AG0_TDLEndpointBreaker m_BreakerTerrain;
+
     //------------------------------------------------------------------------------------------------
     void AG0_TDLApiManager()
     {
@@ -514,6 +730,14 @@ class AG0_TDLApiManager
 		m_TerrainStructureManager = new AG0_TDLTerrainStructureManager();
 		m_TerrainRoadsCallback = new AG0_TDLApiTerrainRoadsCallback(this);
 		m_TerrainRoadManager = new AG0_TDLTerrainRoadManager();
+
+		m_HotGate = new AG0_TDLOutboundGate("hot(/api/mod)", HOT_GATE_SOFT_CAP);
+		m_TerrainGate = new AG0_TDLOutboundGate("terrain(/api/mod/terrain)", TERRAIN_GATE_SOFT_CAP);
+
+		m_BreakerSubmit = new AG0_TDLEndpointBreaker("submit");
+		m_BreakerQueue = new AG0_TDLEndpointBreaker("queue");
+		m_BreakerShapes = new AG0_TDLEndpointBreaker("shapes");
+		m_BreakerTerrain = new AG0_TDLEndpointBreaker("terrain");
     }
     
     //------------------------------------------------------------------------------------------------
@@ -733,6 +957,17 @@ class AG0_TDLApiManager
         if (!m_bInitialized || !m_Config || !m_Config.enabled)
             return;
 
+        // Gates and breakers tick regardless of validation state — the
+        // saturation log and backoff windows are driven entirely by
+        // timeSlice, and validation timeouts during a startup outage
+        // would otherwise hold them frozen until the key validates.
+        if (m_HotGate) m_HotGate.Tick(timeSlice);
+        if (m_TerrainGate) m_TerrainGate.Tick(timeSlice);
+        if (m_BreakerSubmit) m_BreakerSubmit.Tick(timeSlice);
+        if (m_BreakerQueue) m_BreakerQueue.Tick(timeSlice);
+        if (m_BreakerShapes) m_BreakerShapes.Tick(timeSlice);
+        if (m_BreakerTerrain) m_BreakerTerrain.Tick(timeSlice);
+
         if (!m_bApiKeyValid)
             return;
 
@@ -774,14 +1009,23 @@ class AG0_TDLApiManager
             Print("[TDL_API] Cannot submit - API not ready", LogLevel.DEBUG);
             return false;
         }
-        
+
+        // Breaker first so a wedged endpoint stops burning gate slots on
+        // requests we already know will fail. Gate next so a healthy
+        // endpoint still can't overflow the engine's 64-pending queue.
+        if (!m_BreakerSubmit.AllowSend())
+            return false;
+        if (!m_HotGate.TryAcquire())
+            return false;
+
         RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
         if (!ctx)
         {
+            m_HotGate.Release();
             Print("[TDL_API] Failed to get REST context for submit", LogLevel.DEBUG);
             return false;
         }
-        
+
         // Set authorization header with Bearer token
         // Format: "key1,value1,key2,value2"
         string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
@@ -808,7 +1052,7 @@ class AG0_TDLApiManager
 
         // POST(callback, request_path, data)
         ctx.POST(m_SubmitCallback, "/submit", jsonData);
-        
+
         return true;
     }
     
@@ -818,24 +1062,30 @@ class AG0_TDLApiManager
     {
         if (!CanCommunicate())
             return;
-        
+
         if (m_bPollInProgress)
             return;
-        
+
+        if (!m_BreakerQueue.AllowSend())
+            return;
+        if (!m_HotGate.TryAcquire())
+            return;
+
         RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
         if (!ctx)
         {
+            m_HotGate.Release();
             Print("[TDL_API] Failed to get REST context for queue poll", LogLevel.ERROR);
             return;
         }
-        
+
         // Set authorization header
         // Format: "key1,value1"
         string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
         ctx.SetHeaders(headers);
-        
+
         m_bPollInProgress = true;
-        
+
         // GET(callback, request_path)
         ctx.GET(m_QueueCallback, "/queue");
     }
@@ -865,8 +1115,10 @@ class AG0_TDLApiManager
     
     void OnSubmitSuccess(string data)
     {
+        m_HotGate.Release();
+        m_BreakerSubmit.OnSuccess();
         m_iSuccessfulSubmits++;
-        
+
         // Parse response if needed
         if (!data.IsEmpty())
         {
@@ -874,11 +1126,13 @@ class AG0_TDLApiManager
             ProcessSubmitResponse(data);
         }
     }
-    
+
     void OnSubmitError(int errorCode)
     {
+        m_HotGate.Release();
+        m_BreakerSubmit.OnFailure();
         m_iFailedSubmits++;
-        
+
         // Handle specific error codes
         if (errorCode == 401)
         {
@@ -886,38 +1140,46 @@ class AG0_TDLApiManager
             m_bApiKeyValid = false;
         }
     }
-    
+
     void OnSubmitTimeout()
     {
+        m_HotGate.Release();
+        m_BreakerSubmit.OnFailure();
         m_iFailedSubmits++;
     }
-    
+
     void OnQueuePollSuccess(string data)
     {
+        m_HotGate.Release();
+        m_BreakerQueue.OnSuccess();
         m_bPollInProgress = false;
         m_iSuccessfulPolls++;
-        
+
         // Process queued commands
         if (!data.IsEmpty())
         {
             ProcessQueuedCommands(data);
         }
     }
-    
+
     void OnQueuePollError(int errorCode)
     {
+        m_HotGate.Release();
+        m_BreakerQueue.OnFailure();
         m_bPollInProgress = false;
         m_iFailedPolls++;
-        
+
         if (errorCode == 401)
         {
             Print("[TDL_API] Queue poll returned 401 - API key may have been revoked", LogLevel.WARNING);
             m_bApiKeyValid = false;
         }
     }
-    
+
     void OnQueuePollTimeout()
     {
+        m_HotGate.Release();
+        m_BreakerQueue.OnFailure();
         m_bPollInProgress = false;
         m_iFailedPolls++;
     }
@@ -2043,23 +2305,29 @@ class AG0_TDLApiManager
 	{
 		if (!CanCommunicate())
 			return;
-		
+
 		if (m_bShapesPollInProgress)
 			return;
-		
+
+		if (!m_BreakerShapes.AllowSend())
+			return;
+		if (!m_HotGate.TryAcquire())
+			return;
+
 		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
 		if (!ctx)
 		{
+			m_HotGate.Release();
 			Print("[TDL_API] Failed to get REST context for shapes poll", LogLevel.ERROR);
 			return;
 		}
-		
+
 		// Set authorization header
 		string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
 		ctx.SetHeaders(headers);
-		
+
 		m_bShapesPollInProgress = true;
-		
+
 		// Build query path — include syncHash for server-side short-circuit.
 		// Use the raw API epoch (no local-mutation suffix) so the API can
 		// still 304-equivalent when nothing has changed on its side.
@@ -2067,20 +2335,22 @@ class AG0_TDLApiManager
 		string lastHash = m_ShapeManager.GetApiPollSyncHash();
 		if (!lastHash.IsEmpty())
 			path = string.Format("/shapes?since=%1", lastHash);
-		
+
 		ctx.GET(m_ShapesCallback, path);
 	}
-	
+
 	//------------------------------------------------------------------------------------------------
 	//! Called when shapes poll succeeds
 	void OnShapesPollSuccess(string data)
 	{
+		m_HotGate.Release();
+		m_BreakerShapes.OnSuccess();
 		m_bShapesPollInProgress = false;
 		m_iSuccessfulShapePolls++;
-		
+
 		if (data.IsEmpty())
 			return;
-		
+
 		// Check for "no changes" short-circuit response
 		SCR_JsonLoadContext quickCheck = new SCR_JsonLoadContext();
 		if (quickCheck.ImportFromString(data))
@@ -2092,16 +2362,16 @@ class AG0_TDLApiManager
 				return;
 			}
 		}
-		
+
 		// Remember previous hash to detect actual changes
 		string prevHash = m_ShapeManager.GetLastSyncHash();
-		
+
 		// Full parse (also stores raw JSON strings for redistribution)
 		int updated = m_ShapeManager.ParseShapesResponse(data);
-		
+
 		// Prune any expired shapes
 		m_ShapeManager.PruneStale();
-		
+
 		// If sync hash changed, distribute to all networked clients.
 		// Coalesced — a poll that lands on the same tick as a local
 		// create/delete folds into one broadcast.
@@ -2112,20 +2382,30 @@ class AG0_TDLApiManager
 			if (tdlSystem)
 				tdlSystem.MarkShapesDirtyForBroadcast();
 		}
-		
+
 		if (updated > 0)
 		{
 			Print(string.Format("[TDL_API] Shapes poll: %1 shapes updated, %2 total",
 				updated, m_ShapeManager.GetShapeCount()), LogLevel.DEBUG);
 		}
 	}
-	
+
 	//------------------------------------------------------------------------------------------------
 	void OnShapesPollError(int errorCode)
 	{
+		m_HotGate.Release();
+		// 404 means the endpoint isn't deployed yet rather than the host
+		// being down, so it counts as a "successful" call from the breaker's
+		// perspective — the round-trip completed cleanly, just with a known
+		// not-yet-implemented status. Otherwise treat as a failure.
+		if (errorCode == 404)
+			m_BreakerShapes.OnSuccess();
+		else
+			m_BreakerShapes.OnFailure();
+
 		m_bShapesPollInProgress = false;
 		m_iFailedShapePolls++;
-		
+
 		if (errorCode == 401)
 		{
 			Print("[TDL_API] Shapes poll returned 401 - API key may have been revoked", LogLevel.WARNING);
@@ -2138,10 +2418,12 @@ class AG0_TDLApiManager
 			Print("[TDL_API] Shapes endpoint not found (404) - feature not yet available on server", LogLevel.DEBUG);
 		}
 	}
-	
+
 	//------------------------------------------------------------------------------------------------
 	void OnShapesPollTimeout()
 	{
+		m_HotGate.Release();
+		m_BreakerShapes.OnFailure();
 		m_bShapesPollInProgress = false;
 		m_iFailedShapePolls++;
 	}
@@ -2191,9 +2473,24 @@ class AG0_TDLApiManager
 			return false;
 		}
 
+		// Breaker rejection re-queues so the shape persists past the
+		// outage rather than vanishing — the local-origin copy already
+		// lives in clients' shape stores either way.
+		if (!m_BreakerShapes.AllowSend())
+		{
+			QueueShapeRetry(shape.m_sId);
+			return false;
+		}
+		if (!m_HotGate.TryAcquire())
+		{
+			QueueShapeRetry(shape.m_sId);
+			return false;
+		}
+
 		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
 		if (!ctx)
 		{
+			m_HotGate.Release();
 			QueueShapeRetry(shape.m_sId);
 			return false;
 		}
@@ -2203,7 +2500,10 @@ class AG0_TDLApiManager
 
 		string payload = shape.ToJsonString();
 		if (payload.IsEmpty())
+		{
+			m_HotGate.Release();
 			return false;
+		}
 
 		AG0_TDLApiSubmitShapeCallback cb = new AG0_TDLApiSubmitShapeCallback(this, shape.m_sId);
 		ctx.POST(cb, "/shapes", payload);
@@ -2230,14 +2530,25 @@ class AG0_TDLApiManager
 		if (!CanCommunicate())
 			return false;
 
+		// Deletes are fire-and-forget; if the breaker or gate refuses we
+		// just skip — the local-side removal already happened and the
+		// next successful poll reconcile will catch the lingering API row.
+		if (!m_BreakerShapes.AllowSend())
+			return false;
+		if (!m_HotGate.TryAcquire())
+			return false;
+
 		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
 		if (!ctx)
+		{
+			m_HotGate.Release();
 			return false;
+		}
 
 		string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
 		ctx.SetHeaders(headers);
 
-		AG0_TDLApiDeleteShapeCallback cb = new AG0_TDLApiDeleteShapeCallback(shapeId);
+		AG0_TDLApiDeleteShapeCallback cb = new AG0_TDLApiDeleteShapeCallback(this, shapeId);
 		string path = string.Format("/shapes/%1?byIdentityId=%2", shapeId, identityId);
 		ctx.DELETE(cb, path, string.Empty);
 		return true;
@@ -2250,6 +2561,9 @@ class AG0_TDLApiManager
 	//! origin. Then re-fan-out so clients swap to the canonical id.
 	void OnSubmitShapeSuccess(string localShapeId, string responseBody)
 	{
+		m_HotGate.Release();
+		m_BreakerShapes.OnSuccess();
+
 		if (localShapeId.IsEmpty() || !m_ShapeManager)
 			return;
 
@@ -2312,6 +2626,14 @@ class AG0_TDLApiManager
 	//! later without losing the in-game draft.
 	void OnSubmitShapeError(string localShapeId, int errorCode)
 	{
+		m_HotGate.Release();
+		// 404 means the endpoint isn't deployed yet — round-trip succeeded,
+		// so don't count it against the breaker (mirrors poll-side logic).
+		if (errorCode == 404)
+			m_BreakerShapes.OnSuccess();
+		else
+			m_BreakerShapes.OnFailure();
+
 		LogLevel level = LogLevel.WARNING;
 		if (errorCode == 404)
 			level = LogLevel.DEBUG;
@@ -2321,6 +2643,21 @@ class AG0_TDLApiManager
 			m_bApiKeyValid = false;
 
 		QueueShapeRetry(localShapeId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Settlement hook for AG0_TDLApiDeleteShapeCallback. Delete is fire-
+	//! and-forget at the data layer, but we still need to release the gate
+	//! slot and feed the breaker so a wedged endpoint backs off and we
+	//! stop trying. 404 is a healthy round-trip (the shape was already
+	//! gone — common for LOCAL-origin entries) so don't trip the breaker.
+	void OnDeleteShapeCompleted(bool success, int errorCode)
+	{
+		m_HotGate.Release();
+		if (success || errorCode == 404)
+			m_BreakerShapes.OnSuccess();
+		else
+			m_BreakerShapes.OnFailure();
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -2386,9 +2723,19 @@ class AG0_TDLApiManager
 		if (m_bTerrainStructuresPollInProgress)
 			return;
 
-		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!m_BreakerTerrain.AllowSend())
+			return;
+		if (!m_TerrainGate.TryAcquire())
+			return;
+
+		// Dedicated terrain context — base URL includes /terrain so the
+		// engine buckets these calls into a separate 64-slot pool from the
+		// chatty /submit + /queue traffic on API_BASE_URL. A slow terrain
+		// GET can't starve heartbeat/state-sync anymore.
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_TERRAIN_BASE_URL);
 		if (!ctx)
 		{
+			m_TerrainGate.Release();
 			Print("[TDL_API] Failed to get REST context for terrain structures poll", LogLevel.ERROR);
 			return;
 		}
@@ -2404,14 +2751,14 @@ class AG0_TDLApiManager
 
 		m_bTerrainStructuresPollInProgress = true;
 
-		// Build path. Server short-circuits to 304 when ?since= matches the
-		// current content hash; we treat that as "keep current dataset".
-		string path = "/terrain/structures";
+		// Path is now relative to API_TERRAIN_BASE_URL (which ends in /terrain),
+		// so the endpoint suffix is /structures rather than /terrain/structures.
+		string path = "/structures";
 		if (m_TerrainStructureManager)
 		{
 			string lastHash = m_TerrainStructureManager.GetLastSyncHash();
 			if (!lastHash.IsEmpty())
-				path = string.Format("/terrain/structures?since=%1", lastHash);
+				path = string.Format("/structures?since=%1", lastHash);
 		}
 
 		Print(string.Format("[TDL_API] Fetching terrain structures: GET %1", path), LogLevel.DEBUG);
@@ -2422,6 +2769,8 @@ class AG0_TDLApiManager
 	//! Called when /terrain/structures returns 200 with a body.
 	void OnTerrainStructuresPollSuccess(string data)
 	{
+		m_TerrainGate.Release();
+		m_BreakerTerrain.OnSuccess();
 		m_bTerrainStructuresPollInProgress = false;
 		m_iSuccessfulTerrainStructuresPolls++;
 
@@ -2455,6 +2804,16 @@ class AG0_TDLApiManager
 	//! 304 is the "no change" short-circuit and is expected when ?since= matches.
 	void OnTerrainStructuresPollError(int errorCode)
 	{
+		m_TerrainGate.Release();
+		// 304 (cache hit) and 404 (no dataset for this world) are both
+		// clean round-trips from the breaker's perspective — host link
+		// is healthy, server just had nothing new to send back. Other
+		// codes (401, 5xx, transport) trip toward backoff.
+		if (errorCode == 304 || errorCode == 404)
+			m_BreakerTerrain.OnSuccess();
+		else
+			m_BreakerTerrain.OnFailure();
+
 		m_bTerrainStructuresPollInProgress = false;
 
 		if (errorCode == 304)
@@ -2488,6 +2847,8 @@ class AG0_TDLApiManager
 	//------------------------------------------------------------------------------------------------
 	void OnTerrainStructuresPollTimeout()
 	{
+		m_TerrainGate.Release();
+		m_BreakerTerrain.OnFailure();
 		m_bTerrainStructuresPollInProgress = false;
 		m_iFailedTerrainStructuresPolls++;
 		Print("[TDL_API] Terrain structures poll timed out", LogLevel.DEBUG);
@@ -2523,9 +2884,16 @@ class AG0_TDLApiManager
 		if (m_bTerrainRoadsPollInProgress)
 			return;
 
-		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!m_BreakerTerrain.AllowSend())
+			return;
+		if (!m_TerrainGate.TryAcquire())
+			return;
+
+		// Dedicated terrain context (see PollTerrainStructures for rationale).
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_TERRAIN_BASE_URL);
 		if (!ctx)
 		{
+			m_TerrainGate.Release();
 			Print("[TDL_API] Failed to get REST context for terrain roads poll", LogLevel.ERROR);
 			return;
 		}
@@ -2537,12 +2905,13 @@ class AG0_TDLApiManager
 
 		m_bTerrainRoadsPollInProgress = true;
 
-		string path = "/terrain/roads";
+		// Relative to API_TERRAIN_BASE_URL — see PollTerrainStructures.
+		string path = "/roads";
 		if (m_TerrainRoadManager)
 		{
 			string lastHash = m_TerrainRoadManager.GetLastSyncHash();
 			if (!lastHash.IsEmpty())
-				path = string.Format("/terrain/roads?since=%1", lastHash);
+				path = string.Format("/roads?since=%1", lastHash);
 		}
 
 		Print(string.Format("[TDL_API] Fetching terrain roads: GET %1", path), LogLevel.DEBUG);
@@ -2551,6 +2920,8 @@ class AG0_TDLApiManager
 
 	void OnTerrainRoadsPollSuccess(string data)
 	{
+		m_TerrainGate.Release();
+		m_BreakerTerrain.OnSuccess();
 		m_bTerrainRoadsPollInProgress = false;
 		m_iSuccessfulTerrainRoadsPolls++;
 
@@ -2580,6 +2951,13 @@ class AG0_TDLApiManager
 
 	void OnTerrainRoadsPollError(int errorCode)
 	{
+		m_TerrainGate.Release();
+		// Same 304/404 = healthy round-trip rationale as structures path.
+		if (errorCode == 304 || errorCode == 404)
+			m_BreakerTerrain.OnSuccess();
+		else
+			m_BreakerTerrain.OnFailure();
+
 		m_bTerrainRoadsPollInProgress = false;
 
 		if (errorCode == 304)
@@ -2609,6 +2987,8 @@ class AG0_TDLApiManager
 
 	void OnTerrainRoadsPollTimeout()
 	{
+		m_TerrainGate.Release();
+		m_BreakerTerrain.OnFailure();
 		m_bTerrainRoadsPollInProgress = false;
 		m_iFailedTerrainRoadsPolls++;
 		Print("[TDL_API] Terrain roads poll timed out", LogLevel.DEBUG);

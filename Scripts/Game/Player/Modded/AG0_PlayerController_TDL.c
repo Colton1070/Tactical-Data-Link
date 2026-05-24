@@ -91,6 +91,10 @@ modded class SCR_PlayerController
 	protected RplId m_PendingDialogDeviceRplId = RplId.Invalid();
 	protected bool m_bPendingCreateNetworkMode = false;
 	protected string m_sPendingNetworkName = "";
+	// 0 = no override (use device's full waveform mask). Non-zero pins the
+	// eventual Create/Join RPC to a single waveform bit, threaded through
+	// from a vehicle action's m_eForceWaveform.
+	protected int m_iPendingDialogWaveformOverride = 0;
 	
 	// Dialog references
 	protected ref AG0_TDL_NetworkNameDialog m_NetworkNameDialog;
@@ -681,16 +685,17 @@ modded class SCR_PlayerController
     //------------------------------------------------------------------------------------------------
     //! Public API - Called by device component to request network dialog
     //! This starts the two-dialog flow: Name → Password
-    void RequestNetworkDialog(RplId deviceRplId, bool createMode)
+    void RequestNetworkDialog(RplId deviceRplId, bool createMode, int waveformOverride)
     {
         if (System.IsConsoleApp())
             return;
-        
+
         // Store pending state
         m_PendingDialogDeviceRplId = deviceRplId;
         m_bPendingCreateNetworkMode = createMode;
         m_sPendingNetworkName = "";
-        
+        m_iPendingDialogWaveformOverride = waveformOverride;
+
         // Show the first dialog (network name)
         ShowNetworkNameDialog();
     }
@@ -782,16 +787,14 @@ modded class SCR_PlayerController
         if (passDialog)
             password = passDialog.GetPassword();
         
-        Print(string.Format("TDL_DIALOG: Submitting - Name='%1' Pass='%2' Create=%3 Device=%4", 
-            m_sPendingNetworkName, password, m_bPendingCreateNetworkMode, m_PendingDialogDeviceRplId), LogLevel.DEBUG);
-        
-        // Send to server
+        Print(string.Format("TDL_DIALOG: Submitting - Name='%1' Pass='%2' Create=%3 Device=%4 Waveform=%5",
+            m_sPendingNetworkName, password, m_bPendingCreateNetworkMode, m_PendingDialogDeviceRplId, m_iPendingDialogWaveformOverride), LogLevel.DEBUG);
+
         if (m_bPendingCreateNetworkMode)
-            Rpc(RpcAsk_CreateNetworkForDevice, m_PendingDialogDeviceRplId, m_sPendingNetworkName, password);
+            Rpc(RpcAsk_CreateNetworkForDevice, m_PendingDialogDeviceRplId, m_sPendingNetworkName, password, m_iPendingDialogWaveformOverride);
         else
-            Rpc(RpcAsk_JoinNetworkForDevice, m_PendingDialogDeviceRplId, m_sPendingNetworkName, password);
-        
-        // Clean up
+            Rpc(RpcAsk_JoinNetworkForDevice, m_PendingDialogDeviceRplId, m_sPendingNetworkName, password, m_iPendingDialogWaveformOverride);
+
         CleanupNetworkDialogState();
     }
     
@@ -824,14 +827,34 @@ modded class SCR_PlayerController
         m_PendingDialogDeviceRplId = RplId.Invalid();
         m_bPendingCreateNetworkMode = false;
         m_sPendingNetworkName = "";
+        m_iPendingDialogWaveformOverride = 0;
     }
 	
 	//------------------------------------------------------------------------------------------------
+	// No-arg variant — leaves every network the device is in. Used by the
+	// inventory action and by anything that wants the "drop everything" path.
 	void RequestLeaveNetwork(RplId deviceRplId)
 	{
 	    Rpc(RpcAsk_LeaveNetwork, deviceRplId);
 	}
-	
+
+	// Targeted variant — leaves a single specific network. Used by vehicle
+	// actions with a designated waveform that need to detach from one network
+	// without touching the others.
+	void RequestLeaveNetworkById(RplId deviceRplId, int networkId)
+	{
+	    Rpc(RpcAsk_LeaveNetworkById, deviceRplId, networkId);
+	}
+
+	// Waveform-targeted variant — server resolves which joined network of the
+	// device matches the waveform and leaves it. Client only knows it has
+	// SOME network of the relevant waveform (via the device's joined-waveforms
+	// mask) but not its specific networkID.
+	void RequestLeaveNetworkByWaveform(RplId deviceRplId, int waveform)
+	{
+	    Rpc(RpcAsk_LeaveNetworkByWaveform, deviceRplId, waveform);
+	}
+
 	//------------------------------------------------------------------------------------------------
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
 	protected void RpcAsk_LeaveNetwork(RplId deviceRplId)
@@ -839,12 +862,42 @@ modded class SCR_PlayerController
 	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
 	    if (!system)
 	        return;
-	    
+
 	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
 	    if (!device)
 	        return;
-	    
+
 	    system.LeaveNetwork(device);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_LeaveNetworkById(RplId deviceRplId, int networkId)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return;
+
+	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
+	    if (!device)
+	        return;
+
+	    system.LeaveNetworkById(device, networkId);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_LeaveNetworkByWaveform(RplId deviceRplId, int waveform)
+	{
+	    AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+	    if (!system)
+	        return;
+
+	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
+	    if (!device)
+	        return;
+
+	    system.LeaveNetworkByWaveform(device, waveform);
 	}
     
     // ============================================
@@ -890,21 +943,24 @@ modded class SCR_PlayerController
     
     //------------------------------------------------------------------------------------------------
     //! Public method for server to request dialog on owning client
-    //! Called by DeviceComponent when user action triggers network dialog
-    void AskOpenNetworkDialog(RplId deviceRplId, bool createMode)
+    //! Called by DeviceComponent when user action triggers network dialog.
+    //! waveformOverride threads through to the eventual Create/Join RPC so a
+    //! vehicle action's m_eForceWaveform stays attached to the operation
+    //! across the dialog round-trip.
+    void AskOpenNetworkDialog(RplId deviceRplId, bool createMode, int waveformOverride = 0)
     {
-        Rpc(RpcDo_OpenNetworkDialog, deviceRplId, createMode);
+        Rpc(RpcDo_OpenNetworkDialog, deviceRplId, createMode, waveformOverride);
     }
-    
+
     //------------------------------------------------------------------------------------------------
     //! Server tells client to open network dialog - used when device initiates from user action
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
-    protected void RpcDo_OpenNetworkDialog(RplId deviceRplId, bool createMode)
+    protected void RpcDo_OpenNetworkDialog(RplId deviceRplId, bool createMode, int waveformOverride)
     {
         if (System.IsConsoleApp())
             return;
-        
-        RequestNetworkDialog(deviceRplId, createMode);
+
+        RequestNetworkDialog(deviceRplId, createMode, waveformOverride);
     }
     
     // ============================================
@@ -982,51 +1038,51 @@ modded class SCR_PlayerController
     //------------------------------------------------------------------------------------------------
     //! Create network for a specific device
     [RplRpc(RplChannel.Reliable, RplRcver.Server)]
-    protected void RpcAsk_CreateNetworkForDevice(RplId deviceRplId, string networkName, string password)
+    protected void RpcAsk_CreateNetworkForDevice(RplId deviceRplId, string networkName, string password, int waveformOverride)
     {
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system)
             return;
-        
+
         RplComponent rpl = RplComponent.Cast(Replication.FindItem(deviceRplId));
         if (!rpl) return;
-        
+
         IEntity entity = rpl.GetEntity();
         if (!entity) return;
-        
+
         AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
             entity.FindComponent(AG0_TDLDeviceComponent));
-        
+
         if (!device)
             return;
-        
-        system.CreateNetwork(device, networkName, password);
-        Print(string.Format("TDL_PC_RPC: Created network '%1' for device %2", networkName, deviceRplId), LogLevel.DEBUG);
+
+        system.CreateNetwork(device, networkName, password, waveformOverride);
+        Print(string.Format("TDL_PC_RPC: Created network '%1' for device %2 (waveform %3)", networkName, deviceRplId, waveformOverride), LogLevel.DEBUG);
     }
-    
+
     //------------------------------------------------------------------------------------------------
     //! Join network for a specific device
     [RplRpc(RplChannel.Reliable, RplRcver.Server)]
-    protected void RpcAsk_JoinNetworkForDevice(RplId deviceRplId, string networkName, string password)
+    protected void RpcAsk_JoinNetworkForDevice(RplId deviceRplId, string networkName, string password, int waveformOverride)
     {
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system)
             return;
-        
+
         RplComponent rpl = RplComponent.Cast(Replication.FindItem(deviceRplId));
         if (!rpl) return;
-        
+
         IEntity entity = rpl.GetEntity();
         if (!entity) return;
-        
+
         AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
             entity.FindComponent(AG0_TDLDeviceComponent));
-        
+
         if (!device)
             return;
-        
-        system.JoinNetwork(device, networkName, password);
-        Print(string.Format("TDL_PC_RPC: Joined network '%1' for device %2", networkName, deviceRplId), LogLevel.DEBUG);
+
+        system.JoinNetwork(device, networkName, password, waveformOverride);
+        Print(string.Format("TDL_PC_RPC: Joined network '%1' for device %2 (waveform %3)", networkName, deviceRplId, waveformOverride), LogLevel.DEBUG);
     }
 	
 	//------------------------------------------------------------------------------------------------
