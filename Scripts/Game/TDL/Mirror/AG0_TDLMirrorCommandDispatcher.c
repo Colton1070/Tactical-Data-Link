@@ -25,8 +25,8 @@ class AG0_TDLMirrorCommandDispatcher
             return;
         }
 
-        SCR_JsonLoadContext j = new SCR_JsonLoadContext();
-        if (!j.ImportFromString(commandJson))
+        JsonLoadContext j = new JsonLoadContext();
+        if (!j.LoadFromString(commandJson))
         {
             Print(string.Format("[TDL_MIRROR_DISPATCH_C] failed to parse JSON: %1", commandJson), LogLevel.WARNING);
             return;
@@ -74,7 +74,7 @@ class AG0_TDLMirrorCommandDispatcher
         return AG0_TDLMenuController.FindPrimaryLiveController();
     }
 
-    protected static void ApplySetPanel(SCR_JsonLoadContext j)
+    protected static void ApplySetPanel(JsonLoadContext j)
     {
         int panel;
         if (!j.ReadValue("panel", panel))
@@ -99,7 +99,7 @@ class AG0_TDLMirrorCommandDispatcher
         c.ApplyMirrorSetPanel(panel, pluginId, selectedDeviceRplIdInt);
     }
 
-    protected static void ApplySetChatContact(SCR_JsonLoadContext j)
+    protected static void ApplySetChatContact(JsonLoadContext j)
     {
         int rplIdInt;
         if (!j.ReadValue("chatContactRplId", rplIdInt))
@@ -112,7 +112,7 @@ class AG0_TDLMirrorCommandDispatcher
         c.ApplyMirrorSetChatContact(rplIdInt, name);
     }
 
-    protected static void ApplySetBrightness(SCR_JsonLoadContext j)
+    protected static void ApplySetBrightness(JsonLoadContext j)
     {
         float value;
         if (!j.ReadValue("brightness", value))
@@ -123,7 +123,7 @@ class AG0_TDLMirrorCommandDispatcher
         c.ApplyMirrorSetBrightness(value);
     }
 
-    protected static void ApplySetMapView(SCR_JsonLoadContext j)
+    protected static void ApplySetMapView(JsonLoadContext j)
     {
         float cx, cz, zoom;
         bool tracking, trackUp;
@@ -156,7 +156,7 @@ class AG0_TDLMirrorCommandDispatcher
         c.ApplyMirrorSetMapView(cx, cz, zoom, tracking, trackUp);
     }
 
-    protected static void ApplyToggleBloodhound(SCR_JsonLoadContext j)
+    protected static void ApplyToggleBloodhound(JsonLoadContext j)
     {
         bool enabled;
         if (!j.ReadValue("enabled", enabled))
@@ -176,7 +176,7 @@ class AG0_TDLMirrorCommandDispatcher
     //! vs RpcAsk_SetCustomCallsign on the device) — that path silently failed to
     //! reach the server in some configurations. Going through the device's own
     //! Rpc keeps the contract identical to in-game.
-    protected static void ApplySetCallsign(SCR_JsonLoadContext j)
+    protected static void ApplySetCallsign(JsonLoadContext j)
     {
         int deviceRplIdInt;
         if (!j.ReadValue("deviceRplId", deviceRplIdInt))
@@ -232,7 +232,7 @@ class AG0_TDLMirrorCommandDispatcher
     //! from a client peer is a no-op. The PC's helper is the only client-side
     //! entry that fires a server RPC for this state, and it's the same path
     //! the in-game camera button uses.
-    protected static void ApplyToggleCameraBroadcast(SCR_JsonLoadContext j)
+    protected static void ApplyToggleCameraBroadcast(JsonLoadContext j)
     {
         int deviceRplIdInt;
         if (!j.ReadValue("deviceRplId", deviceRplIdInt))

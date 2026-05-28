@@ -129,7 +129,7 @@ class AG0_TDLMapShape
 	//! way because names are already public in-game.
 	string ToJsonString(bool includeCreatorIdentity = true)
 	{
-		SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+		JsonSaveContext json = new JsonSaveContext();
 
 		json.WriteValue("id", m_sId);
 		json.WriteValue("shapeType", ShapeTypeToString(m_eShapeType));
@@ -161,7 +161,7 @@ class AG0_TDLMapShape
 		json.WriteValue("createdAt", m_iCreatedAt);
 		json.WriteValue("staleAt", m_iStaleAt);
 
-		return json.ExportToString();
+		return json.SaveToString();
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -255,8 +255,8 @@ class AG0_TDLMapShapeManager
 	//! @return Number of shapes parsed
 	int ParseShapesResponse(string jsonData)
 	{
-		SCR_JsonLoadContext json = new SCR_JsonLoadContext();
-		if (!json.ImportFromString(jsonData))
+		JsonLoadContext json = new JsonLoadContext();
+		if (!json.LoadFromString(jsonData))
 		{
 			Print("[TDL_SHAPES] Failed to parse shapes response JSON", LogLevel.WARNING);
 			return 0;
@@ -366,8 +366,8 @@ class AG0_TDLMapShapeManager
 	//! @return Parsed shape or null on failure
 	AG0_TDLMapShape ParseSingleShape(string shapeJson)
 	{
-		SCR_JsonLoadContext json = new SCR_JsonLoadContext();
-		if (!json.ImportFromString(shapeJson))
+		JsonLoadContext json = new JsonLoadContext();
+		if (!json.LoadFromString(shapeJson))
 		{
 			Print("[TDL_SHAPES] Failed to parse individual shape JSON", LogLevel.DEBUG);
 			return null;

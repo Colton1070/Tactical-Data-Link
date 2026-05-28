@@ -84,7 +84,7 @@ class AG0_TDLDisplayController
     
     // Colors
     protected ref Color COLOR_CYAN = new Color(0.2, 0.8, 0.8, 1.0);
-    protected ref Color COLOR_RED = new Color(1.0, 0.2, 0.2, 1.0);
+    //protected ref Color COLOR_RED = new Color(1.0, 0.2, 0.2, 1.0);
     
     // Layout paths
     protected const ResourceName SELF_MARKER_LAYOUT = "{A242BD2B06D27E00}UI/layouts/Menus/TDL/TDLMenuSelfMarker.layout";
@@ -534,7 +534,7 @@ class AG0_TDLDisplayController
             else
             {
                 m_wGPSStatus.SetText("NO GPS");
-                m_wGPSStatus.SetColor(COLOR_RED);
+                m_wGPSStatus.SetColor(Color(1.0, 0.2, 0.2, 1.0));
             }
         }
         

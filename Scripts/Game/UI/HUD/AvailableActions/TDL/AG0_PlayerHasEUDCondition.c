@@ -1,7 +1,7 @@
 [BaseContainerProps()]
 class AG0_PlayerHasEUDCondition : SCR_AvailableActionCondition
 {
-    override bool IsAvailable(SCR_AvailableActionsConditionData data)
+    override bool IsAvailable(notnull SCR_AvailableActionsConditionData data)
     {
         SCR_PlayerController controller = SCR_PlayerController.Cast(
             GetGame().GetPlayerController()

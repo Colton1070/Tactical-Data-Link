@@ -12,7 +12,7 @@ class AG0_PlayerHasTDLDeviceWithCapabilitiesCondition : SCR_AvailableActionCondi
     )]
     protected AG0_ETDLDeviceCapability m_eRequiredCapabilities;
     
-	override bool IsAvailable(SCR_AvailableActionsConditionData data)
+	override bool IsAvailable(notnull SCR_AvailableActionsConditionData data)
 	{
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
 	        GetGame().GetPlayerController()

@@ -21,7 +21,7 @@
 // Not delta-encoded:                   w, pr, len.
 //
 // Same float-decimal contract as structures: every value in x/z/w must have
-// an explicit decimal point in the JSON, otherwise SCR_JsonLoadContext's
+// an explicit decimal point in the JSON, otherwise JsonLoadContext's
 // array<float> parser stops at the first integer-shaped token. Encoder
 // (terrain-roads-mod.ts) is responsible for that — the mod just trusts it
 // and column-length-checks defensively.
@@ -113,8 +113,8 @@ class AG0_TDLTerrainRoadManager
             return 0;
         }
 
-        SCR_JsonLoadContext json = new SCR_JsonLoadContext();
-        if (!json.ImportFromString(jsonBody))
+        JsonLoadContext json = new JsonLoadContext();
+        if (!json.LoadFromString(jsonBody))
         {
             int bodyLen = jsonBody.Length();
             string head = jsonBody.Substring(0, Math.Min(64, bodyLen));

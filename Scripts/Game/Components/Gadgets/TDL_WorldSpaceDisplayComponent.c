@@ -1204,9 +1204,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             // border) update consistently.
             if (m_wHoveredWidget)
             {
-                ScriptedWidgetEventHandler handler = ScriptedWidgetEventHandler.Cast(
-                    m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler)
-                );
+                ScriptedWidgetEventHandler handler = m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler);
                 if (handler)
                 {
                     handler.OnMouseLeave(m_wHoveredWidget, newHovered, 0, 0);
@@ -1224,9 +1222,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             // equivalent to the engine's normal mouse pointer.
             if (m_wHoveredWidget)
             {
-                ScriptedWidgetEventHandler handler = ScriptedWidgetEventHandler.Cast(
-                    m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler)
-                );
+                ScriptedWidgetEventHandler handler = m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler);
                 if (handler)
                 {
                     handler.OnFocus(m_wHoveredWidget, m_fCursorX, m_fCursorY);
@@ -1245,9 +1241,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     {
         if (m_wHoveredWidget)
         {
-            ScriptedWidgetEventHandler handler = ScriptedWidgetEventHandler.Cast(
-                m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler)
-            );
+            ScriptedWidgetEventHandler handler = m_wHoveredWidget.FindHandler(ScriptedWidgetEventHandler);
             if (handler)
             {
                 handler.OnMouseLeave(m_wHoveredWidget, null, 0, 0);

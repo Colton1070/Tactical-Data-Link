@@ -43,7 +43,7 @@ class AG0_TDLMirrorContact
 //------------------------------------------------------------------------------------------------
 //! Per-identity envelope the server submits to the API in atak_mirror_sync.
 //! All snapshot fields flattened onto the entry itself (no nested ref) so
-//! SCR_JsonSaveContext introspection matches the AG0_TDLDeviceState /
+//! JsonSaveContext introspection matches the AG0_TDLDeviceState /
 //! AG0_TDLNetworkState pattern in this codebase, which is the only ref-array
 //! serialization shape with proven coverage. Field names match the per-class
 //! snapshot below so the API parser doesn't see two different naming schemes.
@@ -85,7 +85,7 @@ class AG0_TDLMirrorEntry
     string mgrs;
 
     // Per-viewer contacts — populated server-side from the network's stored
-    // member data after FromJson. Public field so SCR_JsonSaveContext picks it
+    // member data after FromJson. Public field so JsonSaveContext picks it
     // up via introspection when the envelope is emitted to the API.
     ref array<ref AG0_TDLMirrorContact> contacts;
 
@@ -205,7 +205,7 @@ class AG0_TDLMirrorSnapshot
     //! mirrors the class layout so diffs against the last sent JSON are stable.
     string ToJson()
     {
-        SCR_JsonSaveContext j = new SCR_JsonSaveContext();
+        JsonSaveContext j = new JsonSaveContext();
         j.WriteValue("panel", panel);
         j.WriteValue("panelPluginID", panelPluginID);
         j.WriteValue("chatContactRplId", chatContactRplId);
@@ -236,7 +236,7 @@ class AG0_TDLMirrorSnapshot
         j.WriteValue("playerHeadingDeg", playerHeadingDeg);
         j.WriteValue("mgrs", mgrs);
 
-        return j.ExportToString();
+        return j.SaveToString();
     }
 
     //! Inflate a snapshot from JSON. Used server-side when an RPC payload arrives so
@@ -244,8 +244,8 @@ class AG0_TDLMirrorSnapshot
     //! before forwarding to the API.
     bool FromJson(string jsonStr)
     {
-        SCR_JsonLoadContext j = new SCR_JsonLoadContext();
-        if (!j.ImportFromString(jsonStr))
+        JsonLoadContext j = new JsonLoadContext();
+        if (!j.LoadFromString(jsonStr))
             return false;
 
         j.ReadValue("panel", panel);

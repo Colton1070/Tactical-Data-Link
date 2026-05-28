@@ -659,12 +659,12 @@ class SCR_VehicleRadioComponent : ScriptComponent
 		if (!pc)
 			return;
 
-		pc.AskOpenRadioCryptoFill(Replication.FindId(GetOwner()));
+		pc.AskOpenRadioCryptoFill(Replication.FindItemId(GetOwner()));
 	}
 
 	protected void OnBridgeKeyReceived(RplId entityRplId, string key)
 	{
-		if (Replication.FindId(GetOwner()) != entityRplId)
+		if (Replication.FindItemId(GetOwner()) != entityRplId)
 			return;
 
 		SetCryptoKeyFromFill(key);

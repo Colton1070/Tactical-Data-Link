@@ -842,8 +842,8 @@ class AG0_TDLPhotoManager
         if (!req)
             return;
 
-        SCR_JsonLoadContext json = new SCR_JsonLoadContext();
-        if (!json.ImportFromString(jsonData))
+        JsonLoadContext json = new JsonLoadContext();
+        if (!json.LoadFromString(jsonData))
         {
             SettleFailure(requestId, "json_parse_failed");
             return;

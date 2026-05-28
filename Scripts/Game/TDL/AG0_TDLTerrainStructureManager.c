@@ -93,8 +93,8 @@ class AG0_TDLTerrainStructureManager
             return 0;
         }
 
-        SCR_JsonLoadContext json = new SCR_JsonLoadContext();
-        if (!json.ImportFromString(jsonBody))
+        JsonLoadContext json = new JsonLoadContext();
+        if (!json.LoadFromString(jsonBody))
         {
             // Dump size + a head/tail sample so it's obvious whether we got
             // gzip bytes (no leading '{'), an HTML error page, or truncated JSON.

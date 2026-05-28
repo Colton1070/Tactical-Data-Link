@@ -3682,7 +3682,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 	    
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "heartbeat");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("worldFile", GetGame().GetWorldFile());
@@ -3691,7 +3691,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("deviceCount", m_aRegisteredNetworkDevices.Count());
 	    json.WriteValue("playerCount", GetConnectedPlayerCount());
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 	
 	protected void ApiSyncFullState()
@@ -3699,7 +3699,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 	    
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "state_sync");
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    json.WriteValue("worldFile", GetGame().GetWorldFile());
@@ -3821,7 +3821,7 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    json.WriteValue("markers", markerStates);
 		
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 	
 	protected void ApiNotifyNetworkCreated(AG0_TDLNetwork network, string creatorName)
@@ -3829,7 +3829,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "network_created");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -3838,7 +3838,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("networkName", network.GetNetworkName());
 	    json.WriteValue("creatorName", creatorName);
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 
 	//! Signature carries stableId because the API needs it to delete the right
@@ -3849,7 +3849,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "network_deleted");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -3857,7 +3857,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("networkStableId", networkStableId);
 	    json.WriteValue("networkName", networkName);
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 
 	protected void ApiNotifyDeviceJoined(AG0_TDLNetwork network, AG0_TDLDeviceComponent device)
@@ -3865,7 +3865,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "device_joined");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -3893,7 +3893,7 @@ class AG0_TDLSystem : WorldSystem
 	        }
 	    }
 	    
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 	
 	//! Same stableId-as-arg pattern as ApiNotifyNetworkDeleted — caller captures
@@ -3905,7 +3905,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "device_left");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -3914,7 +3914,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("networkName", networkName);
 	    json.WriteValue("deviceCallsign", deviceCallsign);
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -3937,7 +3937,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!network || !msg)
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "message_sent");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -4007,7 +4007,7 @@ class AG0_TDLSystem : WorldSystem
 	        // progress (chunked distribution is mod-internal).
 	    }
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -4027,7 +4027,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!network)
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "message_delivered");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -4041,7 +4041,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (recipientPlayerId > 0)
 	        json.WriteValue("recipientPlayerId", recipientPlayerId);
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -4056,7 +4056,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!network)
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "message_read");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -4070,7 +4070,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (readerPlayerId > 0)
 	        json.WriteValue("readerPlayerId", readerPlayerId);
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -4087,7 +4087,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "message_send_failed");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -4097,7 +4097,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!networkStableId.IsEmpty())
 	        json.WriteValue("networkStableId", networkStableId);
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -4110,7 +4110,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
 	        return;
 
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "event");
 	    json.WriteValue("event", "image_deliver_failed");
 	    json.WriteValue("timestamp", System.GetUnixTime());
@@ -4118,7 +4118,7 @@ class AG0_TDLSystem : WorldSystem
 	    json.WriteValue("deliveryId", deliveryId);
 	    json.WriteValue("reason", reason);
 
-	    m_ApiManager.SubmitData(json.ExportToString());
+	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 	
 	protected int GetConnectedPlayerCount()
@@ -4445,12 +4445,12 @@ class AG0_TDLSystem : WorldSystem
 		if (entries.Count() == 0)
 			return;
 
-		SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+		JsonSaveContext json = new JsonSaveContext();
 		json.WriteValue("type", "atak_mirror_sync");
 		json.WriteValue("timestamp", System.GetUnixTime());
 		json.WriteValue("snapshots", entries);
 
-		m_ApiManager.SubmitData(json.ExportToString());
+		m_ApiManager.SubmitData(json.SaveToString());
 	}
 
 	// ApplyMirrorSnapshotDefaults was removed: shipping "fresh ATAK" defaults

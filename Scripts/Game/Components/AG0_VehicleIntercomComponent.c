@@ -204,7 +204,7 @@ class SCR_VehicleICSComponent : ScriptComponent
 	{
 		if (m_iVehicleFrequency == 0)
 		{
-			int rplId = Replication.FindId(GetOwner());
+			int rplId = Replication.FindItemId(GetOwner());
 			m_iVehicleFrequency = m_iMinFrequency + (Math.AbsInt(rplId) % (m_iMaxFrequency - m_iMinFrequency));
 		}
 

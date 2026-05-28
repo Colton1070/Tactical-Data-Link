@@ -5,7 +5,7 @@
 //
 //   Server (tdl-api)            Wire                        Mod
 //   ─────────────────           ─────                       ─────
-//   sharp + image-q  ──► JSON { w, h, p, rgz|r|d } ──►  SCR_JsonLoadContext
+//   sharp + image-q  ──► JSON { w, h, p, rgz|r|d } ──►  JsonLoadContext
 //                           (base64, optionally gzipped)       │
 //                                                              ▼
 //                                                     AG0_Base64.Decode

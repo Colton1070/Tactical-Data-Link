@@ -897,12 +897,12 @@ class AG0_TDLApiManager
         
         // Send minimal validation payload
         // POST(callback, request_path, data)
-        SCR_JsonSaveContext validateJson = new SCR_JsonSaveContext();
+        JsonSaveContext validateJson = new JsonSaveContext();
         validateJson.WriteValue("type", "validate");
         validateJson.WriteValue("serverName", m_Config.serverName);
         validateJson.WriteValue("worldFile", GetGame().GetWorldFile());
         validateJson.WriteValue("worldId", AG0_MapSatelliteConfigHelper.GetCurrentWorldIdentifier());
-        string payload = validateJson.ExportToString();
+        string payload = validateJson.SaveToString();
 
         ctx.POST(m_ValidateCallback, "/submit", payload);
     }
@@ -1189,8 +1189,8 @@ class AG0_TDLApiManager
     protected void ProcessSubmitResponse(string data)
     {
         // Parse JSON response
-        SCR_JsonLoadContext json = new SCR_JsonLoadContext();
-        if (!json.ImportFromString(data))
+        JsonLoadContext json = new JsonLoadContext();
+        if (!json.LoadFromString(data))
         {
             Print("[TDL_API] Failed to parse submit response", LogLevel.WARNING);
             return;
@@ -1210,8 +1210,8 @@ class AG0_TDLApiManager
     protected void ProcessQueuedCommands(string data)
     {
         // Parse JSON response
-        SCR_JsonLoadContext json = new SCR_JsonLoadContext();
-        if (!json.ImportFromString(data))
+        JsonLoadContext json = new JsonLoadContext();
+        if (!json.LoadFromString(data))
         {
             Print("[TDL_API] Failed to parse queue response", LogLevel.WARNING);
             return;
@@ -1240,8 +1240,8 @@ class AG0_TDLApiManager
         Print(string.Format("[TDL_API] Processing command: %1", commandJson), LogLevel.DEBUG);
         
         // Parse the command
-        SCR_JsonLoadContext cmdJson = new SCR_JsonLoadContext();
-        if (!cmdJson.ImportFromString(commandJson))
+        JsonLoadContext cmdJson = new JsonLoadContext();
+        if (!cmdJson.LoadFromString(commandJson))
         {
             Print("[TDL_API] Failed to parse command JSON", LogLevel.DEBUG);
             return;
@@ -1337,7 +1337,7 @@ class AG0_TDLApiManager
     //!   { ..., "playerIdentityId": "<uuid>" }
     //! Accepting both names lets the API rename freely without bricking the
     //! mod every time the contract shifts during this iteration.
-    protected void HandleMirrorSubscribeCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleMirrorSubscribeCommand(JsonLoadContext cmdJson)
     {
         string identityId = ReadIdentityIdField(cmdJson);
         if (identityId.IsEmpty())
@@ -1351,7 +1351,7 @@ class AG0_TDLApiManager
         system.OnMirrorSubscribe(identityId);
     }
 
-    protected void HandleMirrorUnsubscribeCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleMirrorUnsubscribeCommand(JsonLoadContext cmdJson)
     {
         string identityId = ReadIdentityIdField(cmdJson);
         if (identityId.IsEmpty())
@@ -1368,7 +1368,7 @@ class AG0_TDLApiManager
     //! Read the identity field from a mirror command payload. Accepts both
     //! `identityId` (original brief contract) and `playerIdentityId` (Cursor's
     //! later rename). Whichever fires, returns the trimmed UUID string.
-    protected string ReadIdentityIdField(SCR_JsonLoadContext cmdJson)
+    protected string ReadIdentityIdField(JsonLoadContext cmdJson)
     {
         string identityId;
         if (cmdJson.ReadValue("identityId", identityId) && !identityId.IsEmpty())
@@ -1387,7 +1387,7 @@ class AG0_TDLApiManager
     //!
     //! Payload shape (all share these fields, plus per-type extras):
     //!   { "type": "mirror_set_<x>", "identityId": "<uuid>", ...command fields... }
-    protected void HandleMirrorCommandDispatch(SCR_JsonLoadContext cmdJson, string rawJson)
+    protected void HandleMirrorCommandDispatch(JsonLoadContext cmdJson, string rawJson)
     {
         string identityId = ReadIdentityIdField(cmdJson);
         if (identityId.IsEmpty())
@@ -1410,7 +1410,7 @@ class AG0_TDLApiManager
     
     //------------------------------------------------------------------------------------------------
     //! Handle broadcast command from API
-    protected void HandleBroadcastCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleBroadcastCommand(JsonLoadContext cmdJson)
     {
         string message;
         if (cmdJson.ReadValue("message", message))
@@ -1445,7 +1445,7 @@ class AG0_TDLApiManager
     //!     "content": "<string>",                 // <= 8000 chars (RPC param ceiling)
     //!     "recipientRplId": <int>                // direct only; mod resolves to network member
     //!   }
-    protected void HandleMessageSendCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleMessageSendCommand(JsonLoadContext cmdJson)
     {
         string correlationId;
         if (!cmdJson.ReadValue("correlationId", correlationId))
@@ -1658,7 +1658,7 @@ class AG0_TDLApiManager
     //!     "caption":       "<optional string>", // shown alongside the image (may be empty)
     //!     "recipientRplId": <int>               // direct only
     //!   }
-    protected void HandleImageDeliverCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleImageDeliverCommand(JsonLoadContext cmdJson)
     {
         string correlationId;
         if (!cmdJson.ReadValue("correlationId", correlationId))
@@ -1830,7 +1830,7 @@ class AG0_TDLApiManager
     //!     "networkId": <int>,
     //!     "messageId": <int>
     //!   }
-    protected void HandleMessageMarkReadCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleMessageMarkReadCommand(JsonLoadContext cmdJson)
     {
         string readerIdentityId;
         if (!cmdJson.ReadValue("readerIdentityId", readerIdentityId) || readerIdentityId.IsEmpty())
@@ -1900,7 +1900,7 @@ class AG0_TDLApiManager
 
     //------------------------------------------------------------------------------------------------
     //! Handle config update command from API
-    protected void HandleConfigUpdateCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleConfigUpdateCommand(JsonLoadContext cmdJson)
     {
         // Remote config updates (optional feature)
         int newSyncInterval;
@@ -1916,7 +1916,7 @@ class AG0_TDLApiManager
 	
 	//------------------------------------------------------------------------------------------------
     //! Handle marker delete command from web API
-    protected void HandleMarkerDeleteCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleMarkerDeleteCommand(JsonLoadContext cmdJson)
     {
         int markerId;
         if (!cmdJson.ReadValue("markerId", markerId))
@@ -1955,7 +1955,7 @@ class AG0_TDLApiManager
     //! Handle marker edit command from web API
     //! Uses delete-and-recreate to broadcast changes — static markers have no update RPC
     //! Preserves original player ownership through the recreate
-    protected void HandleMarkerEditCommand(SCR_JsonLoadContext cmdJson)
+    protected void HandleMarkerEditCommand(JsonLoadContext cmdJson)
     {
         int markerId;
         if (!cmdJson.ReadValue("markerId", markerId))
@@ -2073,7 +2073,7 @@ class AG0_TDLApiManager
 	//------------------------------------------------------------------------------------------------
 	//! Handle marker_add command from web API
 	//! Creates a new PLACED_CUSTOM marker with TDL icon, assigned to the linked player
-	protected void HandleMarkerAddCommand(SCR_JsonLoadContext cmdJson)
+	protected void HandleMarkerAddCommand(JsonLoadContext cmdJson)
 	{
 	    // --- Read payload fields ---
 	    string customText;
@@ -2187,8 +2187,8 @@ class AG0_TDLApiManager
 	    string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
 	    ctx.SetHeaders(headers);
 	    
-	    // Build payload using SCR_JsonSaveContext for proper escaping
-	    SCR_JsonSaveContext json = new SCR_JsonSaveContext();
+	    // Build payload using JsonSaveContext for proper escaping
+	    JsonSaveContext json = new JsonSaveContext();
 	    json.WriteValue("type", "account_link");
 	    json.WriteValue("linkCode", linkCode);
 	    json.WriteValue("playerIdentityId", identityId);
@@ -2200,7 +2200,7 @@ class AG0_TDLApiManager
 	    json.WriteValue("worldId", AG0_MapSatelliteConfigHelper.GetCurrentWorldIdentifier());
 	    json.WriteValue("timestamp", System.GetUnixTime());
 	    
-	    string payload = json.ExportToString();
+	    string payload = json.SaveToString();
 	    
 	    Print(string.Format("[TDL_API] Submitting account link for %1 (identity: %2...)", 
 	        playerName, identityId.Substring(0, 8)), LogLevel.DEBUG);
@@ -2352,8 +2352,8 @@ class AG0_TDLApiManager
 			return;
 
 		// Check for "no changes" short-circuit response
-		SCR_JsonLoadContext quickCheck = new SCR_JsonLoadContext();
-		if (quickCheck.ImportFromString(data))
+		JsonLoadContext quickCheck = new JsonLoadContext();
+		if (quickCheck.LoadFromString(data))
 		{
 			bool changed = true;
 			if (quickCheck.ReadValue("changed", changed) && !changed)
@@ -2742,7 +2742,7 @@ class AG0_TDLApiManager
 
 		// Auth only — do NOT send Accept-Encoding: gzip here.
 		// The Reforger REST stack does not transparently decompress for this
-		// endpoint, so requesting gzip causes ImportFromString to fail with
+		// endpoint, so requesting gzip causes LoadFromString to fail with
 		// "invalid JSON" on the (still-compressed) bytes. The dataset is small
 		// enough uncompressed that this isn't a problem in practice; if/when
 		// payloads grow we can add a manual gunzip step using AG0_TDLGzip.
