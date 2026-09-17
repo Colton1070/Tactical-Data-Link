@@ -417,7 +417,7 @@ class AG0_TDLMapShapeManager
 		
 		// Waypoint labels (route)
 		array<string> waypointLabels = {};
-		if (json.ReadValue("waypointLabels", waypointLabels))
+		if (json.ReadValue("waypointLabels", waypointLabels) && waypointLabels)
 			shape.m_aWaypointLabels = waypointLabels;
 		
 		// Style

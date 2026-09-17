@@ -180,17 +180,56 @@ class AG0_MapSatelliteConfigHelper
     }
 
     //------------------------------------------------------------------------------------------------
-    //! Get the short world identifier for the current world (e.g. "Cain", "Fallujah")
-    //! Uses the same matching logic as the TDL map satellite config so the web API
-    //! can resolve its own map config the same way.
-    //! @return matched identifier, or empty string if no config entry matches
+    //! Short world identifier for the current world (e.g. "Cain", "AlHadra"), used by every
+    //! payload the mod sends the web API to say which world it is running.
+    //!
+    //! The config table is consulted first so worlds listed there keep reporting exactly the
+    //! identifier the web app's map records were written against. Worlds absent from the table
+    //! derive one from the world file instead of reporting nothing: this identity is the API's
+    //! primary matching key, and gating it on a table whose entire purpose is being retired
+    //! meant every unlisted world — which is most of them — arrived at the API anonymous.
+    //! @return identifier, or empty string only if the world file itself is unusable
     static string GetCurrentWorldIdentifier(ResourceName configPath = "")
     {
         AG0_MapSatelliteEntry entry = GetMapEntryForCurrentWorld(configPath);
-        if (!entry)
-            return string.Empty;
+        if (entry && !entry.m_sWorldIdentifier.IsEmpty())
+            return entry.m_sWorldIdentifier;
 
-        return entry.m_sWorldIdentifier;
+        return DeriveWorldIdentifier(GetGame().GetWorldFile());
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Reduce a world file path to the bare world name.
+    //!
+    //! GetWorldFile returns a mount-prefixed path ("$MyTerrain:worlds/AlHadra/AlHadra.ent").
+    //! The mount names the addon rather than the world, so it is dropped: two addons can mount
+    //! worlds of the same name and the addon is not what the map record is keyed on.
+    static string DeriveWorldIdentifier(string worldFile)
+    {
+        string path = worldFile;
+
+        int colon = path.IndexOf(":");
+        if (colon >= 0)
+            path = path.Substring(colon + 1, path.Length() - colon - 1);
+
+        int brace = path.LastIndexOf("}");
+        if (brace >= 0)
+            path = path.Substring(brace + 1, path.Length() - brace - 1);
+
+        int slash = path.LastIndexOf("/");
+        if (slash >= 0)
+            path = path.Substring(slash + 1, path.Length() - slash - 1);
+
+        int back = path.LastIndexOf("\\");
+        if (back >= 0)
+            path = path.Substring(back + 1, path.Length() - back - 1);
+
+        // Guarded above zero rather than at zero so a dotfile-shaped name is not erased.
+        int dot = path.LastIndexOf(".");
+        if (dot > 0)
+            path = path.Substring(0, dot);
+
+        return path;
     }
 
     //------------------------------------------------------------------------------------------------

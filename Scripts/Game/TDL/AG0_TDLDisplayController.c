@@ -24,12 +24,24 @@ class AG0_TDLDisplayController
     protected Widget m_wRoot;
     protected ref AG0_TDLMapView m_MapView;
     protected CanvasWidget m_wMapCanvas;
+
+    //! A follower renders from the shared statics but is never a source of them.
+    //! PropagateMapState only reaches frontends registered through AG0_TDLMenuController,
+    //! so an instance without one never receives a zoom change — and its own divergence
+    //! check would then push its stale value back over the operator's real map. Followers
+    //! pull instead, and never write the persisted state on Cleanup.
+    protected bool m_bFollower;
     
     // Map marker overlay
     protected Widget m_wMarkerOverlay;
     protected Widget m_wSelfMapMarker;
     protected ref map<RplId, Widget> m_mMemberMarkers = new map<RplId, Widget>();
     protected const float MARKER_SIZE = 64.0;
+
+    //! Authored size of MarkerImage in TDLMenuSelfMarker.layout — mirrored here because the
+    //! scale below is relative and the layout can't be read back before the widget lays out.
+    protected const float SELF_MARKER_ICON_PX = 64.0;
+    protected const float FOLLOWER_MARKER_SCALE = 0.333;
 
     // Vanilla map markers (PLACED_MILITARY + TDL PLACED_CUSTOM) — widget cache
     // keyed by marker.GetMarkerID(). Each widget is built from the marker's
@@ -53,6 +65,17 @@ class AG0_TDLDisplayController
     // lifetime and gone when the marker is gone.
     protected ref map<int, Widget> m_mVanillaMarkerWidgets = new map<int, Widget>();
     
+    //! Bloodhound readout, driven only in follower mode. Non-followers leave these alone —
+    //! their AG0_TDLMenuController owns widgets of these exact names in the same tree, and two
+    //! writers to one readout is a race over whose cursor wins. The refs are resolved on every
+    //! instance, so the single `if (m_bFollower)` around UpdateFollowerBloodhound is the only
+    //! thing keeping them apart: any future write added outside that gate collides silently.
+    protected Widget m_wBloodhoundReadout;
+    protected TextWidget m_wBloodhoundGrid;
+    protected TextWidget m_wBloodhoundElev;
+    protected TextWidget m_wBloodhoundDist;
+    protected TextWidget m_wBloodhoundAz;
+
     // Self marker info panel
     protected TextWidget m_wGPSStatus;
     protected TextWidget m_wCallsign;
@@ -114,6 +137,27 @@ class AG0_TDLDisplayController
         m_wSpeed = TextWidget.Cast(m_wRoot.FindAnyWidget("Speed"));
         m_wError = TextWidget.Cast(m_wRoot.FindAnyWidget("Error"));
         m_wHeadingIndicator = m_wRoot.FindAnyWidget("HeadingIndicator");
+
+        // Resolved unconditionally rather than behind m_bFollower so the refs survive
+        // SetFollower being called either side of Init. UpdateFollowerBloodhound is the only
+        // thing that writes them, and it is follower-gated.
+        m_wBloodhoundReadout = m_wRoot.FindAnyWidget("BloodhoundReadout");
+        m_wBloodhoundGrid = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundGrid"));
+        m_wBloodhoundElev = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundElev"));
+        m_wBloodhoundDist = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundDist"));
+        m_wBloodhoundAz = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundAz"));
+
+        // Tinted here as well as on AG0_TDLMenuController because neither layout authors a
+        // colour on these — a mirror would otherwise draw a lime line and ticks under white
+        // text while the menu showed both in lime.
+        if (m_bFollower)
+        {
+            Color bloodhoundLime = Color.FromRGBA(192, 255, 77, 255);
+            if (m_wBloodhoundGrid) m_wBloodhoundGrid.SetColor(bloodhoundLime);
+            if (m_wBloodhoundElev) m_wBloodhoundElev.SetColor(bloodhoundLime);
+            if (m_wBloodhoundDist) m_wBloodhoundDist.SetColor(bloodhoundLime);
+            if (m_wBloodhoundAz)   m_wBloodhoundAz.SetColor(bloodhoundLime);
+        }
         
         // Network panel
         m_wSidePanel = m_wRoot.FindAnyWidget("SidePanel");
@@ -139,17 +183,49 @@ class AG0_TDLDisplayController
                 return false;
             }
             
+            // Set here rather than left to SetFollower so the flag survives being declared
+            // before Init — the view it forwards to does not exist until this point.
+            m_MapView.SetPassive(m_bFollower);
+
             // Restore from static state or initialize
             if (s_bHasState)
             {
-                m_MapView.SetZoom(s_fZoom);
+                // Follower goes through the raw write for the same reason UpdateMapView does:
+                // SetZoom forwards to the 3D view as a relative step whenever the pane is open,
+                // so a peripheral built while the operator is orbiting would jolt their camera
+                // distance once per enable. SetCenter is a plain assignment and is safe.
+                if (m_bFollower)
+                    m_MapView.ApplyMirrorZoom(s_fZoom);
+                else
+                    m_MapView.SetZoom(s_fZoom);
+
                 m_MapView.SetCenter(s_vCenter);
             }
-            else
+            // A follower is skipped: it is the frontend most likely to Init first — always-on,
+            // gated only on carrying a device, where the menu and the device screen both wait
+            // on the operator — so letting it seed would make the mirror the source of the
+            // state it exists to follow. It renders from the defaults until a real surface
+            // seeds, which is what the pull in UpdateMapView already does.
+            else if (!m_bFollower)
             {
                 m_MapView.CenterOnPlayer();
                 m_MapView.SetZoom(0.15);
-                s_bHasState = true;
+
+                // Seeded only when CenterOnPlayer had an entity to centre on. It returns
+                // without writing when GetControlledEntity is null, and flagging s_bHasState
+                // against the zero centre that leaves behind is exactly the poisoned state a
+                // later Init would restore from.
+                IEntity controlled;
+                PlayerController playerController = GetGame().GetPlayerController();
+                if (playerController)
+                    controlled = playerController.GetControlledEntity();
+
+                if (controlled)
+                {
+                    s_vCenter = m_MapView.GetCenter();
+                    s_fZoom = 0.15;
+                    s_bHasState = true;
+                }
             }
         }
         
@@ -157,9 +233,18 @@ class AG0_TDLDisplayController
         m_wMarkerOverlay = m_wRoot.FindAnyWidget("MarkerOverlay");
         if (m_wMarkerOverlay)
         {
+            DisableCursorRecursive(m_wMarkerOverlay);
             m_wSelfMapMarker = GetGame().GetWorkspace().CreateWidgets(SELF_MARKER_LAYOUT, m_wMarkerOverlay);
+            DisableCursorRecursive(m_wSelfMapMarker);
+            ScaleSelfMarkerForFollower();
         }
         
+        // Hidden until the first tick resolves a solution, matching how the menu's own readout
+        // comes up — the layout ships it visible so a mirror would otherwise flash an empty
+        // frame at its authored position on the frame it is built.
+        if (m_bFollower && m_wBloodhoundReadout)
+            m_wBloodhoundReadout.SetVisible(false);
+
         // Show contacts panel by default - use static state
         ApplyPanelState();
         
@@ -167,6 +252,42 @@ class AG0_TDLDisplayController
         return true;
     }
     
+    //------------------------------------------------------------------------------------------------
+    // RENDER CADENCE
+    //
+    // Set by a frontend that knows whether anyone can actually see its surface — today that
+    // is the world-space device, which drives this from a camera visibility test. The
+    // fullscreen menu and the peripheral leave it at the default and are unaffected.
+    //
+    // What is gated is the DRAW, not the STATE. The pose sync and the shape/terrain handoff
+    // keep running at full rate on a suspended frontend, because if a suspended view stopped
+    // tracking the shared pose it would drift from s_vCenter — and the divergence check in
+    // UpdateMapView would then PROPAGATE that stale local pose on wake and clobber whichever
+    // frontend the operator was actually using. Keeping state current means a suspended view
+    // can never become the source of a bogus propagation.
+    //
+    // It also means a view that was parked and not moved wakes to a matching static stamp and
+    // re-submits its cached command prefix instead of rebuilding it — which is what keeps the
+    // gate from trading a steady frame cost for a hitch every time the operator glances down.
+    protected float m_fRenderInterval;      //!< 0 = draw every tick. >0 = seconds between draws.
+    protected bool  m_bRenderSuspended;     //!< true = do not draw at all
+    protected float m_fSinceMapDraw;
+
+    //! interval: seconds between map draws; 0 draws every tick.
+    //! suspended: skip drawing entirely (out of view / nobody can see this surface).
+    void SetRenderCadence(float interval, bool suspended)
+    {
+        // Resuming, or speeding up, must land on THIS tick rather than after the old (longer)
+        // interval has elapsed — otherwise looking at a device that was gated off costs up to
+        // a full interval of staleness before the first repaint.
+        bool resuming = m_bRenderSuspended && !suspended;
+        if (resuming || interval < m_fRenderInterval)
+            m_fSinceMapDraw = interval;
+
+        m_bRenderSuspended = suspended;
+        m_fRenderInterval = interval;
+    }
+
     //------------------------------------------------------------------------------------------------
     void Update(float tDelta)
     {
@@ -189,8 +310,10 @@ class AG0_TDLDisplayController
     //------------------------------------------------------------------------------------------------
     void Cleanup()
     {
-        // Save state to static before cleanup
-        if (m_MapView)
+        // Save state to static before cleanup. A follower is skipped: its view is a copy of
+        // the statics, so writing them back on teardown would let a peripheral that happened
+        // to be one frame stale become the persisted value.
+        if (m_MapView && !m_bFollower)
         {
             s_fZoom = m_MapView.GetZoom();
             s_vCenter = m_MapView.GetCenter();
@@ -235,6 +358,25 @@ class AG0_TDLDisplayController
     // STATIC STATE ACCESSORS - changes affect all instances
     //------------------------------------------------------------------------------------------------
     
+    //! Passed down rather than sniffed: only the thing that constructed this controller knows
+    //! which surface it is drawing.
+    void SetWorldSpaceSurface(bool isWorldSpace)
+    {
+        if (m_MapView)
+            m_MapView.SetWorldSpaceSurface(isWorldSpace);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Safe either side of Init: before, the flag is picked up when the view is built;
+    //! after, it is forwarded directly.
+    void SetFollower(bool follower)
+    {
+        m_bFollower = follower;
+        if (m_MapView)
+            m_MapView.SetPassive(follower);
+    }
+
+    //------------------------------------------------------------------------------------------------
     AG0_TDLMapView GetMapView()
     {
         return m_MapView;
@@ -442,7 +584,18 @@ class AG0_TDLDisplayController
         // and clobber the "last explicit pan target" persisted in s_vCenter).
         // Zoom and tracking-off pan are the only sources of legitimate
         // divergence the propagator needs to handle.
-        if (!s_bPlayerTracking)
+        if (m_bFollower)
+        {
+            // Pull, never propagate. Tracking-on needs no centre write: the CenterOnPlayer
+            // above already ran on this instance for the same reason it runs on every other.
+            m_MapView.ApplyMirrorZoom(s_fZoom);
+            if (!FollowMap3DFocus())
+            {
+                if (!s_bPlayerTracking)
+                    m_MapView.SetCenter(s_vCenter);
+            }
+        }
+        else if (!s_bPlayerTracking)
         {
             vector localCenter = m_MapView.GetCenter();
             float  localZoom   = m_MapView.GetZoom();
@@ -480,15 +633,19 @@ class AG0_TDLDisplayController
 			else
 				m_MapView.SetShapes(null);
 
+			// The payload hash is threaded through so the map view's static dirty gate can tell
+			// a genuine dataset swap from the same array handed over again. Handle comparison
+			// would never fire — the manager refills the same array object in place — and
+			// GetVersion() is the wire format version, which is a constant.
 			AG0_TDLTerrainStructureManager structMgr = controller.GetTDLTerrainStructureManager();
 			if (structMgr)
-				m_MapView.SetTerrainStructures(structMgr.GetStructures());
+				m_MapView.SetTerrainStructures(structMgr.GetStructures(), structMgr.GetLastSyncHash());
 			else
 				m_MapView.SetTerrainStructures(null);
 
 			AG0_TDLTerrainRoadManager roadMgr = controller.GetTDLTerrainRoadManager();
 			if (roadMgr)
-				m_MapView.SetTerrainRoads(roadMgr.GetFeatures());
+				m_MapView.SetTerrainRoads(roadMgr.GetFeatures(), roadMgr.GetLastSyncHash());
 			else
 				m_MapView.SetTerrainRoads(null);
 		}
@@ -499,17 +656,173 @@ class AG0_TDLDisplayController
 			m_MapView.SetTerrainRoads(null);
 		}
 
+        // Render gate. Everything above this line is state and runs at full rate; everything
+        // below is pixels. See SetRenderCadence.
+        // Both non-painting exits below go through TickSuspended rather than a bare return.
+        // The 3D pane's host arbitration doubles as this surface's liveness heartbeat and the
+        // canvas measurement feeds ScreenToWorld/IsReady for callers that run every frame
+        // regardless of paint cadence — dropping either to the paint cadence (or to zero) is
+        // how a throttled or suspended surface silently loses the 3D pane to another one.
+        if (m_bRenderSuspended)
+        {
+            m_MapView.TickSuspended(tDelta);
+            return;
+        }
+
+        // Advanced only on live frames. If it ticked while suspended, a surface gated off for
+        // longer than the keepalive interval would always come back with the keepalive already
+        // expired and eat a full rebuild on the frame it becomes visible — exactly the hitch
+        // the cached prefix exists to avoid.
+        m_MapView.AdvanceStaticClock(tDelta);
+
+        m_fSinceMapDraw += tDelta;
+        if (m_fRenderInterval > 0 && m_fSinceMapDraw < m_fRenderInterval)
+        {
+            m_MapView.TickSuspended(tDelta);
+            return;
+        }
+        m_fSinceMapDraw = 0;
+
+        if (m_bFollower)
+            UpdateFollowerBloodhound();
+
         // Draw map
         m_MapView.Draw();
 
         UpdateSelfMapMarker(player);
         UpdateMemberMapMarkers();
+
+        // Inside the render gate: despite the name this only reads the base game's marker
+        // list and populates OUR overlay widgets — it does not write to vanilla state, so
+        // skipping it on an unwatched surface changes nothing outside this screen.
         UpdateVanillaMarkers(controller);
-        
+
         // NOTE: Do NOT sync zoom/center to static state here.
         // Multiple instances (menu + world-space device) run UpdateMapView every frame,
         // each with their own independent zoom. Syncing here causes the world-space device
         // to overwrite menu zoom changes continuously. State is saved correctly in Cleanup().
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The arrow is authored at 64 px against a full-screen map, where it reads as a small
+    //! cursor. On the peripheral that same 64 px is a large fraction of the container and the
+    //! arrow swamps the terrain under it.
+    //!
+    //! Applied to the ImageWidget rather than the marker root: the root's slot is SizeToContent,
+    //! so a size written there is recomputed from the children and thrown away.
+    protected void ScaleSelfMarkerForFollower()
+    {
+        if (!m_bFollower || !m_wSelfMapMarker)
+            return;
+
+        ImageWidget icon = ImageWidget.Cast(m_wSelfMapMarker.FindAnyWidget("MarkerImage"));
+        if (!icon)
+            return;
+
+        float scaled = SELF_MARKER_ICON_PX * FOLLOWER_MARKER_SCALE;
+        icon.SetSize(scaled, scaled);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Follow the 3D pane's orbit focus while it is up. The hosting surface rewrites its own
+    //! m_vCenterWorld from GetFocusWorld() every frame but deliberately does not propagate —
+    //! a PropagateMapState per frame of an orbit drag would be its own problem. So a mirror
+    //! reads the focus straight off the singleton: pull-only, no fan-out, and it keeps the
+    //! peripheral looking at what the operator is orbiting instead of the stale 2D centre.
+    //!
+    //! Rotation comes across too, matching what GetRotation() reports for the hosting surface,
+    //! so the peripheral and the compass needle agree. Zoom deliberately does not — orbit
+    //! distance has no 2D equivalent, and the last 2D zoom is the right glance scale.
+    //!
+    //! Returns whether the focus was applied, so the caller knows to skip the 2D centre pull.
+    protected bool FollowMap3DFocus()
+    {
+        // IsHostLive, not IsViewOpen: the latter stays true after the hosting frontend is torn
+        // down (by design — a reopened menu rehosts the same diorama), and following a focus
+        // nobody is updating would pin the mirror to a stale point with no way back.
+        if (!AG0_TDLMap3DView.IsHostLive())
+            return false;
+
+        AG0_TDLMap3DView view3D = AG0_TDLMap3DView.GetInstance();
+        if (!view3D)
+            return false;
+
+        vector focusWorld = view3D.GetFocusWorld();
+        m_MapView.SetCenter(Vector(focusWorld[0], 0, focusWorld[2]));
+        m_MapView.SetRotation(-view3D.GetCameraYaw());
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Reproduce the live frontend's bloodhound measurement. The endpoints are world-space, so
+    //! this surface projects them at its own centre/zoom/rotation and lands on the same ground;
+    //! the readout strings are taken verbatim rather than recomputed so the two can't disagree
+    //! about rounding, and so the terrain sample behind the elevation happens once per frame
+    //! rather than once per surface.
+    protected void UpdateFollowerBloodhound()
+    {
+        AG0_TDLBloodhoundSolution sol = AG0_TDLMenuController.GetBloodhoundSolutionForMirror();
+        if (!sol)
+        {
+            m_MapView.SetBloodhound(false, vector.Zero, vector.Zero);
+            if (m_wBloodhoundReadout)
+                m_wBloodhoundReadout.SetVisible(false);
+            return;
+        }
+
+        if (m_wBloodhoundGrid)
+            m_wBloodhoundGrid.SetText(sol.m_sGrid);
+        if (m_wBloodhoundElev)
+            m_wBloodhoundElev.SetText(sol.m_sElev);
+        if (m_wBloodhoundDist)
+            m_wBloodhoundDist.SetText(sol.m_sDist);
+        if (m_wBloodhoundAz)
+            m_wBloodhoundAz.SetText(sol.m_sAz);
+
+        if (m_wBloodhoundReadout)
+        {
+            // IsReady gates on a measured canvas. This runs before Draw(), which is what
+            // refreshes the canvas size, so on the first tick after a build the width is still
+            // zero — WorldToLayout then returns (0,0) and the readout flashes at the frame's
+            // top-left for a whole throttle interval.
+            if (!m_MapView.IsReady())
+            {
+                m_wBloodhoundReadout.SetVisible(false);
+            }
+            else
+            {
+                float layoutX, layoutY;
+                m_MapView.WorldToLayout(sol.m_vCursor, layoutX, layoutY);
+
+                // Bounds-checked the way member and vanilla markers are. The line itself is
+                // clipped in canvas space, but the readout is a widget in the parent frame and
+                // nothing stops it: on a short HUD canvas a cursor a few hundred metres off
+                // centre puts it hundreds of pixels outside the peripheral, floating over the
+                // player's view. The menu gets away without this only because its canvas is
+                // full-screen.
+                float canvasW, canvasH;
+                m_wMapCanvas.GetScreenSize(canvasW, canvasH);
+
+                WorkspaceWidget workspace = GetGame().GetWorkspace();
+                float layoutCanvasW = workspace.DPIUnscale(canvasW);
+                float layoutCanvasH = workspace.DPIUnscale(canvasH);
+
+                bool inBounds = (layoutX >= 0 && layoutX <= layoutCanvasW
+                              && layoutY >= 0 && layoutY <= layoutCanvasH);
+
+                if (inBounds)
+                {
+                    FrameSlot.SetPos(m_wBloodhoundReadout, layoutX, layoutY);
+                    m_wBloodhoundReadout.SetVisible(true);
+                }
+                else
+                {
+                    m_wBloodhoundReadout.SetVisible(false);
+                }
+            }
+        }
+
+        m_MapView.SetBloodhound(true, sol.m_vCursor, sol.m_vDevice);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -605,14 +918,17 @@ class AG0_TDLDisplayController
         float playerHeading = player.GetYawPitchRoll()[0];
         
         float layoutX, layoutY;
-        m_MapView.WorldToLayout(playerPos, layoutX, layoutY);
+        m_MapView.WorldToLayout(playerPos, layoutX, layoutY, true);
         
         FrameSlot.SetPos(m_wSelfMapMarker, layoutX, layoutY);
         
         ImageWidget markerImage = ImageWidget.Cast(m_wSelfMapMarker.FindAnyWidget("MarkerImage"));
         if (markerImage)
         {
-            float markerRotation = playerHeading + m_MapView.GetRotation();
+            // Position-aware rather than heading + GetRotation(): on the 3D pane the
+            // on-screen angle of a world heading varies with where the marker sits
+            // under perspective. The 2D path returns the same sum as before.
+            float markerRotation = m_MapView.GetMarkerScreenHeading(playerPos, playerHeading);
             markerImage.SetRotation(markerRotation);
         }
         
@@ -647,7 +963,7 @@ class AG0_TDLDisplayController
             
             vector memberPos = member.GetPosition();
             float layoutX, layoutY;
-            m_MapView.WorldToLayout(memberPos, layoutX, layoutY);
+            m_MapView.WorldToLayout(memberPos, layoutX, layoutY, true);
             
             bool isVisible = (layoutX >= -margin && layoutX <= layoutCanvasW + margin &&
                               layoutY >= -margin && layoutY <= layoutCanvasH + margin);
@@ -702,12 +1018,43 @@ class AG0_TDLDisplayController
         }
     }
     
+
+    //------------------------------------------------------------------------------------------------
+    //! Make a marker widget invisible to the pointer, all the way down.
+    //!
+    //! Marker widgets are spawned from vanilla marker layouts, which are authored for the M
+    //! map where a marker is a click target. On the ATAK it is a drawing: the map surface
+    //! underneath owns every click, and the panel is where a marker is selected. Left
+    //! cursor-eligible they sit on top of the map and swallow whatever lands on them —
+    //! right-clicks never reach the wheel, and a drag that starts on a marker is not a pan.
+    //! Which markers eat input depends on where they happen to be, so the failure looks
+    //! intermittent rather than structural.
+    //!
+    //! Recursive because the flag is per widget and these layouts are frames of images and
+    //! text, so flagging the root alone leaves every child still catching the cursor.
+    protected void DisableCursorRecursive(Widget root)
+    {
+        if (!root)
+            return;
+
+        root.SetFlags(WidgetFlags.IGNORE_CURSOR | WidgetFlags.NOFOCUS);
+
+        Widget child = root.GetChildren();
+        while (child)
+        {
+            DisableCursorRecursive(child);
+            child = child.GetSibling();
+        }
+    }
+
     //------------------------------------------------------------------------------------------------
     protected Widget CreateMemberMapMarker(AG0_TDLNetworkMember member)
     {
         Widget marker = GetGame().GetWorkspace().CreateWidgets(MEMBER_MARKER_LAYOUT, m_wMarkerOverlay);
         if (!marker)
             return null;
+
+        DisableCursorRecursive(marker);
 
         TextWidget label = TextWidget.Cast(marker.FindAnyWidget("DeviceIdentifier"));
         if (label)
@@ -755,10 +1102,30 @@ class AG0_TDLDisplayController
             selfPlayerId = controller.GetPlayerId();
         }
 
-        // Union both lists into a single keep-set candidate list
-        array<SCR_MapMarkerBase> allMarkers = markerMgr.GetStaticMarkers();
-        foreach (SCR_MapMarkerBase d : markerMgr.GetDisabledMarkers())
-            allMarkers.Insert(d);
+        // Union both lists into a single keep-set candidate list.
+        //
+        // The union is built in a local array rather than appended onto the manager's
+        // return value: GetStaticMarkers() hands back the live m_aStaticMarkers reference,
+        // so inserting into it permanently promotes every disabled marker into the base
+        // game's own static list. This runs every frame, which made it unbounded growth of
+        // a vanilla container plus a per-frame O(n) walk over a list that never shrank.
+        array<SCR_MapMarkerBase> allMarkers = {};
+        array<SCR_MapMarkerBase> statics = markerMgr.GetStaticMarkers();
+        if (statics)
+        {
+            foreach (SCR_MapMarkerBase s : statics)
+                allMarkers.Insert(s);
+        }
+
+        array<SCR_MapMarkerBase> disabled = markerMgr.GetDisabledMarkers();
+        if (disabled)
+        {
+            foreach (SCR_MapMarkerBase d : disabled)
+            {
+                if (d && allMarkers.Find(d) == -1)
+                    allMarkers.Insert(d);
+            }
+        }
 
         // Phase 1 — apply filters, build the markers we want to render this tick
         array<SCR_MapMarkerBase> keep = {};
@@ -915,6 +1282,8 @@ class AG0_TDLDisplayController
         Widget markerWidget = GetGame().GetWorkspace().CreateWidgets(entryConfig.GetMarkerLayout(), m_wMarkerOverlay);
         if (!markerWidget)
             return null;
+
+        DisableCursorRecursive(markerWidget);
 
         SCR_MapMarkerWidgetComponent widgetComp = SCR_MapMarkerWidgetComponent.Cast(markerWidget.FindHandler(SCR_MapMarkerWidgetComponent));
         if (widgetComp)

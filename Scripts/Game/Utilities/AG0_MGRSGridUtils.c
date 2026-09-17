@@ -118,6 +118,39 @@ class AG0_MGRSGridUtils
     }
     
     //------------------------------------------------------------------------------------------------
+    //! Two-digit 1 km grid value for one axis — the digits that label a 1000 m grid line.
+    //!
+    //! Deliberately shares GetGridReference's derivation (AbsInt, /1000, %100) rather than
+    //! recomputing: a grid-line label that disagreed with the readout about which square you
+    //! are standing in would be worse than no label at all.
+    //!
+    //! @param worldAxisValue World X for an easting, world Z for a northing
+    static string GetKilometreGridDigits(float worldAxisValue)
+    {
+        int kmValue = (Math.AbsInt(worldAxisValue) / 1000) % 100;
+
+        string digits = kmValue.ToString();
+        while (digits.Length() < 2)
+            digits = "0" + digits;
+
+        return digits;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Zone designator plus 100 km square — the part of a grid reference that is constant across
+    //! the whole map, so it belongs in a legend rather than repeated on every readout.
+    static string GetGridSquareLegend()
+    {
+        string gzd = GetGridZoneDesignator();
+        string squareId = Get100kmSquareId();
+
+        if (squareId.IsEmpty())
+            return gzd;
+
+        return string.Format("%1 %2", gzd, squareId);
+    }
+
+    //------------------------------------------------------------------------------------------------
     //! Get the 100km square identifier for the current map
     //! Calculated once from lat/long, static for entire map
     static string Get100kmSquareId()

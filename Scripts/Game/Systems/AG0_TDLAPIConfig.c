@@ -11,13 +11,21 @@
 //------------------------------------------------------------------------------------------------
 class AG0_TDLApiConfigData : JsonApiStruct
 {
+    //! Bumped whenever a field is added below. A file written by an older build parses to
+    //! 0 here, which is the signal to rewrite it so the new keys become visible to whoever
+    //! is editing the file by hand — absent keys silently taking their defaults is correct
+    //! behaviour but leaves an admin with no way to discover the setting exists.
+    static const int CURRENT_CONFIG_VERSION = 1;
+
     string apiKey;
     string serverName;
     bool enabled;
     int pollIntervalSeconds;
 	int stateSyncIntervalSeconds;
+    string satelliteResourceName;
+    int configVersion;
 
-    
+
     //------------------------------------------------------------------------------------------------
     void AG0_TDLApiConfigData()
     {
@@ -27,21 +35,42 @@ class AG0_TDLApiConfigData : JsonApiStruct
         RegV("enabled");
         RegV("pollIntervalSeconds");
 		RegV("stateSyncIntervalSeconds");
-        
+        RegV("satelliteResourceName");
+        RegV("configVersion");
+
         // Set defaults
         apiKey = "";
         serverName = "Unnamed Server";
         enabled = true;
         pollIntervalSeconds = 5;
 		stateSyncIntervalSeconds = 5; // default 5s for sync worker
+        satelliteResourceName = "";
+        configVersion = 0;
     }
-    
+
     //------------------------------------------------------------------------------------------------
     bool HasValidApiKey()
     {
         return !apiKey.IsEmpty() && apiKey.Length() > 10;
     }
-    
+
+    //------------------------------------------------------------------------------------------------
+    //! Empty is the documented "let the API decide" value, so it is not treated as configured.
+    bool HasSatelliteOverride()
+    {
+        string trimmed = satelliteResourceName;
+        trimmed.TrimInPlace();
+        return !trimmed.IsEmpty();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    string GetSatelliteOverride()
+    {
+        string trimmed = satelliteResourceName;
+        trimmed.TrimInPlace();
+        return trimmed;
+    }
+
     //------------------------------------------------------------------------------------------------
     static AG0_TDLApiConfigData CreateDefault()
     {
@@ -50,6 +79,8 @@ class AG0_TDLApiConfigData : JsonApiStruct
         config.serverName = "Unnamed Server";
         config.enabled = true;
         config.pollIntervalSeconds = 5;
+        config.satelliteResourceName = "";
+        config.configVersion = CURRENT_CONFIG_VERSION;
         return config;
     }
 }
@@ -335,6 +366,83 @@ class AG0_TDLApiTerrainRoadsCallback : RestCallback
         int errorCode = cb.GetHttpCode();
         if (m_Manager)
             m_Manager.OnTerrainRoadsPollError(errorCode);
+    }
+}
+
+//------------------------------------------------------------------------------------------------
+// REST Callback for Terrain Heightmap polling endpoint. Same 200/304/error split
+// as the structures callback — 304 arrives via OnError per Reforger's REST stack.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiTerrainHeightmapCallback : RestCallback
+{
+    protected AG0_TDLApiManager m_Manager;
+
+    void AG0_TDLApiTerrainHeightmapCallback(AG0_TDLApiManager manager)
+    {
+        m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
+    }
+
+    void OnSuccessHandler(RestCallback cb)
+    {
+        string data = cb.GetData();
+        if (m_Manager)
+            m_Manager.OnTerrainHeightmapPollSuccess(data);
+    }
+
+    void OnErrorHandler(RestCallback cb)
+    {
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            if (m_Manager)
+                m_Manager.OnTerrainHeightmapPollTimeout();
+            return;
+        }
+
+        int errorCode = cb.GetHttpCode();
+        if (m_Manager)
+            m_Manager.OnTerrainHeightmapPollError(errorCode);
+    }
+}
+
+//------------------------------------------------------------------------------------------------
+// REST Callback for the per-world map config endpoint. Same 200/304/error split as the
+// terrain callbacks — 304 arrives via OnError per Reforger's REST stack.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiMapConfigCallback : RestCallback
+{
+    protected AG0_TDLApiManager m_Manager;
+
+    //------------------------------------------------------------------------------------------------
+    void AG0_TDLApiMapConfigCallback(AG0_TDLApiManager manager)
+    {
+        m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void OnSuccessHandler(RestCallback cb)
+    {
+        string data = cb.GetData();
+        if (m_Manager)
+            m_Manager.OnMapConfigPollSuccess(data);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void OnErrorHandler(RestCallback cb)
+    {
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            if (m_Manager)
+                m_Manager.OnMapConfigPollTimeout();
+            return;
+        }
+
+        int errorCode = cb.GetHttpCode();
+        if (m_Manager)
+            m_Manager.OnMapConfigPollError(errorCode);
     }
 }
 
@@ -698,6 +806,58 @@ class AG0_TDLApiManager
     protected int m_iSuccessfulTerrainRoadsPolls = 0;
     protected int m_iFailedTerrainRoadsPolls = 0;
 
+    // Terrain heightmap (elevation grid, streamed from /api/mod/terrain/heightmap)
+    // Same lifecycle as structures: one fetch on key validation + on
+    // terrain_heightmap_refresh.
+    protected ref AG0_TDLApiTerrainHeightmapCallback m_TerrainHeightmapCallback;
+    protected ref AG0_TDLTerrainHeightmapManager m_TerrainHeightmapManager;
+    protected bool m_bTerrainHeightmapPollInProgress = false;
+    protected bool m_bTerrainHeightmapInitialFetchDone = false;
+    protected int m_iSuccessfulTerrainHeightmapPolls = 0;
+    protected int m_iFailedTerrainHeightmapPolls = 0;
+
+    // Per-world map config (satellite raster ResourceName, fetched from /api/mod/map-config).
+    // Same lifecycle as the terrain datasets: one fetch on key validation + on
+    // map_config_refresh.
+    protected ref AG0_TDLApiMapConfigCallback m_MapConfigCallback;
+    protected bool m_bMapConfigPollInProgress = false;
+    protected bool m_bMapConfigInitialFetchDone = false;
+    protected int m_iSuccessfulMapConfigPolls = 0;
+    protected int m_iFailedMapConfigPolls = 0;
+
+    //! Answer from the API, held separately from the config file's override so the two can
+    //! be re-resolved without a refetch when only the file changes.
+    protected string m_sApiSatelliteResourceName = string.Empty;
+    protected string m_sMapConfigSyncHash = string.Empty;
+
+    //! Exposure trim in stops for this world's raster. Comes from the map record only —
+    //! it describes the image's albedo, which is a property of the map and not of the
+    //! server running it, so there is no config-file counterpart.
+    protected float m_fApiMapExposureBias = 0;
+
+    //! Last values handed to clients. Distributing on every poll would re-push an unchanged
+    //! payload to every connected player each time the config file is reloaded.
+    protected string m_sDistributedSatelliteResourceName = string.Empty;
+    protected float m_fDistributedMapExposureBias = 0;
+
+    //! Matches the `v` field emitted by app/lib/mod-map-config-get.ts.
+    protected static const int MAP_CONFIG_WIRE_VERSION = 1;
+
+    //! Retry cadence and ceiling for a first fetch that never got a definitive answer.
+    //! Deliberately far slower than the queue poll and bounded: the only thing waiting on it
+    //! is a map background, which is not worth an unbounded request loop against an endpoint
+    //! that has already failed several times.
+    protected static const float MAP_CONFIG_RETRY_SECONDS = 30.0;
+    protected static const int MAP_CONFIG_MAX_RETRIES = 5;
+
+    protected float m_fMapConfigRetryTimer = 0;
+    protected int m_iMapConfigRetryAttempts = 0;
+
+    //! Lattice size requested from the API. 129 keeps the grid meaningfully finer than
+    //! the mesh tiling actually consumes while staying inside a first-sync budget the
+    //! chunked RPC path can deliver without a visible stall.
+    protected static const int TERRAIN_HEIGHTMAP_GRID = 129;
+
     // Statistics
     protected int m_iSuccessfulSubmits = 0;
     protected int m_iFailedSubmits = 0;
@@ -730,6 +890,9 @@ class AG0_TDLApiManager
 		m_TerrainStructureManager = new AG0_TDLTerrainStructureManager();
 		m_TerrainRoadsCallback = new AG0_TDLApiTerrainRoadsCallback(this);
 		m_TerrainRoadManager = new AG0_TDLTerrainRoadManager();
+		m_TerrainHeightmapCallback = new AG0_TDLApiTerrainHeightmapCallback(this);
+		m_TerrainHeightmapManager = new AG0_TDLTerrainHeightmapManager();
+		m_MapConfigCallback = new AG0_TDLApiMapConfigCallback(this);
 
 		m_HotGate = new AG0_TDLOutboundGate("hot(/api/mod)", HOT_GATE_SOFT_CAP);
 		m_TerrainGate = new AG0_TDLOutboundGate("terrain(/api/mod/terrain)", TERRAIN_GATE_SOFT_CAP);
@@ -762,7 +925,13 @@ class AG0_TDLApiManager
         }
         
         m_bInitialized = true;
-        
+
+        // Seeded from the file before anyone can connect so that a config-file override,
+        // which never triggers an API poll, does not read as a change on the first reload
+        // and fan out a redundant push to every player.
+        m_sDistributedSatelliteResourceName = GetSatelliteResourceName();
+        m_fDistributedMapExposureBias = GetMapExposureBias();
+
         // If we have an API key, validate it
         if (m_Config.HasValidApiKey())
         {
@@ -826,7 +995,13 @@ class AG0_TDLApiManager
 	        m_Config.stateSyncIntervalSeconds = 5;
 	        needsSave = true;
 	    }
-	    
+
+	    if (m_Config.configVersion < AG0_TDLApiConfigData.CURRENT_CONFIG_VERSION)
+	    {
+	        m_Config.configVersion = AG0_TDLApiConfigData.CURRENT_CONFIG_VERSION;
+	        needsSave = true;
+	    }
+
 	    if (needsSave)
 	    {
 	        SaveConfig();
@@ -927,12 +1102,23 @@ class AG0_TDLApiManager
                 PollTerrainStructures();
             }
 
+            // Same one-shot pattern for the elevation grid.
+            if (!m_bTerrainHeightmapInitialFetchDone)
+            {
+                m_bTerrainHeightmapInitialFetchDone = true;
+                PollTerrainHeightmap();
+            }
+
             // Same one-shot pattern for the road network.
             if (!m_bTerrainRoadsInitialFetchDone)
             {
                 m_bTerrainRoadsInitialFetchDone = true;
                 PollTerrainRoads();
             }
+
+            // Map config differs from the terrain datasets above: its "done" flag is set by
+            // an answer, not by the attempt, so Update() keeps retrying a failed first fetch.
+            PollMapConfig();
         }
         else
         {
@@ -989,6 +1175,33 @@ class AG0_TDLApiManager
             PollQueue();
             m_fTimeSinceLastPoll = 0;
         }
+
+        UpdateMapConfigRetry(timeSlice);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Re-attempt a first map config fetch that never produced a definitive answer.
+    //! Retried rather than fetched once because a missing satellite raster is the mod's most
+    //! visible failure — an outage during the one-shot at key validation would otherwise
+    //! leave every player on a blank map until the next server restart.
+    protected void UpdateMapConfigRetry(float timeSlice)
+    {
+        if (m_bMapConfigInitialFetchDone)
+            return;
+        if (m_iMapConfigRetryAttempts >= MAP_CONFIG_MAX_RETRIES)
+            return;
+
+        m_fMapConfigRetryTimer += timeSlice;
+        if (m_fMapConfigRetryTimer < MAP_CONFIG_RETRY_SECONDS)
+            return;
+
+        m_fMapConfigRetryTimer = 0;
+        m_iMapConfigRetryAttempts = m_iMapConfigRetryAttempts + 1;
+
+        Print(string.Format("[TDL_API] Map config: retry %1 of %2",
+            m_iMapConfigRetryAttempts, MAP_CONFIG_MAX_RETRIES), LogLevel.DEBUG);
+
+        PollMapConfig();
     }
 
     //! Poll cadence when the web mirror has at least one active subscriber.
@@ -1288,6 +1501,14 @@ class AG0_TDLApiManager
 
 			case "terrain_roads_refresh":
                 HandleTerrainRoadsRefreshCommand();
+                break;
+
+			case "terrain_heightmap_refresh":
+                HandleTerrainHeightmapRefreshCommand();
+                break;
+
+			case "map_config_refresh":
+                HandleMapConfigRefreshCommand();
                 break;
 
             case "message_send":
@@ -2254,6 +2475,18 @@ class AG0_TDLApiManager
                 m_bApiKeyValid = false;
                 ValidateApiKey();
             }
+
+            // An admin editing the file is the whole point of the reload path, so the
+            // satellite override has to reach clients without waiting for a rejoin.
+            DistributeSatelliteResourceNameIfChanged();
+
+            // Re-arm rather than poll here: the edit may have cleared the override and handed
+            // authority back to the API, but the key was just invalidated above, so a poll on
+            // this line could not send anything. Clearing the state lets the fetch happen once
+            // validation completes, and lets the retry cover it if validation itself fails.
+            m_bMapConfigInitialFetchDone = false;
+            m_fMapConfigRetryTimer = 0;
+            m_iMapConfigRetryAttempts = 0;
             return true;
         }
         
@@ -3001,9 +3234,343 @@ class AG0_TDLApiManager
 		PollTerrainRoads();
 	}
 
+	//------------------------------------------------------------------------------------------------
+	// Per-world map config
+	//------------------------------------------------------------------------------------------------
+
+	//! Skipped entirely when the config file names a raster, because that value wins and a
+	//! request whose answer can only be discarded is a request not worth making.
+	void PollMapConfig()
+	{
+		if (!CanCommunicate())
+			return;
+		if (m_bMapConfigPollInProgress)
+			return;
+		if (m_Config && m_Config.HasSatelliteOverride())
+		{
+			m_bMapConfigInitialFetchDone = true;
+			Print("[TDL_API] Map config: satelliteResourceName set in api_config.json, skipping fetch",
+				LogLevel.DEBUG);
+			return;
+		}
+
+		if (!m_BreakerQueue.AllowSend())
+			return;
+		if (!m_HotGate.TryAcquire())
+			return;
+
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+		{
+			m_HotGate.Release();
+			Print("[TDL_API] Failed to get REST context for map config poll", LogLevel.ERROR);
+			return;
+		}
+
+		string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		m_bMapConfigPollInProgress = true;
+
+		// worldId/worldFile ride along because the server record the API matches against is
+		// written by /submit, and the first map config poll can land before the first submit.
+		string path = string.Format("/map-config?worldId=%1&worldFile=%2",
+			AG0_MapSatelliteConfigHelper.GetCurrentWorldIdentifier(),
+			GetGame().GetWorldFile());
+
+		if (!m_sMapConfigSyncHash.IsEmpty())
+			path = string.Format("%1&since=%2", path, m_sMapConfigSyncHash);
+
+		Print(string.Format("[TDL_API] Fetching map config: GET %1", path), LogLevel.DEBUG);
+		ctx.GET(m_MapConfigCallback, path);
+	}
+
+	void OnMapConfigPollSuccess(string data)
+	{
+		m_HotGate.Release();
+		m_BreakerQueue.OnSuccess();
+		m_bMapConfigPollInProgress = false;
+		m_iSuccessfulMapConfigPolls++;
+
+		if (data.IsEmpty())
+		{
+			Print("[TDL_API] Map config: 200 with empty body — ignoring", LogLevel.DEBUG);
+			return;
+		}
+
+		JsonLoadContext json = new JsonLoadContext();
+		if (!json.LoadFromString(data))
+		{
+			Print("[TDL_API] Map config: response is not valid JSON", LogLevel.WARNING);
+			return;
+		}
+
+		int version = 0;
+		json.ReadValue("v", version);
+		if (version != MAP_CONFIG_WIRE_VERSION)
+		{
+			// A deployed API that speaks a different wire version will keep speaking it, so
+			// this is an answer, not a miss — retrying would only repeat the same warning.
+			m_bMapConfigInitialFetchDone = true;
+			Print(string.Format("[TDL_API] Map config: unsupported wire version %1 (expected %2)",
+				version, MAP_CONFIG_WIRE_VERSION), LogLevel.WARNING);
+			return;
+		}
+
+		string hash;
+		json.ReadValue("hash", hash);
+		string mapId;
+		json.ReadValue("mapId", mapId);
+		string satellite;
+		json.ReadValue("satelliteResourceName", satellite);
+		satellite.TrimInPlace();
+		float exposureBias = 0;
+		json.ReadValue("exposureBias", exposureBias);
+
+		m_bMapConfigInitialFetchDone = true;
+		m_sMapConfigSyncHash = hash;
+		m_sApiSatelliteResourceName = satellite;
+		m_fApiMapExposureBias = exposureBias;
+
+		Print(string.Format("[TDL_API] Map config: map '%1', satellite '%2', exposure bias %3",
+			mapId, satellite, exposureBias), LogLevel.DEBUG);
+
+		DistributeSatelliteResourceNameIfChanged();
+	}
+
+	void OnMapConfigPollError(int errorCode)
+	{
+		m_HotGate.Release();
+		// A 304 or 404 is a completed round-trip, not an endpoint fault: the world simply has
+		// no map config, or nothing changed since the last hash.
+		if (errorCode == 304 || errorCode == 404)
+			m_BreakerQueue.OnSuccess();
+		else
+			m_BreakerQueue.OnFailure();
+
+		m_bMapConfigPollInProgress = false;
+
+		if (errorCode == 304)
+		{
+			m_bMapConfigInitialFetchDone = true;
+			Print("[TDL_API] Map config: 304 Not Modified", LogLevel.DEBUG);
+			m_iSuccessfulMapConfigPolls++;
+			return;
+		}
+
+		m_iFailedMapConfigPolls++;
+
+		if (errorCode == 404)
+		{
+			// No map record matches this world. That is a settled answer — the client's own
+			// prefab/config lookup is what should draw here — so stop retrying.
+			m_bMapConfigInitialFetchDone = true;
+			Print("[TDL_API] Map config: 404 — no map configured for this world", LogLevel.DEBUG);
+		}
+		else if (errorCode == 401)
+		{
+			Print("[TDL_API] Map config: 401 — API key may have been revoked", LogLevel.WARNING);
+			m_bApiKeyValid = false;
+		}
+		else
+		{
+			Print(string.Format("[TDL_API] Map config poll failed: HTTP %1", errorCode),
+				LogLevel.WARNING);
+		}
+	}
+
+	void OnMapConfigPollTimeout()
+	{
+		m_HotGate.Release();
+		m_BreakerQueue.OnFailure();
+		m_bMapConfigPollInProgress = false;
+		m_iFailedMapConfigPolls++;
+		Print("[TDL_API] Map config poll timed out", LogLevel.DEBUG);
+	}
+
+	protected void HandleMapConfigRefreshCommand()
+	{
+		Print("[TDL_API] map_config_refresh command received, triggering immediate fetch",
+			LogLevel.DEBUG);
+		PollMapConfig();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Satellite raster this server wants drawn, config file ahead of API answer.
+	//! Empty means neither source named one and clients should fall back to their own lookup.
+	string GetSatelliteResourceName()
+	{
+		if (m_Config && m_Config.HasSatelliteOverride())
+			return m_Config.GetSatelliteOverride();
+
+		return m_sApiSatelliteResourceName;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Exposure trim in stops the 3D map should apply to this world. Zero means no trim.
+	float GetMapExposureBias()
+	{
+		return m_fApiMapExposureBias;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Fan the resolved values out to every connected client, but only on an actual change —
+	//! clients cache them and a repeat push would cost a map texture reload for no new picture.
+	void DistributeSatelliteResourceNameIfChanged()
+	{
+		string resolved = GetSatelliteResourceName();
+		float bias = GetMapExposureBias();
+		if (resolved == m_sDistributedSatelliteResourceName
+			&& bias == m_fDistributedMapExposureBias)
+			return;
+
+		m_sDistributedSatelliteResourceName = resolved;
+		m_fDistributedMapExposureBias = bias;
+
+		AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+		if (tdlSystem)
+			tdlSystem.DistributeSatelliteResourceNameToClients();
+	}
+
 	AG0_TDLTerrainRoadManager GetTerrainRoadManager()
 	{
 		return m_TerrainRoadManager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Terrain heightmap (elevation grid)
+	// Mirrors the terrain structures lifecycle exactly — see those methods for rationale.
+	//------------------------------------------------------------------------------------------------
+
+	void PollTerrainHeightmap()
+	{
+		if (!CanCommunicate())
+			return;
+		if (m_bTerrainHeightmapPollInProgress)
+			return;
+
+		if (!m_BreakerTerrain.AllowSend())
+			return;
+		if (!m_TerrainGate.TryAcquire())
+			return;
+
+		// Dedicated terrain context (see PollTerrainStructures for rationale).
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_TERRAIN_BASE_URL);
+		if (!ctx)
+		{
+			m_TerrainGate.Release();
+			Print("[TDL_API] Failed to get REST context for terrain heightmap poll", LogLevel.ERROR);
+			return;
+		}
+
+		// Auth only — no Accept-Encoding (REST stack does not transparently
+		// decompress; matches structures path).
+		string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		m_bTerrainHeightmapPollInProgress = true;
+
+		// Relative to API_TERRAIN_BASE_URL — see PollTerrainStructures.
+		// The grid size is part of the request because the server hashes the resampled
+		// payload: changing it invalidates the cached hash and forces a full re-sync.
+		string path = string.Format("/heightmap?grid=%1", TERRAIN_HEIGHTMAP_GRID);
+		if (m_TerrainHeightmapManager)
+		{
+			string lastHash = m_TerrainHeightmapManager.GetLastSyncHash();
+			if (!lastHash.IsEmpty())
+				path = string.Format("/heightmap?grid=%1&since=%2", TERRAIN_HEIGHTMAP_GRID, lastHash);
+		}
+
+		Print(string.Format("[TDL_API] Fetching terrain heightmap: GET %1", path), LogLevel.DEBUG);
+		ctx.GET(m_TerrainHeightmapCallback, path);
+	}
+
+	void OnTerrainHeightmapPollSuccess(string data)
+	{
+		m_TerrainGate.Release();
+		m_BreakerTerrain.OnSuccess();
+		m_bTerrainHeightmapPollInProgress = false;
+		m_iSuccessfulTerrainHeightmapPolls++;
+
+		if (data.IsEmpty())
+		{
+			Print("[TDL_API] Terrain heightmap: 200 with empty body — ignoring", LogLevel.DEBUG);
+			return;
+		}
+
+		string prevHash;
+		if (m_TerrainHeightmapManager)
+			prevHash = m_TerrainHeightmapManager.GetLastSyncHash();
+
+		int parsed = m_TerrainHeightmapManager.ParseColumnarPayload(data);
+		string newHash = m_TerrainHeightmapManager.GetLastSyncHash();
+
+		if (newHash != prevHash)
+		{
+			AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+			if (tdlSystem)
+				tdlSystem.DistributeTerrainHeightmapToClients();
+		}
+
+		Print(string.Format("[TDL_API] Terrain heightmap poll: %1 samples, hash=%2",
+			parsed, newHash), LogLevel.DEBUG);
+	}
+
+	void OnTerrainHeightmapPollError(int errorCode)
+	{
+		m_TerrainGate.Release();
+		// Same 304/404 = healthy round-trip rationale as structures path.
+		if (errorCode == 304 || errorCode == 404)
+			m_BreakerTerrain.OnSuccess();
+		else
+			m_BreakerTerrain.OnFailure();
+
+		m_bTerrainHeightmapPollInProgress = false;
+
+		if (errorCode == 304)
+		{
+			Print("[TDL_API] Terrain heightmap: 304 Not Modified", LogLevel.DEBUG);
+			m_iSuccessfulTerrainHeightmapPolls++;
+			return;
+		}
+
+		m_iFailedTerrainHeightmapPolls++;
+
+		if (errorCode == 401)
+		{
+			Print("[TDL_API] Terrain heightmap: 401 — API key may have been revoked", LogLevel.WARNING);
+			m_bApiKeyValid = false;
+		}
+		else if (errorCode == 404)
+		{
+			Print("[TDL_API] Terrain heightmap: 404 — no dataset for this world", LogLevel.DEBUG);
+		}
+		else
+		{
+			Print(string.Format("[TDL_API] Terrain heightmap poll failed: HTTP %1", errorCode),
+				LogLevel.WARNING);
+		}
+	}
+
+	void OnTerrainHeightmapPollTimeout()
+	{
+		m_TerrainGate.Release();
+		m_BreakerTerrain.OnFailure();
+		m_bTerrainHeightmapPollInProgress = false;
+		m_iFailedTerrainHeightmapPolls++;
+		Print("[TDL_API] Terrain heightmap poll timed out", LogLevel.DEBUG);
+	}
+
+	protected void HandleTerrainHeightmapRefreshCommand()
+	{
+		Print("[TDL_API] terrain_heightmap_refresh command received, triggering immediate fetch",
+			LogLevel.DEBUG);
+		PollTerrainHeightmap();
+	}
+
+	AG0_TDLTerrainHeightmapManager GetTerrainHeightmapManager()
+	{
+		return m_TerrainHeightmapManager;
 	}
 }
 

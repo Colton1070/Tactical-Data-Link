@@ -30,6 +30,23 @@
 //!    aren't exposed in the public API. Markers place with iconFlags=0
 //!    (basic symbol). When we figure out the enum we expose more flags.
 //------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------------
+//! The sub-form selectors, named so something without widgets can drive them. The context
+//! wheel builds its placement tree out of these; the panel is still the only thing that owns
+//! them.
+//------------------------------------------------------------------------------------------------
+enum ETDLMarkerOption
+{
+    PLACED_ICON,
+    PLACED_COLOR,
+    MIL_FACTION,
+    MIL_DIMENSION,
+    MIL_TYPE,
+    SHAPE_TOOL,
+    SHAPE_COLOR
+}
+
+//------------------------------------------------------------------------------------------------
 class AG0_TDLMarkerToolPanel
 {
     // Layout resources — duplicated under our mod, GUIDs from the .layout.meta files
@@ -45,7 +62,10 @@ class AG0_TDLMarkerToolPanel
     // and a SCR_EditBoxComponent root named EditBoxRoot for the label.
     protected static const ResourceName SHAPE_LAYOUT = "{54F9660B26F602EA}UI/layouts/Map/ATAKMapShapeEditBox.layout";
 
-    // Type spinbox indices — keep in sync with the m_aElementNames in TDLMenuUI.layout
+    // Stable type identities. These are NOT spinbox positions — the spinbox is rebuilt per tool
+    // mode (markers offer Placed/Military/Delete, drawing offers Shape/Delete), so a raw
+    // GetCurrentIndex() means different things in each. m_aTypeIndexMap maps position to identity;
+    // go through ResolveCurrentType() rather than comparing an index directly.
     protected static const int TYPE_INDEX_PLACED   = 0;
     protected static const int TYPE_INDEX_MILITARY = 1;
     protected static const int TYPE_INDEX_SHAPE    = 2;
@@ -70,7 +90,24 @@ class AG0_TDLMarkerToolPanel
     // Sentinel value -1 = "no saved selection yet, use the spinbox default".
     // Edit-box text statics start as empty strings.
     // ============================================
-    static protected int    s_iLastType            = -1;
+    // Every selector's item labels, mirrored as the selector is populated. The context wheel
+    // has no widgets to read a list off, and re-deriving the lists from config at the wheel
+    // would drift the first time a populate rule changed here. Recording them at the point of
+    // truth keeps a wheel slice and a spin box position the same index by construction.
+    protected ref array<string> m_aPlacedIconLabels = {};
+    protected ref array<string> m_aPlacedColorLabels = {};
+    protected ref array<string> m_aMilFactionLabels = {};
+    protected ref array<string> m_aMilDimensionLabels = {};
+    protected ref array<string> m_aMilTypeLabels = {};
+    protected ref array<string> m_aShapeToolLabels = {};
+    protected ref array<string> m_aShapeColorLabels = {};
+
+    //! Remembered category per tool mode. Two statics rather than one because the modes offer
+    //! different lists: with a single value, opening the drawing tool would overwrite the
+    //! marker tool's remembered category with SHAPE, and coming back would land on Marker
+    //! instead of Military. Sentinel -1 = nothing remembered yet.
+    static protected int    s_iLastMarkerType      = -1;
+    static protected int    s_iLastDrawType        = -1;
     static protected int    s_iLastPlacedIcon      = -1;
     static protected int    s_iLastPlacedColor     = -1;
     static protected string s_sLastPlacedText      = "";
@@ -101,6 +138,16 @@ class AG0_TDLMarkerToolPanel
     // works because it doesn't depend on a sub-form.
     protected Widget m_wDeleteSection;
     protected SCR_SpinBoxComponent m_TypeSpinBox;
+
+    //! Spinbox position -> TYPE_INDEX_*. Rebuilt by PopulateTypeSpinBox whenever the tool mode
+    //! changes. Same pattern the icon selector already uses to map visible rows back to config
+    //! entries, for the same reason: what the operator sees is a filtered view of a fixed set.
+    protected ref array<int> m_aTypeIndexMap = {};
+
+    //! True while this panel is acting as the drawing tool rather than the marker tool. ATAK
+    //! keeps Point Dropper and Drawing Tools apart, and so does TDL underneath — markers ride
+    //! vanilla replication, shapes are a mod-owned pipeline to tdl-api. Only the UI unioned them.
+    protected bool m_bDrawMode;
     protected SCR_ModularButtonComponent m_BackButton;
 
     // Player-owned marker scroll list (between Place and Back). m_wMarkerList
@@ -339,6 +386,13 @@ class AG0_TDLMarkerToolPanel
     void OnPanelHidden()
     {
         CapturePersistedText();
+
+        // A half-drawn shape belongs to the panel that started it. Left armed, its rubber-band
+        // ghost keeps drawing against a cursor nobody is aiming any more, and the next click
+        // anywhere on the map adds a point to a shape the operator thought they had walked
+        // away from — which is where the stray geometry comes from.
+        if (m_ShapeDrawSession && m_ShapeDrawSession.IsArmed())
+            m_ShapeDrawSession.Cancel();
     }
 
     //------------------------------------------------------------------------------------------------
@@ -349,8 +403,9 @@ class AG0_TDLMarkerToolPanel
     //! the active section being shown.
     protected void ApplyPersistedState()
     {
-        if (m_TypeSpinBox && s_iLastType != -1)
-            m_TypeSpinBox.SetCurrentItem(s_iLastType);
+        // Type is restored by PopulateTypeSpinBox instead — the remembered value is a
+        // TYPE_INDEX_* identity now, and only that function knows where it sits in this
+        // mode's item list.
 
         if (m_PlacedIconSpinBox && s_iLastPlacedIcon != -1)
             m_PlacedIconSpinBox.SetCurrentItem(s_iLastPlacedIcon);
@@ -468,7 +523,7 @@ class AG0_TDLMarkerToolPanel
         if (!m_TypeSpinBox)
             return null;
 
-        int type = m_TypeSpinBox.GetCurrentIndex();
+        int type = ResolveCurrentType();
         if (type == TYPE_INDEX_MILITARY)
             return BuildMilitaryMarkerPrototype();
         else
@@ -641,6 +696,7 @@ class AG0_TDLMarkerToolPanel
         {
             m_PlacedIconSpinBox.ClearAll();
             m_aPlacedIconGlobalIndex.Clear();
+            m_aPlacedIconLabels.Clear();
 
             array<ref SCR_MarkerIconEntry> iconEntries = m_PlacedConfig.GetIconEntries();
             if (iconEntries)
@@ -662,6 +718,7 @@ class AG0_TDLMarkerToolPanel
                     if (m_PlacedConfig.GetIconEntry(i, imageset, imagesetGlow, quad))
                     {
                         m_PlacedIconSpinBox.AddItem(quad);
+                        m_aPlacedIconLabels.Insert(quad);
                         m_aPlacedIconGlobalIndex.Insert(i);
                     }
                 }
@@ -677,6 +734,7 @@ class AG0_TDLMarkerToolPanel
         if (m_PlacedColorSpinBox)
         {
             m_PlacedColorSpinBox.ClearAll();
+            m_aPlacedColorLabels.Clear();
             array<ref SCR_MarkerColorEntry> colorEntries = m_PlacedConfig.GetColorEntries();
             int colorCount = 0;
             if (colorEntries)
@@ -687,6 +745,7 @@ class AG0_TDLMarkerToolPanel
                     if (!colorEntry)
                         continue;
                     m_PlacedColorSpinBox.AddItem(colorEntry.GetName());
+                    m_aPlacedColorLabels.Insert(colorEntry.GetName());
                     colorCount++;
                 }
             }
@@ -716,6 +775,7 @@ class AG0_TDLMarkerToolPanel
         if (m_MilFactionSpinBox)
         {
             m_MilFactionSpinBox.ClearAll();
+            m_aMilFactionLabels.Clear();
             int factionCount = 0;
             array<ref SCR_MarkerMilitaryFactionEntry> factionEntries = m_MilitaryConfig.GetMilitaryFactionEntries();
             if (factionEntries)
@@ -726,6 +786,7 @@ class AG0_TDLMarkerToolPanel
                     if (!entry)
                         continue;
                     m_MilFactionSpinBox.AddItem(entry.GetTranslation());
+                    m_aMilFactionLabels.Insert(entry.GetTranslation());
                     factionCount++;
                 }
             }
@@ -738,6 +799,7 @@ class AG0_TDLMarkerToolPanel
         if (m_MilDimensionSpinBox)
         {
             m_MilDimensionSpinBox.ClearAll();
+            m_aMilDimensionLabels.Clear();
             int dimCount = 0;
             array<ref SCR_MarkerMilitaryDimension> dimensions = m_MilitaryConfig.GetMilitaryDimensions();
             if (dimensions)
@@ -748,6 +810,7 @@ class AG0_TDLMarkerToolPanel
                     if (!dim)
                         continue;
                     m_MilDimensionSpinBox.AddItem(dim.GetTranslation());
+                    m_aMilDimensionLabels.Insert(dim.GetTranslation());
                     dimCount++;
                 }
             }
@@ -795,6 +858,8 @@ class AG0_TDLMarkerToolPanel
             return;
 
         combo.ClearAll();
+        if (combo == m_MilCombo1)
+            m_aMilTypeLabels.Clear();
 
         // First entry is always "None" so the user can opt out of this
         // combo's contribution to the OR'd icon flags.
@@ -823,6 +888,12 @@ class AG0_TDLMarkerToolPanel
     {
         if (!combo)
             return;
+
+        // Both combos are fed the same array, so mirroring off the first one alone is enough
+        // and mirroring off both would double the wheel's type list.
+        if (combo == m_MilCombo1)
+            m_aMilTypeLabels.Insert(label);
+
         AG0_TDLBoxedInt boxed = new AG0_TDLBoxedInt();
         boxed.m_iValue = flagValue;
         combo.AddItem(label, false, boxed);
@@ -1018,30 +1089,12 @@ class AG0_TDLMarkerToolPanel
         EMilitarySymbolDimension dimension = ResolveCurrentDimension();
         EMilitarySymbolIcon iconFlags     = ResolveCurrentIconFlags();
 
-        // Dev print — investigates the user-reported "dimension doesn't
-        // render on the placed marker" bug. PrepareMilitaryMarker encodes
-        // dimensionID*100 + factionID into m_iConfigID; if the values
-        // here look right but the placed marker doesn't visually reflect
-        // dimension, the regression is in the render path
-        // (CreateVanillaMarkerWidget) not in the panel state. Remove this
-        // print once the dimension issue is understood.
-        int factionSpinIdx = -99;
-        if (m_MilFactionSpinBox)
-            factionSpinIdx = m_MilFactionSpinBox.GetCurrentIndex();
-        int dimSpinIdx = -99;
-        if (m_MilDimensionSpinBox)
-            dimSpinIdx = m_MilDimensionSpinBox.GetCurrentIndex();
-        Print(string.Format("[AG0_TDLMarkerToolPanel] Build military: identity=%1 dimension=%2 iconFlags=%3 spinIdx{f=%4 d=%5}",
-            identity, dimension, iconFlags, factionSpinIdx, dimSpinIdx), LogLevel.NORMAL);
-
         SCR_MapMarkerBase marker = markerMgr.PrepareMilitaryMarker(identity, dimension, iconFlags);
         if (!marker)
         {
             Print("[AG0_TDLMarkerToolPanel] PrepareMilitaryMarker returned null — likely faction or dimension not registered in SCR_MapMarkerEntryMilitary config", LogLevel.WARNING);
             return null;
         }
-
-        Print(string.Format("[AG0_TDLMarkerToolPanel] PrepareMilitaryMarker → configID=%1", marker.GetMarkerConfigID()), LogLevel.NORMAL);
 
         if (m_MilEditBox)
             marker.SetCustomText(m_MilEditBox.GetValue());
@@ -1056,12 +1109,108 @@ class AG0_TDLMarkerToolPanel
     //! Parameterless to match the safe button-handler convention — read
     //! current state via GetCurrentIndex on the cached component ref so
     //! we don't depend on the invoker's exact signature.
+    //! Which category the panel is currently on, as a stable TYPE_INDEX_* rather than a spinbox
+    //! position. Falls back to PLACED so a panel whose spinbox never built still answers something
+    //! placement-shaped instead of silently behaving like delete mode.
+    int ResolveCurrentType()
+    {
+        if (!m_TypeSpinBox)
+            return TYPE_INDEX_PLACED;
+
+        int pos = m_TypeSpinBox.GetCurrentIndex();
+        if (!m_aTypeIndexMap.IsIndexValid(pos))
+            return TYPE_INDEX_PLACED;
+
+        return m_aTypeIndexMap[pos];
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Switch the panel between marker mode and drawing mode.
+    //!
+    //! Rebuilds the type spinbox so each mode offers only its own categories. Delete appears in
+    //! both on purpose — one eraser that removes whatever it sweeps is worth more than two, and
+    //! ATAK likewise keeps a single unified delete in its Overlay Manager.
+    void SetToolMode(bool drawMode)
+    {
+        bool changed = m_bDrawMode != drawMode;
+
+        // Discard before repopulating, not after. PopulateTypeSpinBox runs the change handler,
+        // which re-arms the draw session when the restored category is SHAPE — cancelling
+        // afterwards would tear down the session entering draw mode had just armed.
+        if (changed && m_ShapeDrawSession && m_ShapeDrawSession.IsArmed())
+            m_ShapeDrawSession.Cancel();
+
+        m_bDrawMode = drawMode;
+        PopulateTypeSpinBox();
+    }
+
+    bool IsDrawMode()
+    {
+        return m_bDrawMode;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Build the type spinbox for the current mode and restore the remembered category if it is
+    //! still offered here. The statics hold a TYPE_INDEX_*, not a position, so they survive the
+    //! item list changing underneath them.
+    protected void PopulateTypeSpinBox()
+    {
+        if (!m_TypeSpinBox)
+            return;
+
+        m_TypeSpinBox.ClearAll();
+        m_aTypeIndexMap.Clear();
+
+        if (m_bDrawMode)
+        {
+            AddTypeItem("Shape", TYPE_INDEX_SHAPE);
+        }
+        else
+        {
+            AddTypeItem("Marker", TYPE_INDEX_PLACED);
+            AddTypeItem("Military", TYPE_INDEX_MILITARY);
+        }
+
+        AddTypeItem("Delete", TYPE_INDEX_DELETE);
+
+        m_TypeSpinBox.SetCycleMode(true);
+
+        int remembered = ResolveRememberedType();
+        int restore = 0;
+        if (remembered != -1)
+        {
+            int found = m_aTypeIndexMap.Find(remembered);
+            if (found != -1)
+                restore = found;
+        }
+
+        m_TypeSpinBox.SetCurrentItem(restore);
+        OnTypeSpinBoxChanged();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected int ResolveRememberedType()
+    {
+        if (m_bDrawMode)
+            return s_iLastDrawType;
+
+        return s_iLastMarkerType;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void AddTypeItem(string label, int typeIndex)
+    {
+        m_TypeSpinBox.AddItem(label);
+        m_aTypeIndexMap.Insert(typeIndex);
+    }
+
+    //------------------------------------------------------------------------------------------------
     protected void OnTypeSpinBoxChanged()
     {
         if (!m_TypeSpinBox)
             return;
 
-        int index = m_TypeSpinBox.GetCurrentIndex();
+        int index = ResolveCurrentType();
         if (m_wPlacedSection)
             m_wPlacedSection.SetVisible(index == TYPE_INDEX_PLACED);
         if (m_wMilitarySection)
@@ -1080,7 +1229,10 @@ class AG0_TDLMarkerToolPanel
             ReArmShapeSession();
 
         // Mirror to static for cross-frontend persistence.
-        s_iLastType = index;
+        if (m_bDrawMode)
+            s_iLastDrawType = index;
+        else
+            s_iLastMarkerType = index;
     }
 
     //------------------------------------------------------------------------------------------------
@@ -1204,6 +1356,46 @@ class AG0_TDLMarkerToolPanel
     }
 
     //------------------------------------------------------------------------------------------------
+    //! Static + disabled markers unioned into a list this class owns.
+    //!
+    //! Vanilla SCR shuffles off-frame markers from m_aStaticMarkers into m_aDisabledMarkers
+    //! as the M map scrolls, so either list alone is an incomplete view (see project memory:
+    //! vanilla_marker_enum).
+    //!
+    //! The union must land in a new array. GetStaticMarkers() returns the live
+    //! m_aStaticMarkers reference, so appending to it promotes disabled markers into the base
+    //! game's own static list permanently — growth in a container TDL does not own and
+    //! cannot clean up, from what reads as a local read of the marker set.
+    protected array<SCR_MapMarkerBase> CollectAllMarkers(SCR_MapMarkerManagerComponent markerMgr)
+    {
+        array<SCR_MapMarkerBase> allMarkers = {};
+        if (!markerMgr)
+            return allMarkers;
+
+        array<SCR_MapMarkerBase> statics = markerMgr.GetStaticMarkers();
+        if (statics)
+        {
+            foreach (SCR_MapMarkerBase s : statics)
+            {
+                if (s)
+                    allMarkers.Insert(s);
+            }
+        }
+
+        array<SCR_MapMarkerBase> disabled = markerMgr.GetDisabledMarkers();
+        if (disabled)
+        {
+            foreach (SCR_MapMarkerBase d : disabled)
+            {
+                if (d && allMarkers.Find(d) == -1)
+                    allMarkers.Insert(d);
+            }
+        }
+
+        return allMarkers;
+    }
+
+    //------------------------------------------------------------------------------------------------
     // PLAYER MARKER SCROLL LIST
     //------------------------------------------------------------------------------------------------
 
@@ -1238,17 +1430,7 @@ class AG0_TDLMarkerToolPanel
         if (controller)
             selfPlayerId = controller.GetPlayerId();
 
-        // Union both lists — same trick as AG0_TDLDisplayController.UpdateVanillaMarkers.
-        array<SCR_MapMarkerBase> allMarkers = markerMgr.GetStaticMarkers();
-        array<SCR_MapMarkerBase> disabled = markerMgr.GetDisabledMarkers();
-        if (disabled)
-        {
-            foreach (SCR_MapMarkerBase d : disabled)
-            {
-                if (d && allMarkers.Find(d) == -1)
-                    allMarkers.Insert(d);
-            }
-        }
+        array<SCR_MapMarkerBase> allMarkers = CollectAllMarkers(markerMgr);
 
         // Drop pending-delete IDs that the manager has already cleared —
         // tracks the post-RPC state so a transient pending entry doesn't
@@ -1658,9 +1840,7 @@ class AG0_TDLMarkerToolPanel
     //! path or the shape draw session.
     bool IsShapeModeActive()
     {
-        if (!m_TypeSpinBox)
-            return false;
-        return m_TypeSpinBox.GetCurrentIndex() == TYPE_INDEX_SHAPE;
+        return ResolveCurrentType() == TYPE_INDEX_SHAPE;
     }
 
     //! True when the delete sub-form is the active sub-mode. Map clicks
@@ -1668,9 +1848,7 @@ class AG0_TDLMarkerToolPanel
     //! remove the player's own markers near the cursor.
     bool IsDeleteModeActive()
     {
-        if (!m_TypeSpinBox)
-            return false;
-        return m_TypeSpinBox.GetCurrentIndex() == TYPE_INDEX_DELETE;
+        return ResolveCurrentType() == TYPE_INDEX_DELETE;
     }
 
     //! Sweep-delete the local player's own PLACED_CUSTOM / PLACED_MILITARY
@@ -1681,6 +1859,102 @@ class AG0_TDLMarkerToolPanel
     //! gate to suppress per-frame duplicate dispatch while a removal is
     //! in flight. Only the player's own markers are affected — teammates'
     //! markers stay put regardless of how wide the sweep goes.
+    //------------------------------------------------------------------------------------------------
+    //! Point the panel's type control at a category.
+    //!
+    //! Goes through the spin box rather than writing the type straight onto a marker so the
+    //! panel's own change handler runs — that is what shows or hides the military edit box
+    //! and records the choice for this mode. A caller placing from the radial therefore
+    //! leaves the panel in the state it would have been in had the operator set the type by
+    //! hand, instead of a marker whose type disagrees with what the panel is showing.
+    void SetMarkerTypeIndex(int typeIndex)
+    {
+        if (!m_TypeSpinBox)
+            return;
+
+        if (ResolveCurrentType() == typeIndex)
+            return;
+
+        // The caller names a category, not a spinbox row — the two only coincide in one mode.
+        // A category the current mode doesn't offer is refused rather than clamped, because
+        // landing on some unrelated row would place the wrong kind of thing.
+        int pos = m_aTypeIndexMap.Find(typeIndex);
+        if (pos == -1)
+            return;
+
+        m_TypeSpinBox.SetCurrentItem(pos);
+        OnTypeSpinBoxChanged();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Is there anything at this point that SweepDeleteAt would actually remove?
+    //!
+    //! Exists so the radial can leave "Delete" out when there is nothing under the cursor,
+    //! rather than offering an action that silently does nothing. It deliberately mirrors
+    //! the sweep's filters exactly — same union of static and disabled markers, same type
+    //! and ownership tests, same radius, same pending-delete exclusions — because a query
+    //! that disagreed with the delete would be worse than no query at all.
+    bool HasDeletableAt(vector worldPos)
+    {
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return false;
+
+        int selfPlayerId = pc.GetPlayerId();
+        if (selfPlayerId <= 0)
+            return false;
+
+        float radiusSq = DELETE_SWEEP_RADIUS_M * DELETE_SWEEP_RADIUS_M;
+        vector targetPos = Vector(worldPos[0], 0, worldPos[2]);
+
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (markerMgr)
+        {
+            array<SCR_MapMarkerBase> allMarkers = CollectAllMarkers(markerMgr);
+
+            foreach (SCR_MapMarkerBase marker : allMarkers)
+            {
+                if (!marker)
+                    continue;
+
+                int t = marker.GetType();
+                if (t != SCR_EMapMarkerType.PLACED_CUSTOM && t != SCR_EMapMarkerType.PLACED_MILITARY)
+                    continue;
+                if (marker.GetMarkerOwnerID() != selfPlayerId)
+                    continue;
+                if (m_aPendingDeletes.Find(marker.GetMarkerID()) != -1)
+                    continue;
+
+                int mPos[2];
+                marker.GetWorldPos(mPos);
+                float dx = mPos[0] - targetPos[0];
+                float dz = mPos[1] - targetPos[2];
+                if (dx * dx + dz * dz <= radiusSq)
+                    return true;
+            }
+        }
+
+        AG0_TDLMapShapeManager shapeMgr = pc.GetTDLShapeManager();
+        if (!shapeMgr)
+            return false;
+
+        array<ref AG0_TDLMapShape> shapes = shapeMgr.GetShapes();
+        if (!shapes)
+            return false;
+
+        foreach (AG0_TDLMapShape shape : shapes)
+        {
+            if (!shape || shape.m_sId.IsEmpty())
+                continue;
+            if (m_aPendingShapeDeletes.Find(shape.m_sId) != -1)
+                continue;
+            if (IsCursorHittingShape(shape, targetPos, DELETE_SWEEP_RADIUS_M))
+                return true;
+        }
+
+        return false;
+    }
+
     void SweepDeleteAt(vector worldPos)
     {
         SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
@@ -1699,20 +1973,7 @@ class AG0_TDLMarkerToolPanel
         if (!syncComp)
             return;
 
-        // Union both lists — same trick as RefreshMarkerList. Vanilla
-        // SCR shuffles off-frame markers from m_aStaticMarkers into
-        // m_aDisabledMarkers; without checking both the sweep would miss
-        // markers placed outside the current M-map viewport.
-        array<SCR_MapMarkerBase> allMarkers = markerMgr.GetStaticMarkers();
-        array<SCR_MapMarkerBase> disabled = markerMgr.GetDisabledMarkers();
-        if (disabled)
-        {
-            foreach (SCR_MapMarkerBase d : disabled)
-            {
-                if (d && allMarkers.Find(d) == -1)
-                    allMarkers.Insert(d);
-            }
-        }
+        array<SCR_MapMarkerBase> allMarkers = CollectAllMarkers(markerMgr);
 
         float radiusSq = DELETE_SWEEP_RADIUS_M * DELETE_SWEEP_RADIUS_M;
         vector targetPos = Vector(worldPos[0], 0, worldPos[2]);
@@ -1786,6 +2047,25 @@ class AG0_TDLMarkerToolPanel
         if (!shapes)
             return;
 
+        // Drop pending ids the server has already removed, mirroring how
+        // RefreshMarkerList prunes m_aPendingDeletes. Without this the array
+        // only ever grows across a session.
+        for (int p = m_aPendingShapeDeletes.Count() - 1; p >= 0; p--)
+        {
+            string pendingId = m_aPendingShapeDeletes[p];
+            bool stillThere = false;
+            foreach (AG0_TDLMapShape live : shapes)
+            {
+                if (live && live.m_sId == pendingId)
+                {
+                    stillThere = true;
+                    break;
+                }
+            }
+            if (!stillThere)
+                m_aPendingShapeDeletes.Remove(p);
+        }
+
         foreach (AG0_TDLMapShape shape : shapes)
         {
             if (!shape || shape.m_sId.IsEmpty())
@@ -1808,7 +2088,21 @@ class AG0_TDLMarkerToolPanel
     //! shapes). Returns true on the first criterion that hits — sweep
     //! delete doesn't need a precise point-in-polygon, just "near enough
     //! to be the obvious target".
-    protected bool IsCursorHittingShape(AG0_TDLMapShape shape, vector targetPos, float sweepRadius)
+    //! Public face of the shape hit-test, so map picking tests shapes the same way the delete
+    //! sweep does. Two implementations of "is the cursor on this shape" would drift, and the
+    //! symptom would be a radial offering Delete on something the sweep then refuses to remove.
+    //! Static because map picking needs it before the operator has ever opened the marker tool,
+    //! and the test reads nothing but the shape and the cursor.
+    static bool IsShapeUnderCursor(AG0_TDLMapShape shape, vector targetPos, float radius)
+    {
+        if (!shape)
+            return false;
+
+        return IsCursorHittingShape(shape, targetPos, radius);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected static bool IsCursorHittingShape(AG0_TDLMapShape shape, vector targetPos, float sweepRadius)
     {
         float dxC = shape.m_vCenter[0] - targetPos[0];
         float dzC = shape.m_vCenter[2] - targetPos[2];
@@ -1914,9 +2208,9 @@ class AG0_TDLMarkerToolPanel
 
     //------------------------------------------------------------------------------------------------
     //! Spawn the shape sub-form layout into MarkerToolShapeSection and look
-    //! up the named widgets. {RESOURCE} marker on SHAPE_LAYOUT means the
-    //! layout file isn't authored yet — the spawn will fail cleanly and the
-    //! sub-form stays inert until the layout lands.
+    //! up the named widgets. A failed spawn leaves every spinbox ref null and
+    //! the sub-form inert rather than throwing, so a bad GUID degrades to
+    //! "shapes unavailable" instead of taking the whole panel down.
     protected void SpawnShapeEditBox()
     {
         if (!m_wShapeSection)
@@ -1925,7 +2219,7 @@ class AG0_TDLMarkerToolPanel
         m_wShapeEditBox = GetGame().GetWorkspace().CreateWidgets(SHAPE_LAYOUT, m_wShapeSection);
         if (!m_wShapeEditBox)
         {
-            Print("[AG0_TDLMarkerToolPanel] ATAKMapShapeEditBox.layout not yet authored — shape sub-form inert", LogLevel.NORMAL);
+            Print(string.Format("[AG0_TDLMarkerToolPanel] CreateWidgets failed for '%1' — shape sub-form inert; check the GUID matches ATAKMapShapeEditBox.layout.meta", SHAPE_LAYOUT), LogLevel.WARNING);
             return;
         }
 
@@ -1952,14 +2246,16 @@ class AG0_TDLMarkerToolPanel
 
     //------------------------------------------------------------------------------------------------
     //! Build the spinbox item lists. Tool list mirrors AG0_ETDLShapeTool
-    //! values (FREEHAND deliberately absent per v1 scope). Colour list
-    //! reuses the placed-marker config so the in-mod palette stays
-    //! consistent and the user sees colours they're already familiar with.
+    //! values. Colour list reuses the placed-marker config so the in-mod
+    //! palette stays consistent and the user sees colours they're already
+    //! familiar with.
     protected void PopulateShapeSelectors()
     {
         if (m_ShapeToolSpinBox)
         {
             m_ShapeToolSpinBox.ClearAll();
+            m_aShapeToolLabels.Clear();
+            m_aShapeToolLabels = {"Circle", "Rectangle", "Polygon", "Sector", "Range Rings", "Route", "Freehand"};
             m_ShapeToolSpinBox.AddItem("Circle");
             m_ShapeToolSpinBox.AddItem("Rectangle");
             m_ShapeToolSpinBox.AddItem("Polygon");
@@ -1975,6 +2271,7 @@ class AG0_TDLMarkerToolPanel
         if (m_ShapeStrokeColorSpinBox)
         {
             m_ShapeStrokeColorSpinBox.ClearAll();
+            m_aShapeColorLabels.Clear();
             if (m_PlacedConfig)
             {
                 array<ref SCR_MarkerColorEntry> colorEntries = m_PlacedConfig.GetColorEntries();
@@ -1985,6 +2282,7 @@ class AG0_TDLMarkerToolPanel
                         if (!entry)
                             continue;
                         m_ShapeStrokeColorSpinBox.AddItem(entry.GetName());
+                        m_aShapeColorLabels.Insert(entry.GetName());
                         m_aShapeStrokeColorValues.Insert(ColorToArgbInt(entry.GetColor()));
                     }
                 }
@@ -1993,6 +2291,7 @@ class AG0_TDLMarkerToolPanel
             if (m_aShapeStrokeColorValues.IsEmpty())
             {
                 m_ShapeStrokeColorSpinBox.AddItem("Red");
+                m_aShapeColorLabels.Insert("Red");
                 m_aShapeStrokeColorValues.Insert(0xFFFF0000);
             }
             m_ShapeStrokeColorSpinBox.SetCycleMode(true);
@@ -2156,6 +2455,339 @@ class AG0_TDLMarkerToolPanel
         // "place, place again" flow.
         ReArmShapeSession();
     }
+
+    //------------------------------------------------------------------------------------------------
+    // RADIAL OPTION SEAM
+    //
+    // Read and drive any sub-form selector by name. This exists so the context wheel can walk
+    // a placement tree — affiliation, then dimension, then type — without owning a second copy
+    // of what those choices are. Everything goes through the widget rather than around it, so
+    // the change handlers run and the cross-frontend statics stay in step whichever surface
+    // made the choice.
+    //------------------------------------------------------------------------------------------------
+
+    //! Sub-forms are spawned lazily on first panel show, and the selector lists come with
+    //! them. The wheel can be raised without the panel ever having been opened, so it has to
+    //! be able to ask for that work up front or its whole placement branch reads as empty.
+    void EnsureSelectorsBuilt()
+    {
+        if (!m_wPlacedEditBox)
+            SpawnPlacedEditBox();
+
+        if (!m_wMilitaryEditBox)
+            SpawnMilitaryEditBox();
+
+        if (!m_wShapeEditBox && m_wShapeSection)
+            SpawnShapeEditBox();
+
+        // The radial can raise the wheel in a session where the panel was never opened, and it
+        // reads category counts off this panel to decide which branches to offer.
+        if (m_aTypeIndexMap.IsEmpty())
+            PopulateTypeSpinBox();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! An if-chain rather than a switch: Enfusion rejects a switch whose cases carry a body
+    //! without falling through to a break, and every branch here returns.
+    protected array<string> LabelsForOption(ETDLMarkerOption option)
+    {
+        if (option == ETDLMarkerOption.PLACED_ICON)
+            return m_aPlacedIconLabels;
+
+        if (option == ETDLMarkerOption.PLACED_COLOR)
+            return m_aPlacedColorLabels;
+
+        if (option == ETDLMarkerOption.MIL_FACTION)
+            return m_aMilFactionLabels;
+
+        if (option == ETDLMarkerOption.MIL_DIMENSION)
+            return m_aMilDimensionLabels;
+
+        if (option == ETDLMarkerOption.MIL_TYPE)
+            return m_aMilTypeLabels;
+
+        if (option == ETDLMarkerOption.SHAPE_TOOL)
+            return m_aShapeToolLabels;
+
+        if (option == ETDLMarkerOption.SHAPE_COLOR)
+            return m_aShapeColorLabels;
+
+        return null;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! How many choices a selector offers. Zero means the list was never built or the config
+    //! never supplied it, which is a caller's cue to leave that branch out rather than open an
+    //! empty ring.
+    int GetOptionCount(ETDLMarkerOption option)
+    {
+        array<string> labels = LabelsForOption(option);
+        if (!labels)
+            return 0;
+
+        return labels.Count();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    string GetOptionLabel(ETDLMarkerOption option, int index)
+    {
+        array<string> labels = LabelsForOption(option);
+        if (!labels || index < 0 || index >= labels.Count())
+            return "";
+
+        return labels[index];
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void SetOptionIndex(ETDLMarkerOption option, int index)
+    {
+        if (index < 0 || index >= GetOptionCount(option))
+            return;
+
+        if (option == ETDLMarkerOption.PLACED_ICON && m_PlacedIconSpinBox)
+        {
+            m_PlacedIconSpinBox.SetCurrentItem(index);
+            OnPlacedIconChanged();
+            return;
+        }
+
+        if (option == ETDLMarkerOption.PLACED_COLOR && m_PlacedColorSpinBox)
+        {
+            m_PlacedColorSpinBox.SetCurrentItem(index);
+            OnPlacedIconChanged();
+            return;
+        }
+
+        if (option == ETDLMarkerOption.MIL_FACTION && m_MilFactionSpinBox)
+        {
+            m_MilFactionSpinBox.SetCurrentItem(index);
+            OnMilitarySelectorChanged();
+            return;
+        }
+
+        if (option == ETDLMarkerOption.MIL_DIMENSION && m_MilDimensionSpinBox)
+        {
+            m_MilDimensionSpinBox.SetCurrentItem(index);
+            OnMilitarySelectorChanged();
+            return;
+        }
+
+        if (option == ETDLMarkerOption.MIL_TYPE && m_MilCombo1)
+        {
+            m_MilCombo1.SetCurrentItem(index);
+            OnMilitarySelectorChanged();
+            return;
+        }
+
+        if (option == ETDLMarkerOption.SHAPE_TOOL && m_ShapeToolSpinBox)
+        {
+            m_ShapeToolSpinBox.SetCurrentItem(index);
+            OnShapeToolChanged();
+            return;
+        }
+
+        if (option == ETDLMarkerOption.SHAPE_COLOR && m_ShapeStrokeColorSpinBox)
+        {
+            m_ShapeStrokeColorSpinBox.SetCurrentItem(index);
+            OnShapeStyleChanged();
+        }
+    }
+
+
+    //------------------------------------------------------------------------------------------------
+    //! The imageset and quad an option draws as, or false if it has no picture.
+    //!
+    //! Icon entries carry no display name in the public API, so the selector labels them with
+    //! the raw imageset quad — "tdl_checkpoint" and the like. That is a fallback, not a name,
+    //! and it is why the panel shows a live preview image beside the spin box instead of
+    //! trusting the text. Anything else presenting these choices wants the same picture, so
+    //! it is resolved here rather than re-derived from config at each caller.
+    bool GetOptionImage(ETDLMarkerOption option, int index, out ResourceName outImageset, out string outQuad)
+    {
+        outImageset = ResourceName.Empty;
+        outQuad = "";
+
+        if (option != ETDLMarkerOption.PLACED_ICON || !m_PlacedConfig)
+            return false;
+
+        if (index < 0 || index >= m_aPlacedIconGlobalIndex.Count())
+            return false;
+
+        array<ref SCR_MarkerIconEntry> iconEntries = m_PlacedConfig.GetIconEntries();
+        if (!iconEntries)
+            return false;
+
+        int globalIndex = m_aPlacedIconGlobalIndex[index];
+        if (globalIndex < 0 || globalIndex >= iconEntries.Count())
+            return false;
+
+        SCR_MarkerIconEntry entry = iconEntries[globalIndex];
+        if (!entry)
+            return false;
+
+        ResourceName imagesetGlow;
+        entry.GetIconResource(outImageset, imagesetGlow, outQuad);
+        return !outImageset.IsEmpty() && !outQuad.IsEmpty();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The colour an option should be drawn in, or false if it carries no colour. Lets a
+    //! colour choice be shown as the colour rather than as its name.
+    bool GetOptionColor(ETDLMarkerOption option, int index, out Color outColor)
+    {
+        outColor = Color.White;
+
+        if (!m_PlacedConfig)
+            return false;
+
+        if (option != ETDLMarkerOption.PLACED_COLOR && option != ETDLMarkerOption.SHAPE_COLOR)
+            return false;
+
+        array<ref SCR_MarkerColorEntry> colorEntries = m_PlacedConfig.GetColorEntries();
+        if (!colorEntries || index < 0 || index >= colorEntries.Count())
+            return false;
+
+        SCR_MarkerColorEntry entry = colorEntries[index];
+        if (!entry)
+            return false;
+
+        outColor = entry.GetColor();
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The colour the icon preview is currently tinted with, so a picture shown elsewhere
+    //! matches the one the panel would place.
+    bool GetCurrentPlacedColor(out Color outColor)
+    {
+        int index = 0;
+        if (m_PlacedColorSpinBox && m_PlacedColorSpinBox.GetCurrentIndex() >= 0)
+            index = m_PlacedColorSpinBox.GetCurrentIndex();
+
+        return GetOptionColor(ETDLMarkerOption.PLACED_COLOR, index, outColor);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    // MARKER GRAB
+    //
+    // Picking a marker up and putting it down elsewhere. Kept here rather than in a frontend
+    // because both surfaces want it and the ownership rules are this panel's to state.
+    //------------------------------------------------------------------------------------------------
+
+    //! The marker under a point that this player may move, or null.
+    //!
+    //! Same type and ownership filters the sweep delete applies, because "mine to move" and
+    //! "mine to delete" are the same question. Nearest wins, so a cluster does not hand back
+    //! whichever happened to be enumerated first.
+    SCR_MapMarkerBase FindOwnedMarkerAt(vector worldPos)
+    {
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return null;
+
+        int selfPlayerId = pc.GetPlayerId();
+        if (selfPlayerId <= 0)
+            return null;
+
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+            return null;
+
+        array<SCR_MapMarkerBase> allMarkers = CollectAllMarkers(markerMgr);
+
+        float bestDistSq = DELETE_SWEEP_RADIUS_M * DELETE_SWEEP_RADIUS_M;
+        SCR_MapMarkerBase best = null;
+
+        foreach (SCR_MapMarkerBase marker : allMarkers)
+        {
+            if (!marker)
+                continue;
+
+            int t = marker.GetType();
+            if (t != SCR_EMapMarkerType.PLACED_CUSTOM && t != SCR_EMapMarkerType.PLACED_MILITARY)
+                continue;
+            if (marker.GetMarkerOwnerID() != selfPlayerId)
+                continue;
+            if (m_aPendingDeletes.Find(marker.GetMarkerID()) != -1)
+                continue;
+
+            int mPos[2];
+            marker.GetWorldPos(mPos);
+            float dx = mPos[0] - worldPos[0];
+            float dz = mPos[1] - worldPos[2];
+            float distSq = dx * dx + dz * dz;
+            if (distSq > bestDistSq)
+                continue;
+
+            bestDistSq = distSq;
+            best = marker;
+        }
+
+        return best;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Move a marker on this client only.
+    //!
+    //! This is the whole drag preview. Every marker's widget is placed from its own world
+    //! position on each display tick, so writing the position is enough to make it follow the
+    //! pointer — no ghost has to be drawn, and no other client sees anything until the drop.
+    void SetMarkerWorldPosLocal(SCR_MapMarkerBase marker, vector worldPos)
+    {
+        if (!marker)
+            return;
+
+        marker.SetWorldPos((int)worldPos[0], (int)worldPos[2]);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Publish a moved marker, reporting whether the request went out.
+    //!
+    //! The vanilla sync component exposes AskAddStaticMarker and AskRemoveStaticMarker and
+    //! nothing else, so a move is a remove followed by an add of the same instance. Two
+    //! consequences worth knowing rather than discovering: the marker comes back with a new
+    //! id, and everyone else sees one deletion and one creation instead of a move. Re-adding
+    //! the same object rather than building a fresh one is what keeps its icon, colour and
+    //! text identical across the round trip.
+    bool CommitMarkerMove(SCR_MapMarkerBase marker)
+    {
+        if (!marker)
+            return false;
+
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return false;
+
+        SCR_MapMarkerSyncComponent syncComp = SCR_MapMarkerSyncComponent.Cast(
+            pc.FindComponent(SCR_MapMarkerSyncComponent));
+        if (!syncComp)
+            return false;
+
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+            return false;
+
+        int markerId = marker.GetMarkerID();
+
+        // Unhide before asking for removal, so the server's lookup by id hits — the same
+        // pre-RPC step the sweep delete and the list entry both take.
+        markerMgr.SetStaticMarkerDisabled(marker, false);
+        syncComp.AskRemoveStaticMarker(markerId);
+        m_aPendingDeletes.Insert(markerId);
+        m_OnMarkerDeleted.Invoke(markerId);
+
+        if (!marker)
+        {
+            Print("[AG0_TDLMarkerToolPanel] Moved marker was collected during the remove — the caller must hold a ref to it across CommitMarkerMove",
+                LogLevel.WARNING);
+            return false;
+        }
+
+        markerMgr.InsertStaticMarker(marker, false);
+        RefreshMarkerList();
+        return true;
+    }
+
 }
 
 //------------------------------------------------------------------------------------------------

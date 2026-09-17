@@ -36,7 +36,209 @@ class AG0_TDLMapView
     // Canvas dimensions (cached)
     protected float m_fCanvasWidth;
     protected float m_fCanvasHeight;
-    
+
+    //------------------------------------------------------------------------------------------------
+    // STATIC / DYNAMIC COMMAND SPLIT
+    //
+    // Draw() used to Clear() and rebuild the whole command array every frame, so a map
+    // nobody had touched still cost a full projection pass over every road, structure and
+    // grid line — and that cost scales with zoom-out, which is why a map parked at low
+    // zoom stayed expensive for the rest of the session.
+    //
+    // The existing draw order already separates cleanly:
+    //   STATIC  (pose + dataset only): satellite/fallback, overlays, edge mask,
+    //           roads, structures, grid
+    //   DYNAMIC (every tick):          shapes, markers, bloodhound, scale bar, grid legend
+    //
+    // So the static block is a contiguous PREFIX of m_aDrawCommands. When nothing that
+    // feeds it has changed we Resize() the array back down to that prefix — which keeps
+    // the existing command objects in place, no reallocation and not one re-projected
+    // vertex — and rebuild only the cheap tail.
+    //
+    // The prefix also survives a suspended frontend untouched, which is what makes the
+    // world-space visibility gate cheap to wake from: a device that was gated off and is
+    // still parked on the same pose re-submits its cached prefix instead of rebuilding it.
+    protected int m_iStaticCommandCount = -1;   //!< -1 = no valid cached prefix, must rebuild
+
+    // Stamp of everything the static prefix was built against. Compared each Draw();
+    // any mismatch forces a rebuild. Committed only on a successful rebuild, so a
+    // suspended view can never end up with a stamp that disagrees with its cached commands.
+    protected bool   m_bStaticStampValid;
+    protected vector m_vStaticStampCenter;
+    protected float  m_fStaticStampZoom;
+    protected float  m_fStaticStampRotation;
+    protected float  m_fStaticStampCanvasW;
+    protected float  m_fStaticStampCanvasH;
+    protected string m_sStaticStampRoadHash       = "<unset>";
+    protected int    m_iStaticStampRoadCount      = -2;
+    protected string m_sStaticStampStructHash     = "<unset>";
+    protected int    m_iStaticStampStructCount    = -2;
+    protected int    m_iStaticStampOverlayMask    = -1;
+    protected int    m_iStaticStampSatRevision    = -1;
+    protected bool   m_bStaticStampTextureLoaded;
+
+    //! Set by anything that changes static content without changing the pose (overlay
+    //! toggled, satellite swapped, dataset pointer replaced). Forces the next Draw() to rebuild.
+    protected bool m_bStaticDirty = true;
+
+    protected float m_fSinceStaticRebuild;
+
+    //! Time since the last SetDrawCommands, accumulated on non-painting frames and reset on
+    //! every submit. Separate from m_fSinceStaticRebuild, which is deliberately frozen while
+    //! suspended so a gated-off surface does not wake with its keepalive already expired.
+    protected float m_fSinceSubmit;
+
+    //! How long a canvas may go without a submit before the next painted frame is forced to
+    //! RECONSTRUCT its commands rather than re-submit the cached ones. Matches the 30 s
+    //! interval AG0_TDLMenuController already uses against the same engine behaviour (it
+    //! reaps a canvas's CanvasWidgetCommand array after a few minutes of idle).
+    //!
+    //! Deliberately much longer than the keepalive: at 1 s, every glance away and back would
+    //! pay a full rebuild, which is the hitch this whole mechanism exists to avoid. A throttled
+    //! surface never reaches this at all — it submits several times a second — so only a
+    //! genuinely parked surface (stowed, or behind the ATAK menu for half a minute) pays it.
+    protected static const float STATIC_RESUBMIT_MAX_IDLE = 30.0;
+
+    //! NOTE — there is deliberately NO rate cap on rebuilds during motion.
+    //!
+    //! Capping the static rebuild to e.g. 30 Hz while the pose moves looks like free money,
+    //! but the dynamic tail is re-projected at the CURRENT pose every tick while the cached
+    //! prefix still holds screen coordinates from the pose it was built at. Any frame where
+    //! those two disagree, every shape and marker slides off the road and building it was
+    //! drawn on, then snaps back when the prefix catches up. At 144 fps and a fast drag that
+    //! is tens of pixels of separation — far more visible than the frames it would save.
+    //!
+    //! The win this whole mechanism exists for is the SETTLED case: a map parked at a zoom
+    //! level nobody is changing. Motion is transient and operator-driven; leaving it at
+    //! frame-rate keeps a pan pixel-identical to the pre-split behaviour.
+
+    //! Settled keepalive. Nothing should change without bumping a version or the dirty flag,
+    //! but a 1 Hz backstop means a missed invalidation self-heals within a second instead of
+    //! leaving a permanently stale map.
+    protected static const float STATIC_KEEPALIVE_INTERVAL = 1.0;
+
+    //! Pose-change epsilons. Center is compared in SCREEN PIXELS rather than world units so
+    //! the threshold means the same thing at every zoom — a quarter-pixel of movement cannot
+    //! change a single rasterized command. Without an epsilon here any asymptotic follow
+    //! (player tracking, mirror pull) leaves the pose "moving" by a nanometre forever and
+    //! the gate never engages at all.
+    protected static const float STATIC_POSE_EPSILON_PX  = 0.25;
+    protected static const float STATIC_ZOOM_EPSILON     = 0.0001;
+    protected static const float STATIC_ROTATION_EPSILON = 0.05;   // degrees
+
+    //! True only between the start and end of the 2D draw pass. WorldToScreen consults it to
+    //! skip its GetHostedMap3DView() probe: reaching the 2D block means the 3D pane is either
+    //! closed or hosted on the OTHER surface, so the probe provably returns null — and it is
+    //! not free, it walks IsViewOpen -> GetInstance -> m_wCanvas.GetParent() -> IsHostedBy
+    //! per projected point, i.e. thousands of native calls per frame once 3D has been opened once.
+    protected bool m_bIn2DDrawPass;
+
+    //------------------------------------------------------------------------------------------------
+    // ROAD LEVEL OF DETAIL, DECIMATION AND BUDGET
+    //
+    // Roads are the one pass with nothing bounding it. Stroke width is floored to a minimum
+    // per priority class, so unlike a sub-pixel building a road is never dropped for being too
+    // thin to read — at full zoom-out the pass emits geometry for the entire network. These
+    // four constants are what bound it.
+
+    //! Zoom above which trails (priority <= 1) stop drawing, then paved (priority 2).
+    //! m_fZoom is 1.0 at whole-map and m_fMinZoom (0.1) at closest, so LARGER = further out.
+    //!
+    //! This is the one visible behaviour change in the pass: zoomed out past the first
+    //! threshold the map shows a road network rather than every footpath. That is the
+    //! standard tactical-map treatment and it is what makes a zoomed-out map legible as well
+    //! as affordable — but it IS a presentation decision, so these are the dials to argue with.
+    //!
+    //! Deliberately set high. The persisted default is 0.15 and normal working zooms sit well
+    //! below 0.5, so a routine session never sheds anything; paved roads only go at 0.8, which
+    //! is close enough to whole-map that individual streets are a few pixels long anyway.
+    //! Earlier values of 0.35/0.60 put "highways only" across the top third of the zoom range
+    //! including the fully-zoomed-out view, which is too aggressive to be the default.
+    protected static const float ROAD_LOD_SHED_TRAILS_ZOOM = 0.50;
+    protected static const float ROAD_LOD_SHED_PAVED_ZOOM  = 0.80;
+
+    //! Dead-band around each threshold. Without it, a pan that hovers on a boundary flickers
+    //! whole road classes in and out frame to frame.
+    protected static const float ROAD_LOD_HYSTERESIS = 0.03;
+
+    //! 0 = draw everything, 1 = drop trails, 2 = highways only. Sticky across frames; only
+    //! UpdateRoadLodBand writes it.
+    protected int m_iRoadLodBand;
+
+    //! Hard ceiling on the work the road pass may emit in one rebuild, counted in VERTICES
+    //! (plus one unit per join polygon) rather than in commands. Commands are the wrong unit
+    //! once runs are batched: one command can be a 2,000-vertex polyline, so a command budget
+    //! would bound nothing. The LOD band is the primary bound; this is the backstop that makes
+    //! the worst case provable. Tune on hardware — the first number to lower if a console
+    //! build is still GPU-bound.
+    protected static const int ROAD_VERTEX_BUDGET = 12000;
+
+    //! Draw every Nth vertex while the pose is moving. Clamped to >= 1 at the point of use;
+    //! a zero or negative stride would not advance the polyline walk and would hang the frame.
+    protected static const int ROAD_MOTION_VERTEX_STEP = 3;
+
+    //! Motion score at or above which decimation kicks in.
+    //!
+    //! Without a score, any slow drift alternates: drift crosses the 0.25 px pose epsilon,
+    //! that rebuild decimates and resets the stamp, the next frame is under the epsilon so it
+    //! rebuilds full-detail, and the map shimmers between straightened and true geometry
+    //! indefinitely. A walking player at mid zoom is exactly that case. A score means only a
+    //! sustained gesture — a real pan or zoom — ever decimates, and the first build of a view
+    //! (where the stamp is empty and everything reads as "moved") never does.
+    protected static const int ROAD_MOTION_STREAK_FRAMES = 3;
+
+    //! Ceiling on the score, so a long pan cannot bank so much credit that it keeps decimating
+    //! for a visible stretch after the operator lets go.
+    protected static const int ROAD_MOTION_STREAK_MAX = 6;
+
+    //! How much a non-moving rebuild subtracts. Greater than the +1 for a moving one, so the
+    //! score falls faster than it rises and a real stop converges in a couple of rebuilds.
+    protected static const int ROAD_MOTION_STREAK_DECAY = 2;
+
+    //! Motion score: +1 per moving frame, -DECAY per still one, clamped to [0, MAX].
+    //!
+    //! Deliberately a decaying score rather than a streak that any single still frame resets.
+    //! A drag at 144 fps against a 125 Hz mouse produces a frame with no new delta roughly one
+    //! in eight; a hard reset would drop out of decimation on each of those and produce the
+    //! same geometry shimmer at a lower duty cycle. Decaying rides straight over them.
+    protected int m_iRoadMotionStreak;
+
+    //! ...but only when zoomed out past this, where consecutive vertices are a pixel or two
+    //! apart anyway. Decimating a close-up road would visibly straighten curves the operator
+    //! is using to navigate.
+    protected static const float ROAD_MOTION_MIN_ZOOM = 0.30;
+
+    //! Emit contiguous visible segments as one multi-vertex LineDrawCommand instead of one
+    //! command per segment. Set false to revert to per-segment emission — see EmitRoadPolyline
+    //! for why this is a flag and not just the behaviour.
+    protected static const bool ROAD_BATCH_SEGMENTS = true;
+
+    //! Round joins below this radius are skipped. Was effectively 1.0 (any stroke >= 2 px).
+    protected static const float ROAD_JOIN_MIN_RADIUS = 2.0;
+
+    //! Set for the duration of a static rebuild; read by the road pass. True means the
+    //! operator has been panning or zooming for a sustained run of rebuilds.
+    protected bool m_bRoadDecimating;
+
+    //! Set BY the road pass when it actually decimated something. Distinct from
+    //! m_bRoadDecimating, which is only an intent: on a terrain with no road dataset the pass
+    //! early-returns, and treating that as "decimated" would force a pointless full rebuild of
+    //! the satellite, overlays, structures and grid after every pan.
+    protected bool m_bRoadDecimationApplied;
+
+    //! Whether the cached static prefix was built decimated. Forces one full-detail rebuild
+    //! once motion stops — otherwise the settled map would keep reusing a decimated prefix
+    //! forever, since a settled pose never triggers a rebuild.
+    protected bool m_bLastStaticWasDecimated;
+
+    //! Rotation trig cache. WorldToScreen recomputed Math.Cos/Math.Sin of m_fRotation on every
+    //! call — per road vertex, per structure corner, per grid endpoint, per shape vertex.
+    //! Keyed on the rotation value rather than on the frame so callers outside the draw pass
+    //! (marker placement via WorldToLayout) stay correct if rotation changed since.
+    protected float m_fTrigForRotation = 99999;
+    protected float m_fTrigCos = 1;
+    protected float m_fTrigSin = 0;
+
     // Member markers
     protected ref array<ref AG0_TDLMapMarker> m_aMarkers = {};
 	// Shape overlay (populated externally via SetShapes)
@@ -55,7 +257,14 @@ class AG0_TDLMapView
 	// Streamed terrain roads (populated externally via SetTerrainRoads).
 	// Drawn before structures so buildings render on top of road overlays.
 	protected ref array<ref AG0_TDLTerrainRoadFeature> m_aTerrainRoads;
-    
+
+	// Dataset change signals feeding the static dirty gate. See SetTerrainStructures for why
+	// the payload hash is used rather than the managers' GetVersion().
+	protected string m_sTerrainStructureHash;
+	protected int    m_iTerrainStructureCount = -1;
+	protected string m_sTerrainRoadHash;
+	protected int    m_iTerrainRoadCount      = -1;
+
     // Colors
     protected int m_iSelfMarkerColor = 0xFF00FF00;      // Green for self
     protected int m_iMemberMarkerColor = 0xFF00BFFF;    // Blue for network members
@@ -89,7 +298,15 @@ class AG0_TDLMapView
     protected static const float SHAPE_LABEL_PAD = 3;            // Background padding
     protected static const int SHAPE_LABEL_BG_COLOR = 0xCC000000; // Semi-transparent black background
     protected static const int SHAPE_LABEL_TEXT_COLOR = 0xFFFFFFFF; // White text
-    
+
+    // Grid line labelling
+    protected static const float GRID_LABEL_SIZE = 11;              // Font size in pixels
+    protected static const float GRID_LABEL_INSET_PX = 22;          // Distance walked along the line from its entry point
+    protected static const float GRID_LABEL_EDGE_MARGIN_PX = 4;     // Clearance between the pill and the canvas edge
+    protected static const float GRID_LABEL_MIN_CHORD_PX = 48;      // Shorter crossings only nick a corner — skip them
+    protected static const float GRID_LABEL_MIN_SPACING_PX = 55;    // Below this, labels collide — omit them
+    protected static const int GRID_LABEL_TEXT_COLOR = 0xFFE8E8E8;  // Slightly off-white, quieter than shape labels
+
     //------------------------------------------------------------------------------------------------
     void AG0_TDLMapView()
     {
@@ -98,6 +315,11 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     void ~AG0_TDLMapView()
     {
+        // Claimed on every painted frame, so it has to be surrendered here: a destroyed view
+        // that still holds the slot sends ToggleMap3DOnActiveView into a tree that is gone.
+        if (s_ActiveView == this)
+            s_ActiveView = null;
+
         m_pMapTexture = null;
         m_aDrawCommands = null;
         m_aMarkers = null;
@@ -183,37 +405,63 @@ class AG0_TDLMapView
 	}
     
     //------------------------------------------------------------------------------------------------
-	protected bool LoadMapTexture()
+	//! Satellite raster for whatever world is loaded, resolved without touching view state.
+	//!
+	//! Static because the 3D map drapes the same raster over its terrain and must resolve it
+	//! identically — two lookups that could disagree would put a different picture on each
+	//! surface of the same map.
+	static ResourceName ResolveSatelliteTexture()
 	{
-	    SCR_MapEntity mapEntity = SCR_MapEntity.GetMapInstance();
-	    if (!mapEntity)
-	        return false;
-	    
 	    ResourceName texturePath;
-	    
-	    // Try prefab lookup first (works for properly configured maps like Arland, Everon)
-	    EntityPrefabData prefabData = mapEntity.GetPrefabData();
-	    if (prefabData)
+
+	    // Server's answer wins outright. It folds together the two sources an operator can
+	    // actually change without a mod rebuild — api_config.json and the map record on
+	    // tdl-api — so anything below is only reached when neither named a raster.
+	    if (AG0_TDLMapSatelliteOverride.HasValue())
 	    {
-	        BaseContainer container = prefabData.GetPrefab();
-	        if (container)
-	            container.Get("Satellite background image", texturePath);
+	        texturePath = AG0_TDLMapSatelliteOverride.Get();
+	        return texturePath;
 	    }
-	    
-	    // Fallback to lookup table for maps with instance-only configuration
+
+	    // Prefab lookup next: worlds that carry a properly configured map entity describe
+	    // their own raster, so no per-world table entry is needed for them.
+	    SCR_MapEntity mapEntity = SCR_MapEntity.GetMapInstance();
+	    if (mapEntity)
+	    {
+	        EntityPrefabData prefabData = mapEntity.GetPrefabData();
+	        if (prefabData)
+	        {
+	            BaseContainer container = prefabData.GetPrefab();
+	            if (container)
+	                container.Get("Satellite background image", texturePath);
+	        }
+	    }
+
+	    // Lookup table covers worlds configured on the instance rather than the prefab,
+	    // where the property above resolves empty.
 	    if (texturePath.IsEmpty())
 	    {
 	        texturePath = GetFallbackSatelliteTexture();
 	        if (!texturePath.IsEmpty())
 	            Print(string.Format("[TDLMapView] Using fallback texture: %1", texturePath), LogLevel.WARNING);
 	    }
-	    
+
+	    return texturePath;
+	}
+
+    //------------------------------------------------------------------------------------------------
+	protected bool LoadMapTexture()
+	{
+	    if (!SCR_MapEntity.GetMapInstance())
+	        return false;
+
+	    ResourceName texturePath = ResolveSatelliteTexture();
 	    if (texturePath.IsEmpty())
 	    {
 	        Print("[TDLMapView] Could not determine satellite texture path", LogLevel.WARNING);
 	        return false;
 	    }
-	    
+
 	    Print(string.Format("[TDLMapView] Loading texture: %1", texturePath), LogLevel.DEBUG);
 	    
 	    m_pMapTexture = CanvasWidget.LoadTexture(texturePath);
@@ -222,9 +470,42 @@ class AG0_TDLMapView
 	        Print(string.Format("[TDLMapView] Failed to load texture: %1", texturePath), LogLevel.WARNING);
 	        return false;
 	    }
-	    
+
 	    m_bTextureLoaded = true;
+	    m_iSatelliteRevision = AG0_TDLMapSatelliteOverride.GetRevision();
 	    return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Revision of the server-pushed raster this view's texture was built from.
+	//! The push is not synchronised with the map opening — a player who joins and opens the
+	//! map immediately will usually have drawn a frame or two before it lands.
+	protected int m_iSatelliteRevision = -1;
+
+	//------------------------------------------------------------------------------------------------
+	//! Swap in a raster that arrived after Init(). Cheap when nothing changed: the revision
+	//! only moves when the server pushed a genuinely different path.
+	protected void RefreshSatelliteTextureIfStale()
+	{
+	    if (m_iSatelliteRevision == AG0_TDLMapSatelliteOverride.GetRevision())
+	        return;
+
+	    m_iSatelliteRevision = AG0_TDLMapSatelliteOverride.GetRevision();
+	    m_pMapTexture = null;
+	    m_bTextureLoaded = false;
+	    LoadMapTexture();
+
+	    // A different raster is different static content even though the pose has not moved.
+	    // The revision is a stamp input too, so this is belt-and-braces — but the flag is what
+	    // makes the intent explicit at the point of change.
+	    MarkStaticDirty();
+
+	    // The drape is baked once at slab build time, so it cannot notice this on its own —
+	    // and a 3D surface still showing the previous raster while the 2D one has swapped is
+	    // exactly the disagreement a single resolution point is meant to prevent.
+	    AG0_TDLMap3DView view = GetHostedMap3DView();
+	    if (view)
+	        view.RefreshDrapeRaster();
 	}
 	
 	//------------------------------------------------------------------------------------------------
@@ -293,7 +574,7 @@ class AG0_TDLMapView
 	
 	//------------------------------------------------------------------------------------------------
 	// Fallback texture lookup for maps without proper prefab configuration
-	protected ResourceName GetFallbackSatelliteTexture()
+	protected static ResourceName GetFallbackSatelliteTexture()
 	{
 	    AG0_MapSatelliteConfig config = AG0_MapSatelliteConfigHelper.GetConfig(MAP_SATELLITE_CONFIG);
 	    if (!config)
@@ -323,16 +604,192 @@ class AG0_TDLMapView
     void CenterOnPlayer()
     {
         IEntity player = GetGame().GetPlayerController().GetControlledEntity();
-        if (player)
-            m_vCenterWorld = player.GetOrigin();
+        if (!player)
+            return;
+
+        // Player tracking has to move the 3D orbit focus, not the 2D centre. While the
+        // pane is up Draw() rewrites m_vCenterWorld from that focus every frame, so a
+        // 2D-only write here is erased before anything reads it — which is why the track
+        // button did nothing in 3D.
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (view)
+        {
+            view.FocusOnWorld(player.GetOrigin());
+            return;
+        }
+
+        m_vCenterWorld = player.GetOrigin();
     }
     
     //------------------------------------------------------------------------------------------------
+    //! Degrees of orbit per pixel of drag while the 3D map is up. See AG0_TDLMap3DView.c.
+    protected static const float MAP3D_ORBIT_DEG_PER_PX = 0.25;
+
+    //! Sentinel coordinate for points the 3D projection rejects (behind the camera).
+    //! Far enough off-canvas that every consumer's visibility bounds check fails and
+    //! even unchecked widgets (the self marker) land nowhere visible.
+    protected static const float MAP3D_OFFSCREEN_PX = -100000;
+
+    //! Tracks the view currently drawing so an input handler on the player controller
+    //! can reach a live canvas host without the controller having to know how the menu
+    //! and world-space frontends each build their widget tree.
+    protected static AG0_TDLMapView s_ActiveView;
+
+    //! Declared by whoever built this view, not inferred. The world-space device says so; the
+    //! fullscreen menu leaves it false. Everything about pane arbitration hangs off this one
+    //! bit, and it is not something to work out from the widget tree at runtime.
+    protected bool m_bIsWorldSpaceSurface;
+
+    //! A mirror surface paints continuously but must never be the view a keybind or the 3D
+    //! pane resolves to — the operator means the map they are actually looking at. Without
+    //! this, a peripheral drawing every tick wins s_ActiveView permanently and outbids both
+    //! real surfaces in RequestHost, so the 3D toggle lands on the mirror instead.
+    protected bool m_bPassive;
+
+    //------------------------------------------------------------------------------------------------
+    //! Entry point for the toggle keybind and the toolbar button, which both reach the
+    //! active view rather than the 3D map directly — only the view knows which canvas host
+    //! is currently live.
+    void SetWorldSpaceSurface(bool isWorldSpace)
+    {
+        m_bIsWorldSpaceSurface = isWorldSpace;
+    }
+
+    bool IsWorldSpaceSurface()
+    {
+        return m_bIsWorldSpaceSurface;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void SetPassive(bool passive)
+    {
+        m_bPassive = passive;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Which tier this surface occupies when contending for the 3D pane. Derived rather than
+    //! stored because both inputs are already declared by whoever built the view, and a third
+    //! flag to keep in step with them would be a third thing to get wrong.
+    protected int GetHostRank()
+    {
+        if (m_bPassive)
+            return AG0_TDLMap3DView.HOST_RANK_MIRROR;
+
+        if (m_bIsWorldSpaceSurface)
+            return AG0_TDLMap3DView.HOST_RANK_WORLDSPACE;
+
+        return AG0_TDLMap3DView.HOST_RANK_MENU;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    static void ToggleMap3DOnActiveView()
+    {
+        if (s_ActiveView)
+            s_ActiveView.ToggleMap3D();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The open 3D map, but only when THIS view's widget tree hosts its pane. Two views
+    //! can tick per frame (menu + world-space device), and only the hosting one may
+    //! reroute its projections — the other still describes a live 2D canvas.
+    protected AG0_TDLMap3DView GetHostedMap3DView()
+    {
+        if (!m_wCanvas || !AG0_TDLMap3DView.IsViewOpen())
+            return null;
+
+        AG0_TDLMap3DView view = AG0_TDLMap3DView.GetInstance();
+        if (!view)
+            return null;
+
+        // Same host resolution as ToggleMap3D, so the comparison is against the
+        // widget the pane was actually parented to.
+        Widget host = m_wCanvas.GetParent();
+        if (!host)
+            host = m_wCanvas;
+
+        if (!view.IsHostedBy(host))
+            return null;
+
+        return view;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Right-drag axis. Deliberately a no-op while the 3D map is closed:
+    //! the 2D map has always been single-axis, and silently giving right-drag a second
+    //! meaning there would change behaviour nobody asked to change.
+    //! Pan the map in whichever mode is showing.
+    //!
+    //! Distinct from Pan(), which reroutes to orbit while 3D is up — that reroute exists so
+    //! the drag gesture means "turn the view" in 3D, and it is the right answer for a drag.
+    //! It is the wrong answer for a stick dedicated to panning, which has to keep meaning
+    //! the same thing in both modes or the operator relearns it every time they toggle.
+    void PanMap(float screenDeltaX, float screenDeltaY)
+    {
+        if (AG0_TDLMenuController.IsAnyRadialOpen())
+            return;
+
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (view)
+        {
+            view.PanInput(screenDeltaX, screenDeltaY);
+            return;
+        }
+
+        Pan(screenDeltaX, screenDeltaY);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void PanSecondary(float screenDeltaX, float screenDeltaY)
+    {
+        if (AG0_TDLMenuController.IsAnyRadialOpen())
+            return;
+
+        if (!AG0_TDLMap3DView.IsViewOpen())
+            return;
+
+        AG0_TDLMap3DView panView = AG0_TDLMap3DView.GetInstance();
+        if (panView)
+            panView.PanInput(screenDeltaX, screenDeltaY);
+    }
+
+    //------------------------------------------------------------------------------------------------
     void SetZoom(float zoom)
+    {
+        // The radial reads the same stick and wheel this does. Without swallowing them the
+        // map zooms and slides underneath an open menu, which on a pad also drags the world
+        // position the menu's entries were opened against.
+        if (AG0_TDLMenuController.IsAnyRadialOpen())
+            return;
+
+        // The zoom control is shared so the existing wheel/stick binding drives orbit
+        // distance while the 3D pane is up.
+        if (AG0_TDLMap3DView.IsViewOpen())
+        {
+            AG0_TDLMap3DView zoomView = AG0_TDLMap3DView.GetInstance();
+            if (zoomView)
+            {
+                float direction = -1;
+                if (zoom < m_fZoom)
+                    direction = 1;
+                zoomView.ZoomInput(direction);
+            }
+            return;
+        }
+
+        m_fZoom = Math.Clamp(zoom, m_fMinZoom, m_fMaxZoom);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Raw zoom write for a passive mirror, which reproduces a value rather than expressing an
+    //! input. SetZoom is input-facing: it swallows the write while a radial is open, and while
+    //! the 3D pane is up it forwards to ZoomInput as a relative step instead. A mirror pushing
+    //! its target zoom every tick through that path would ratchet the operator's orbit distance
+    //! to the clamp in about two seconds and freeze its own 2D zoom while doing it.
+    void ApplyMirrorZoom(float zoom)
     {
         m_fZoom = Math.Clamp(zoom, m_fMinZoom, m_fMaxZoom);
     }
-    
+
     //------------------------------------------------------------------------------------------------
     void ZoomIn(float amount = 0.1)
     {
@@ -346,6 +803,10 @@ class AG0_TDLMapView
     }
     
     //------------------------------------------------------------------------------------------------
+    //! Deliberately has no 3D counterpart. In 2D this is called with 0 every frame that
+    //! track-up is off, to hold the map north-up; doing the same to camera yaw would
+    //! fight the operator's orbit drag back to north on every frame. With track-up off,
+    //! 3D yaw belongs to whoever last dragged it.
     void SetRotation(float degrees)
     {
         m_fRotation = degrees;
@@ -354,6 +815,17 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     void SetTrackUp(float playerHeading)
     {
+        // Track-up in 3D is camera yaw, not a canvas rotation: m_fRotation describes the
+        // 2D map, which is not being drawn while the pane is up. Yaw is set to the raw
+        // heading rather than its negation so that GetRotation()'s 3D branch (-cameraYaw)
+        // hands the compass needle the same value 2D would have.
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (view)
+        {
+            view.SetCameraYaw(playerHeading);
+            return;
+        }
+
         // Rotate map so player heading points up
         m_fRotation = -playerHeading;
     }
@@ -361,6 +833,29 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     void Pan(float screenDeltaX, float screenDeltaY)
     {
+        if (AG0_TDLMenuController.IsAnyRadialOpen())
+            return;
+
+        // Rerouting here rather than in the drag handler means every existing pan gesture
+        // (mouse, gamepad, world-space cursor) drives the 3D orbit without a second input
+        // path to keep in sync.
+        if (AG0_TDLMap3DView.IsViewOpen())
+        {
+            // Taking manual yaw means leaving track-up, the same way a drag already
+            // releases player tracking. Without this the operator orbits, track-up
+            // re-pins yaw to their heading on the next frame, and the view appears to
+            // fight back with no indication of why. 2D is unaffected: there a drag pans
+            // and never touches rotation, so track-up and dragging do not compete.
+            if (AG0_TDLDisplayController.GetTrackUp())
+                AG0_TDLDisplayController.SetTrackUp(false);
+
+            AG0_TDLMap3DView orbitView = AG0_TDLMap3DView.GetInstance();
+            if (orbitView)
+                orbitView.OrbitInput(screenDeltaX * MAP3D_ORBIT_DEG_PER_PX,
+                    screenDeltaY * MAP3D_ORBIT_DEG_PER_PX);
+            return;
+        }
+
         float worldUnitsPerPixel = GetWorldUnitsPerPixel();
 
         float rotRad = m_fRotation * Math.DEG2RAD;
@@ -391,7 +886,9 @@ class AG0_TDLMapView
 	}
     
     //------------------------------------------------------------------------------------------------
-    protected float GetWorldUnitsPerPixel()
+    //! Public because pick radii are authored in screen pixels — a hit-test radius fixed in
+    //! metres is unhittable zoomed in and indiscriminate zoomed out.
+    float GetWorldUnitsPerPixel()
     {
         // How many world units does one pixel represent at current zoom
         float viewSizeWorld = m_fMapSizeX * m_fZoom;
@@ -411,16 +908,69 @@ class AG0_TDLMapView
     }
     
     //------------------------------------------------------------------------------------------------
-	// World position to screen position (SCREEN PIXELS for canvas drawing)
-	void WorldToScreen(vector worldPos, out float screenX, out float screenY)
+	//------------------------------------------------------------------------------------------------
+	//! Refresh the cos/sin pair WorldToScreen uses, but only when m_fRotation actually moved.
+	//! Keyed on the rotation value rather than on a frame counter so callers outside the draw
+	//! pass (WorldToLayout for marker widgets, called after SetTrackUp may have rotated the
+	//! map) can never read a pair belonging to a different heading.
+	protected void EnsureRotationTrig()
 	{
+	    if (m_fTrigForRotation == m_fRotation)
+	        return;
+
+	    float rotRad = -m_fRotation * Math.DEG2RAD;
+	    m_fTrigCos = Math.Cos(rotRad);
+	    m_fTrigSin = Math.Sin(rotRad);
+	    m_fTrigForRotation = m_fRotation;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// World position to screen position (SCREEN PIXELS for canvas drawing)
+	//! `useAltitude` is passed through to the 3D projection: it says this caller's Y is a real
+	//! height and not the zero a map-placed marker carries. Ignored in 2D, where there is no
+	//! third dimension to be wrong about.
+	void WorldToScreen(vector worldPos, out float screenX, out float screenY, bool useAltitude = false)
+	{
+	    // While the 3D pane is up, this seam IS the parity mechanism: every widget-based
+	    // consumer (self/member/vanilla markers and their labels) positions through
+	    // WorldToLayout -> here, so routing the projection through the 3D map puts all of
+	    // them onto the 3D terrain with no second ingestion path to keep in sync. The
+	    // pane, the canvas and the marker overlay all fill the same frame in the layout,
+	    // so pane pixels and canvas pixels are the same space.
+	    // Skipped during the 2D draw pass. Reaching BuildStaticCommands/BuildDynamicCommands
+	    // means this surface lost or declined the host arbitration, so IsHostedBy is provably
+	    // false and this probe can only return null — at the cost of IsViewOpen -> GetInstance
+	    // -> GetParent -> IsHostedBy per projected point. With a few thousand road vertices in
+	    // frame that was thousands of native calls per frame for a constant answer, and it was
+	    // paid on every frame of the session once the 3D map had been opened once.
+	    if (!m_bIn2DDrawPass)
+	    {
+	        AG0_TDLMap3DView view = GetHostedMap3DView();
+	        if (view)
+	        {
+	            if (view.ProjectWorldToPane(worldPos, screenX, screenY, useAltitude))
+	                return;
+
+	            // Behind-camera and unmeasurable-pane points land far off-canvas instead of
+	            // reporting failure: this signature has no validity channel, and every marker
+	            // caller already bounds-checks against the canvas, so an impossible coordinate
+	            // is what hides them.
+	            screenX = MAP3D_OFFSCREEN_PX;
+	            screenY = MAP3D_OFFSCREEN_PX;
+	            return;
+	        }
+	    }
+
 	    float offsetX = worldPos[0] - m_vCenterWorld[0];
 	    float offsetZ = worldPos[2] - m_vCenterWorld[2];
 
-	    // Apply rotation (negated to match texture rotation direction)
-	    float rotRad = -m_fRotation * Math.DEG2RAD;
-	    float cosR = Math.Cos(rotRad);
-	    float sinR = Math.Sin(rotRad);
+	    // Apply rotation (negated to match texture rotation direction).
+	    // Cached rather than recomputed: this is called per road vertex, per structure
+	    // corner, per grid endpoint and per shape vertex, so the two transcendentals were
+	    // being evaluated thousands of times a frame for a value that changes at most once.
+	    EnsureRotationTrig();
+	    float cosR = m_fTrigCos;
+	    float sinR = m_fTrigSin;
 
 	    float rotatedX = offsetX * cosR - offsetZ * sinR;
 	    float rotatedZ = offsetX * sinR + offsetZ * cosR;
@@ -436,10 +986,10 @@ class AG0_TDLMapView
 	
 	//------------------------------------------------------------------------------------------------
 	// World position to LAYOUT coordinates (for widget positioning)
-	void WorldToLayout(vector worldPos, out float layoutX, out float layoutY)
+	void WorldToLayout(vector worldPos, out float layoutX, out float layoutY, bool useAltitude = false)
 	{
 	    float screenX, screenY;
-	    WorldToScreen(worldPos, screenX, screenY);
+	    WorldToScreen(worldPos, screenX, screenY, useAltitude);
 
 	    WorkspaceWidget workspace = GetGame().GetWorkspace();
 	    layoutX = workspace.DPIUnscale(screenX);
@@ -461,9 +1011,44 @@ class AG0_TDLMapView
     }
 
     //------------------------------------------------------------------------------------------------
+    //! Terrain height under a world position, from the same source the 3D map builds its mesh
+    //! from — so a grid reference reads one elevation everywhere in TDL, on either surface.
+    //!
+    //! Kept separate from ScreenToWorld rather than folded into it: that method's zero-Y
+    //! contract is relied on by every caller it has, and elevation is a readout concern, so
+    //! the callers that want it ask for it.
+    float SampleElevation(vector worldPos)
+    {
+        return AG0_TDLMap3DView.SampleTerrainY(worldPos[0], worldPos[2]);
+    }
+
+    //------------------------------------------------------------------------------------------------
     // Screen position to world position
     void ScreenToWorld(float screenX, float screenY, out vector worldPos)
     {
+        // Placement parity for the 3D pane: the 2D inverse below answers from pan/zoom
+        // state that is not being rendered while the 3D map is up, so a click would land
+        // wherever the hidden 2D view happens to be aimed — the wrong-position marker
+        // bug. The 3D map picks against the rendered terrain instead and returns GAME
+        // world coordinates (diorama coords never leave that class). Y is zeroed to keep
+        // this method's contract — callers snap elevation themselves.
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (view)
+        {
+            vector picked;
+            if (view.PickWorldFromPane(screenX, screenY, picked))
+            {
+                worldPos = Vector(picked[0], 0, picked[2]);
+                return;
+            }
+
+            // Above-the-horizon clicks have no ground under them; the focus is the
+            // only sane stand-in and matches what the crosshair path would place.
+            vector focusWorld = view.GetFocusWorld();
+            worldPos = Vector(focusWorld[0], 0, focusWorld[2]);
+            return;
+        }
+
         // Early-frame guard: callers on a per-frame tick (e.g. world-space
         // cursor push) can invoke this before the map view has been sized
         // or before m_fMapSizeX / m_fZoom have been populated by the display
@@ -546,17 +1131,45 @@ class AG0_TDLMapView
 	//! Set terrain structure records to render. Pass null or an empty array
 	//! when no API dataset is available (no buildings will draw on the map view).
 	//! The array is read during Draw(); call each frame from the controller.
-	void SetTerrainStructures(array<ref AG0_TDLTerrainStructureRecord> structures)
+	//!
+	//! syncHash: the manager's payload hash. Structures live in the STATIC command prefix, so
+	//! the dirty gate needs to know when the dataset actually changed — and it cannot find that
+	//! out by comparing the array handle, because the manager refills the SAME array object in
+	//! place on every payload.
+	//!
+	//! The hash rather than GetVersion(): both terrain managers reject any payload whose wire
+	//! version is not SUPPORTED_VERSION and then assign that same constant, so GetVersion()
+	//! returns 1 forever and would never move. The hash is the real change token — without it
+	//! a re-exported dataset with the same feature count (moved geometry, same building count)
+	//! would not invalidate the cached prefix and the map would keep drawing the old terrain
+	//! until the 1 Hz keepalive happened to fire.
+	//!
+	//! Count is kept alongside it so callers that pass no hash still get the arrival/clear
+	//! transitions, which is what the pre-existing call sites relied on.
+	void SetTerrainStructures(array<ref AG0_TDLTerrainStructureRecord> structures, string syncHash = "")
 	{
 		m_aTerrainStructures = structures;
+		m_sTerrainStructureHash = syncHash;
+
+		if (structures)
+			m_iTerrainStructureCount = structures.Count();
+		else
+			m_iTerrainStructureCount = -1;   // distinct from an empty-but-present dataset
 	}
 
 	//------------------------------------------------------------------------------------------------
 	//! Set terrain road features to render. Pass null/empty for no roads.
 	//! Read during Draw(); refreshed each frame from the controller.
-	void SetTerrainRoads(array<ref AG0_TDLTerrainRoadFeature> roads)
+	//! syncHash: see SetTerrainStructures.
+	void SetTerrainRoads(array<ref AG0_TDLTerrainRoadFeature> roads, string syncHash = "")
 	{
 		m_aTerrainRoads = roads;
+		m_sTerrainRoadHash = syncHash;
+
+		if (roads)
+			m_iTerrainRoadCount = roads.Count();
+		else
+			m_iTerrainRoadCount = -1;
 	}
 
     
@@ -587,25 +1200,395 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     // RENDERING
     //------------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------------
+    //! Switch this surface between 2D and 3D.
+    //!
+    //! The pane is parented to the map canvas's own parent rather than to the canvas
+    //! itself, so it is a sibling that can be z-ordered above the 2D surface without
+    //! becoming a child of a widget whose draw commands are rebuilt every frame.
+    void ToggleMap3D()
+    {
+        if (!m_wCanvas)
+            return;
+
+        Widget host = m_wCanvas.GetParent();
+        if (!host)
+            host = m_wCanvas;
+
+        // The 2D centre seeds the 3D focus so the switch reads as the same map
+        // standing up. Y is dropped — the 3D map seats the focus on its own terrain.
+        AG0_TDLMap3DView.Toggle(host, GetHostRank(),
+            Vector(m_vCenterWorld[0], 0, m_vCenterWorld[2]));
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Tap-to-recenter: aim the 3D orbit focus at the terrain under a bare map click.
+    //! The world-space surface has only one drag axis (orbit), so a tap is its pan; on
+    //! the menu it complements right-drag. Deliberately a no-op in 2D — a bare 2D click
+    //! has never panned, and silently giving it that meaning would change behaviour
+    //! nobody asked to change. Returns whether the tap was consumed.
+    bool TapFocusMap3D(float screenX, float screenY)
+    {
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (!view)
+            return false;
+
+        vector picked;
+        if (!view.PickWorldFromPane(screenX, screenY, picked))
+            return false;
+
+        view.FocusOnWorld(picked);
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    // STATIC DIRTY GATE
+    //------------------------------------------------------------------------------------------------
+
+    //! Force a full static rebuild on the next Draw(). Call from anything that changes what
+    //! the static prefix should contain without moving the pose: overlay toggles, satellite
+    //! swap, dataset replacement, 3D pane handover.
+    void MarkStaticDirty()
+    {
+        m_bStaticDirty = true;
+    }
+
+    //! Throw the cached prefix away entirely. Stronger than MarkStaticDirty: used when the
+    //! commands themselves can no longer be trusted (the 3D pane took the canvas and
+    //! submitted its own list, so our prefix is no longer what the canvas is holding).
+    void InvalidateStaticCache()
+    {
+        m_iStaticCommandCount = -1;
+        m_bStaticStampValid = false;
+        m_bStaticDirty = true;
+
+        // The motion score is only meaningful relative to a live stamp. Leaving it banked
+        // across a 3D-pane session means the first 2D frame back — where TickHostedPane has
+        // rewritten m_vCenterWorld from the pane focus, so the pose always reads as moved —
+        // decimates immediately on a view the operator has only just started looking at.
+        m_iRoadMotionStreak = 0;
+    }
+
+    //! Bitmask of which overlay layers are on. Cheap enough to recompute per frame and it
+    //! removes the need to trust every future overlay-toggle path to call MarkStaticDirty.
+    protected int ComputeOverlayMask()
+    {
+        int mask = 0;
+        if (!m_aOverlayEnabled)
+            return mask;
+
+        int n = m_aOverlayEnabled.Count();
+        if (n > 31)
+            n = 31;
+
+        for (int i = 0; i < n; i++)
+        {
+            if (m_aOverlayEnabled[i])
+                mask = mask | (1 << i);
+        }
+        return mask;
+    }
+
+    //! True when the pose has moved far enough to change a rasterized pixel. Center is
+    //! converted to screen pixels first so one epsilon works at every zoom level.
+    protected bool StaticPoseMoved()
+    {
+        if (Math.AbsFloat(m_fZoom - m_fStaticStampZoom) > STATIC_ZOOM_EPSILON)
+            return true;
+
+        if (Math.AbsFloat(m_fRotation - m_fStaticStampRotation) > STATIC_ROTATION_EPSILON)
+            return true;
+
+        float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+        if (viewWorldSizeX <= 0)
+            return true;
+
+        float pixelsPerWorldUnit = m_fCanvasWidth / viewWorldSizeX;
+        float dxPx = Math.AbsFloat(m_vCenterWorld[0] - m_vStaticStampCenter[0]) * pixelsPerWorldUnit;
+        float dzPx = Math.AbsFloat(m_vCenterWorld[2] - m_vStaticStampCenter[2]) * pixelsPerWorldUnit;
+
+        return dxPx > STATIC_POSE_EPSILON_PX || dzPx > STATIC_POSE_EPSILON_PX;
+    }
+
+    //! Two outcomes:
+    //!   REBUILD — no valid cache, explicit dirty flag, canvas resized, dataset / overlay /
+    //!             satellite change, or the pose moved. Always this frame, never rate-capped
+    //!             (see the note on STATIC_KEEPALIVE_INTERVAL above for why).
+    //!   REUSE   — nothing moved. Keep the prefix; a 1 Hz keepalive is the backstop against a
+    //!             missed invalidation leaving a permanently stale map.
+    protected bool ShouldRebuildStatic(int overlayMask, bool poseMoved)
+    {
+        if (m_iStaticCommandCount < 0 || !m_bStaticStampValid || m_bStaticDirty)
+            return true;
+
+        // The cached prefix was built with decimated road geometry, which is only acceptable
+        // while the operator is actually moving. Once they stop, a settled pose would never
+        // trigger another rebuild — so the map would sit there permanently showing straightened
+        // roads. Force exactly one full-detail rebuild on the frame motion ends.
+        if (m_bLastStaticWasDecimated)
+            return true;
+
+        if (m_fCanvasWidth != m_fStaticStampCanvasW || m_fCanvasHeight != m_fStaticStampCanvasH)
+            return true;
+
+        if (m_sTerrainRoadHash != m_sStaticStampRoadHash
+         || m_iTerrainRoadCount != m_iStaticStampRoadCount)
+            return true;
+
+        if (m_sTerrainStructureHash != m_sStaticStampStructHash
+         || m_iTerrainStructureCount != m_iStaticStampStructCount)
+            return true;
+
+        if (overlayMask != m_iStaticStampOverlayMask)
+            return true;
+
+        if (m_iSatelliteRevision != m_iStaticStampSatRevision)
+            return true;
+
+        if (m_bTextureLoaded != m_bStaticStampTextureLoaded)
+            return true;
+
+        if (poseMoved)
+            return true;
+
+        return m_fSinceStaticRebuild >= STATIC_KEEPALIVE_INTERVAL;
+    }
+
+    //! Record what the freshly built prefix was built against. Only ever called immediately
+    //! after a successful rebuild, so stamp and commands cannot drift apart.
+    protected void CommitStaticStamp(int overlayMask)
+    {
+        m_vStaticStampCenter          = m_vCenterWorld;
+        m_fStaticStampZoom            = m_fZoom;
+        m_fStaticStampRotation        = m_fRotation;
+        m_fStaticStampCanvasW         = m_fCanvasWidth;
+        m_fStaticStampCanvasH         = m_fCanvasHeight;
+        m_sStaticStampRoadHash        = m_sTerrainRoadHash;
+        m_iStaticStampRoadCount       = m_iTerrainRoadCount;
+        m_sStaticStampStructHash      = m_sTerrainStructureHash;
+        m_iStaticStampStructCount     = m_iTerrainStructureCount;
+        m_iStaticStampOverlayMask     = overlayMask;
+        m_iStaticStampSatRevision     = m_iSatelliteRevision;
+        m_bStaticStampTextureLoaded   = m_bTextureLoaded;
+        m_bStaticStampValid           = true;
+        m_bStaticDirty                = false;
+        m_fSinceStaticRebuild         = 0;
+    }
+
+    //! Seconds since the last static rebuild. Driven from the controller so the keepalive is
+    //! wall-clock rather than frame-count, and so a frontend being ticked at 5 Hz by the
+    //! visibility gate still measures real time between rebuilds. The controller advances it
+    //! only on live frames — see the suspend branch in UpdateMapView.
+    void AdvanceStaticClock(float tDelta)
+    {
+        m_fSinceStaticRebuild += tDelta;
+    }
+
     void Draw()
     {
         if (!m_wCanvas)
             return;
-        
-        // Update canvas size in case of resize
-	    m_wCanvas.GetScreenSize(m_fCanvasWidth, m_fCanvasHeight);
-	    
+
+        // Refreshed every frame rather than only at Init: whichever view is actually
+        // drawing is the one a keybind should act on, and a view that stops drawing
+        // stops claiming the slot on the next frame the live one paints. A passive
+        // mirror is excluded: it draws unconditionally and would hold the slot forever.
+        if (!m_bPassive)
+            s_ActiveView = this;
+
+        // Measured before the hosting block, not after it. Every consumer of canvas-relative
+        // projection — IsReady, WorldToLayout, the follower's bloodhound readout — needs a
+        // non-zero width, and the surfaces that predate the mirror always painted 2D for a
+        // frame before they could host, so they were never measured only inside the 2D path.
+        // A mirror inherits an already-open view and can host from its very first frame, where
+        // Init's own GetScreenSize ran against a widget that had not been laid out yet.
+        m_wCanvas.GetScreenSize(m_fCanvasWidth, m_fCanvasHeight);
+
+        if (TickHostedPane())
+            return;
+
 	    // Guard against zero dimensions (widget not yet laid out)
 	    if (m_fCanvasHeight <= 0 || m_fCanvasWidth <= 0)
 	        return;
 
-        m_aDrawCommands.Clear();
+        Build2DFrame();
+    }
 
+    //------------------------------------------------------------------------------------------------
+    //! Host arbitration + tick for the 3D pane. Split out of Draw() because a frontend whose
+    //! 2D painting has been gated off by the visibility check STILL has to run this every
+    //! frame: RequestHost doubles as this surface's liveness heartbeat, and a surface that
+    //! stops sending it is treated as dead — the pane would be handed to the next-ranked
+    //! contender (the HUD peripheral) mid-session, and view.Tick() would stop entirely.
+    //! Gating pixels must not gate the pane's lifecycle.
+    //!
+    //! Returns true when the pane took this surface, i.e. the caller must not build 2D commands.
+    bool TickHostedPane()
+    {
+        if (!m_wCanvas)
+            return false;
+
+        // While the 3D map is up on THIS surface its pane is opaque and covers this
+        // canvas entirely — rebuilding the 2D command list underneath it costs a full
+        // projection pass per frame for pixels nobody can see. A surface the 3D map
+        // refuses (RequestHost false) falls through and keeps its 2D map: the pane
+        // lives on the other surface, and blanking this one too would leave the
+        // operator staring at nothing.
+        // A passive mirror contends too, but from the bottom tier — it inherits the pane only
+        // once no real surface is alive to hold it, which is exactly the case where it is the
+        // only thing still on screen. It never toggles 3D itself (s_ActiveView is still
+        // menu/device only), so this is inheritance, not a fourth way to enter 3D.
+        if (AG0_TDLMap3DView.IsViewOpen())
+        {
+            AG0_TDLMap3DView view = AG0_TDLMap3DView.GetInstance();
+            Widget host = m_wCanvas.GetParent();
+            if (!host)
+                host = m_wCanvas;
+
+            // Arbitrated, not unconditional: the old per-frame Rehost let two live
+            // surfaces steal the pane from each other every frame. RequestHost also
+            // serves as this surface's liveness heartbeat.
+            if (view && view.RequestHost(host, GetHostRank()))
+            {
+                // The pane owns the canvas from here, so whatever command list we last
+                // submitted is gone. Dropping the cache means the frame we fall back to
+                // 2D rebuilds from scratch instead of Resize()-ing down into a prefix the
+                // canvas is no longer holding.
+                InvalidateStaticCache();
+
+                view.Tick();
+
+                // Shapes render on the drape, not the suppressed 2D canvas — hand over
+                // the same per-frame data DrawShapes would have read. The controller
+                // refreshed m_aShapes before this call and the draw session keeps
+                // m_GhostShape current, so the 3D map sees exactly what 2D would.
+                view.UpdateDrapeShapes(m_aShapes, m_GhostShape);
+                view.SetBloodhound(m_bBloodhoundEnabled, m_vBloodhoundCursor,
+                    m_vBloodhoundDevice);
+
+                // The 2D centre rides the 3D orbit focus: crosshair placement, sweep
+                // delete and the bloodhound's menu cursor all read GetCenter as "the
+                // point under the middle of the view", and while the pane is up that
+                // point is the focus, not wherever the hidden 2D view was left. Side
+                // benefit: leaving 3D drops the 2D map on whatever the operator was
+                // orbiting. Clamped like every other centre write.
+                vector focusWorld = view.GetFocusWorld();
+                m_vCenterWorld = Vector(focusWorld[0], 0, focusWorld[2]);
+                ClampCenterToBounds();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Called instead of Draw() on any frame a frontend is not painting — whether it is fully
+    //! suspended or just between ticks of a throttled cadence. Keeps the canvas measurement
+    //! current (IsReady / ScreenToWorld / WorldToLayout are queried every frame by the cursor
+    //! and bloodhound paths regardless of paint cadence) and keeps the 3D pane's host heartbeat
+    //! alive. Deliberately does NOT claim s_ActiveView: a surface nobody can see should not be
+    //! the one a keybind acts on.
+    void TickSuspended(float tDelta)
+    {
+        if (!m_wCanvas)
+            return;
+
+        m_wCanvas.GetScreenSize(m_fCanvasWidth, m_fCanvasHeight);
+        TickHostedPane();
+
+        // Nobody is watching, so nobody is panning. Banking motion credit across a suspension
+        // would decimate the first frame after the operator looks back.
+        m_iRoadMotionStreak = 0;
+
+        // The engine reaps a canvas's CanvasWidgetCommand array after a few minutes without a
+        // submit — see the note on the 30 s image-canvas re-Draw in AG0_TDLMenuController,
+        // whose remedy is specifically to RECONSTRUCT the commands rather than re-submit them.
+        // This path never submits, so a long park could otherwise wake straight onto the
+        // Resize-reuse branch and hand the canvas a prefix the engine has already let go.
+        m_fSinceSubmit += tDelta;
+        if (m_fSinceSubmit >= STATIC_RESUBMIT_MAX_IDLE)
+            MarkStaticDirty();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The 2D command build. Split from Draw() only so the hosting/measurement preamble above
+    //! stays readable; behaviour is identical to the pre-split single pass.
+    protected void Build2DFrame()
+    {
+        // Runs before the gate, not inside the rebuild: it can flip m_bTextureLoaded and
+        // m_iSatelliteRevision, and both are stamp inputs the gate is about to read.
+        RefreshSatelliteTextureIfStale();
+
+        int overlayMask = ComputeOverlayMask();
+
+        // Computed once and passed in rather than queried inside the gate, because the road
+        // pass needs the same answer: "the pose moved since the cached prefix was built" is
+        // exactly the condition under which decimating road geometry is invisible.
+        bool poseMoved = StaticPoseMoved();
+        bool rebuildStatic = ShouldRebuildStatic(overlayMask, poseMoved);
+
+        // Suppresses the per-point GetHostedMap3DView() probe inside WorldToScreen for the
+        // whole pass. Reaching here means this surface is NOT hosting the pane.
+        m_bIn2DDrawPass = true;
+
+        // Sustained-motion score. Reuse frames count as still — if we are reusing the prefix,
+        // the pose by definition has not moved.
+        if (poseMoved)
+            m_iRoadMotionStreak = m_iRoadMotionStreak + 1;
+        else
+            m_iRoadMotionStreak = m_iRoadMotionStreak - ROAD_MOTION_STREAK_DECAY;
+
+        m_iRoadMotionStreak = Math.ClampInt(m_iRoadMotionStreak, 0, ROAD_MOTION_STREAK_MAX);
+
+        if (rebuildStatic)
+        {
+            // Decimate road vertices only during a SUSTAINED pan or zoom, and only when zoomed
+            // out far enough that consecutive vertices are a pixel or two apart. The streak
+            // requirement is what keeps slow drift and first-build (empty stamp) out of it.
+            m_bRoadDecimating = m_iRoadMotionStreak >= ROAD_MOTION_STREAK_FRAMES
+                             && m_fZoom > ROAD_MOTION_MIN_ZOOM;
+            m_bRoadDecimationApplied = false;
+
+            m_aDrawCommands.Clear();
+
+            BuildStaticCommands();
+
+            m_iStaticCommandCount = m_aDrawCommands.Count();
+            CommitStaticStamp(overlayMask);
+
+            // The pass's own report, not the intent — see m_bRoadDecimationApplied.
+            m_bLastStaticWasDecimated = m_bRoadDecimationApplied;
+            m_bRoadDecimating = false;
+        }
+        else
+        {
+            // Keep the cached static prefix, drop last frame's dynamic tail. Resize() down
+            // releases the tail's command refs and leaves the prefix objects untouched —
+            // no reallocation, and not one road vertex re-projected.
+            m_aDrawCommands.Resize(m_iStaticCommandCount);
+        }
+
+        BuildDynamicCommands();
+
+        m_bIn2DDrawPass = false;
+
+        // Submit draw commands
+        m_wCanvas.SetDrawCommands(m_aDrawCommands);
+        m_fSinceSubmit = 0;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Everything that depends only on pose (centre/zoom/rotation), canvas size and the
+    //! streamed datasets. This is the expensive half and the half the dirty gate protects.
+    //! Order is unchanged from the original Draw().
+    protected void BuildStaticCommands()
+    {
         if (m_bTextureLoaded && m_pMapTexture)
             DrawMapTexture();
         else
             DrawFallbackBackground();
-        
+
         // Draw overlay layers (structures, roads, water, contours)
         DrawOverlays();
 
@@ -629,10 +1612,18 @@ class AG0_TDLMapView
         // expensive and less accurate (and shared the rotation bug fixed below).
         if (!m_bHasStructureOverlay)
             DrawApiTerrainStructures();
-        
+
 		//Draw grid (over buildings)
 		DrawGrid();
-		
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The cheap tail: everything driven by things that genuinely change every tick —
+    //! member positions, the draw-session ghost, the cursor. Rebuilt unconditionally and
+    //! appended after the (possibly cached) static prefix, so the final command order is
+    //! byte-identical to what the single-pass Draw() produced.
+    protected void BuildDynamicCommands()
+    {
 		//Draw TDL shapes
 		DrawShapes();
 
@@ -651,8 +1642,10 @@ class AG0_TDLMapView
         // of the view, not the map".
         DrawScaleBar();
 
-        // Submit draw commands
-        m_wCanvas.SetDrawCommands(m_aDrawCommands);
+        // Grid legend — same reasoning as the scale bar, and it sits with it because the two
+        // answer the same question: the zone and 100 km square are what turn a bare "05" on a
+        // grid line into a reference somebody can read over the radio.
+        DrawGridLegend();
     }
 
     //------------------------------------------------------------------------------------------------
@@ -948,6 +1941,31 @@ class AG0_TDLMapView
         float halfSizeX = m_fMapSizeX * 0.5;
         float halfSizeZ = m_fMapSizeY * 0.5;
 
+        // Early-out when no ghost tile can be on screen. The sampler only wraps where the
+        // view's diagonal sample rect reaches past the map's world extent, so a view sitting
+        // comfortably inside the terrain has nothing to mask — and unconditionally emitting
+        // 8 map-sized polygons plus 32 projections for that case is pure waste at every zoom
+        // level except the most zoomed-out ones.
+        //
+        // Half-diagonal because the sample rect is rotation-safe: DrawMapTexture sizes it to
+        // the view diagonal so a rotated map never samples outside the quad, and this test has
+        // to use the same reach or it would clear the mask while a corner still wraps.
+        float viewWorldSizeX = m_fMapSizeX * m_fZoom;
+        float viewWorldSizeZ = viewWorldSizeX;
+        if (m_fCanvasWidth > 0)
+            viewWorldSizeZ = viewWorldSizeX * (m_fCanvasHeight / m_fCanvasWidth);
+
+        float halfDiagonal = Math.Sqrt(viewWorldSizeX * viewWorldSizeX + viewWorldSizeZ * viewWorldSizeZ) * 0.5;
+
+        bool reachesEdge =
+               (m_vCenterWorld[0] - halfDiagonal) < m_fMapOffsetX
+            || (m_vCenterWorld[0] + halfDiagonal) > (m_fMapOffsetX + m_fMapSizeX)
+            || (m_vCenterWorld[2] - halfDiagonal) < m_fMapOffsetY
+            || (m_vCenterWorld[2] + halfDiagonal) > (m_fMapOffsetY + m_fMapSizeY);
+
+        if (!reachesEdge)
+            return;
+
         // Unrotated corner offsets from a tile's world-space center, in world units.
         // Order: SW, SE, NE, NW — counter-clockwise in world coords. (Screen winding
         // after the Y-flip inside WorldToScreen ends up clockwise, matching the
@@ -1012,24 +2030,72 @@ class AG0_TDLMapView
     }
 	
 	//------------------------------------------------------------------------------------------------
+	//------------------------------------------------------------------------------------------------
+	//! Pick the road LOD band for the current zoom, with hysteresis.
+	//!
+	//! Written as four independent one-way transitions rather than a chain of else-ifs so a
+	//! zoom jump straight across both thresholds (a zoom-to-fit, or a mirror pulling a new
+	//! pose) lands on the right band in one call instead of stepping one band per frame.
+	protected void UpdateRoadLodBand()
+	{
+	    float z = m_fZoom;
+
+	    // Shedding more detail — only past the far side of the dead-band.
+	    if (m_iRoadLodBand < 1 && z > ROAD_LOD_SHED_TRAILS_ZOOM + ROAD_LOD_HYSTERESIS)
+	        m_iRoadLodBand = 1;
+	    if (m_iRoadLodBand < 2 && z > ROAD_LOD_SHED_PAVED_ZOOM + ROAD_LOD_HYSTERESIS)
+	        m_iRoadLodBand = 2;
+
+	    // Restoring detail — only past the near side.
+	    if (m_iRoadLodBand > 1 && z < ROAD_LOD_SHED_PAVED_ZOOM - ROAD_LOD_HYSTERESIS)
+	        m_iRoadLodBand = 1;
+	    if (m_iRoadLodBand > 0 && z < ROAD_LOD_SHED_TRAILS_ZOOM - ROAD_LOD_HYSTERESIS)
+	        m_iRoadLodBand = 0;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Lowest road priority that draws in the current band. Priorities are 3=highway,
+	//! 2=paved, 1=trail; anything below 1 is treated as a trail.
+	protected int RoadMinPriority()
+	{
+	    if (m_iRoadLodBand >= 2)
+	        return 3;
+	    if (m_iRoadLodBand >= 1)
+	        return 2;
+
+	    // Band 0 means draw EVERYTHING, so the floor has to be below any priority the wire can
+	    // carry — not 1. m_iPriority is copied verbatim from the payload with no clamp
+	    // (AG0_TDLTerrainRoadManager: feat.m_iPriority = pr[f]), and the style switch's default
+	    // arm already treats anything below 1 as a trail. Returning 1 here would have silently
+	    // culled an entire unclassified road layer at every zoom, with no log line to say so.
+	    return -1000000;
+	}
+
+	//------------------------------------------------------------------------------------------------
 	//! Draw road network from /api/mod/terrain/roads.
 	//!
-	//! Each AG0_TDLTerrainRoadFeature is a polyline rendered as a sequence of
-	//! LineDrawCommand segments. At each interior vertex we drop a small filled
-	//! circle ("round join") so consecutive segments meeting at an angle share
-	//! a continuous outline instead of leaving a gap on the outside of the bend.
+	//! Each AG0_TDLTerrainRoadFeature is a polyline. Consecutive on-screen segments are
+	//! emitted as ONE multi-vertex LineDrawCommand rather than one command per segment
+	//! (see ROAD_BATCH_SEGMENTS), and at interior vertices of thick roads we drop a small
+	//! filled circle ("round join") so segments meeting at an angle share a continuous
+	//! outline instead of leaving a gap on the outside of the bend.
 	//!
-	//! Performance:
-	//!   1. Per-frame: compute a world-space viewport AABB once.
-	//!   2. Per-feature: skip the entire road if its precomputed AABB doesn't
-	//!      intersect the viewport — no WorldToScreen calls at all for off-screen
-	//!      features. Cheap test, high payoff for Eden-scale datasets.
-	//!   3. Per-segment: keep a screen-space reject for partially-on-screen roads
-	//!      so off-screen segments of long polylines still cost nothing.
+	//! Performance. Roads are the one pass with no natural size cull: stroke width is
+	//! floored to minStroke, so a road is NEVER dropped for being too thin to read the way
+	//! a sub-pixel building is. At full zoom-out that means the entire network, every
+	//! rebuild. Four things bound it, cheapest first:
+	//!   1. Per-frame world-space viewport AABB, computed once.
+	//!   2. Per-feature AABB reject — no WorldToScreen at all for off-screen features.
+	//!   3. Per-segment screen-space reject for partially-on-screen roads.
+	//!   4. Zoom-band LOD, motion decimation, run batching and a hard command budget —
+	//!      all four added together; see the constants above each.
 	protected void DrawApiTerrainRoads()
 	{
 	    if (!m_aTerrainRoads || m_aTerrainRoads.IsEmpty())
 	        return;
+
+	    UpdateRoadLodBand();
+	    int minPriority = RoadMinPriority();
 
 	    float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
 
@@ -1047,10 +2113,51 @@ class AG0_TDLMapView
 	    float viewMinZ = m_vCenterWorld[2] - diagonal * 0.5 - ROAD_CULL_MARGIN;
 	    float viewMaxZ = m_vCenterWorld[2] + diagonal * 0.5 + ROAD_CULL_MARGIN;
 
+	    // Work budget, counted in vertices plus joins. The LOD band is the primary bound; this
+	    // is the backstop that makes the worst case PROVABLE rather than merely unlikely — a dataset denser than any we
+	    // have tested, or a zoom band that turns out to be tuned wrong, still cannot run away.
+	    //
+	    // Per-class caps rather than one pool: without them a network with thousands of trails
+	    // would spend the whole budget on trails before reaching a single highway, and the map
+	    // would lose exactly the features an operator navigates by. Highways are uncapped and
+	    // therefore take whatever the lower classes leave.
+	    int capTrail = ROAD_VERTEX_BUDGET / 4;
+	    int capPaved = ROAD_VERTEX_BUDGET / 3;
+	    int emittedTotal = 0;
+	    int emittedTrail = 0;
+	    int emittedPaved = 0;
+
+	    // Vertex decimation while the pose is moving. m_bRoadDecimating is set per static
+	    // rebuild in Build2DFrame from the motion score (see ROAD_MOTION_STREAK_FRAMES), so it
+	    // means "the operator has been panning or zooming for a sustained run of rebuilds" —
+	    // not merely "this one rebuild saw movement". Straightened curves are not
+	    // perceptible at pan speed, and the
+	    // frame after motion stops is forced to rebuild at full detail (see
+	    // m_bLastStaticWasDecimated in ShouldRebuildStatic) so the settled map is never
+	    // left decimated.
+	    int vertexStep = 1;
+	    if (m_bRoadDecimating)
+	    {
+	        // Clamped: a stride of zero would leave the polyline walk unable to advance and
+	        // hang the game thread, and this constant sits next to ones the comments invite
+	        // tuning. A hard lock is not an acceptable failure mode for a tuning typo.
+	        vertexStep = ROAD_MOTION_VERTEX_STEP;
+	        if (vertexStep < 1)
+	            vertexStep = 1;
+	    }
+
 	    foreach (AG0_TDLTerrainRoadFeature road : m_aTerrainRoads)
 	    {
 	        if (!road)
 	            continue;
+
+	        // Zoom-band LOD. Checked before anything else: it is one integer compare and at
+	        // zoom-out it is what removes most of the network.
+	        if (road.m_iPriority < minPriority)
+	            continue;
+
+	        if (emittedTotal >= ROAD_VERTEX_BUDGET)
+	            break;
 
 	        int rawCount = road.m_aPoints.Count();
 	        if (rawCount < 4)
@@ -1060,6 +2167,13 @@ class AG0_TDLMapView
 	        // before any per-vertex work.
 	        if (road.m_fMaxX < viewMinX || road.m_fMinX > viewMaxX ||
 	            road.m_fMaxZ < viewMinZ || road.m_fMinZ > viewMaxZ)
+	            continue;
+
+	        // Per-class budget. Deliberately after the culls so an off-screen trail does not
+	        // consume trail budget that an on-screen one needs.
+	        if (road.m_iPriority <= 1 && emittedTrail >= capTrail)
+	            continue;
+	        if (road.m_iPriority == 2 && emittedPaved >= capPaved)
 	            continue;
 
 	        // Style by priority: 3=highway thickest/lightest, 1=trail thinnest/dimmest.
@@ -1086,69 +2200,209 @@ class AG0_TDLMapView
 	        float stroke = Math.Max(baseWidthPx, minStroke);
 
 	        // Round-join radius — half the stroke width covers the gap on the
-	        // outside of the bend exactly. Skip drawing joins below 1 px since
-	        // they'd add nothing visible at high-zoom-out levels.
+	        // outside of the bend exactly.
+	        //
+	        // Threshold raised from 1 px to ROAD_JOIN_MIN_RADIUS: with run batching a bend
+	        // inside a single polyline command no longer leaves a per-segment seam, so joins
+	        // only earn their cost on genuinely thick roads. They are also skipped entirely
+	        // while decimating — a 1-2 px seam is not perceptible mid-pan, and joins are one
+	        // tessellated polygon each, which makes them the single largest command source in
+	        // a dense network.
+	        // With batching OFF the raised threshold would be a behaviour change of its own —
+	        // every minStroke floor yields a join radius under 2.0, so highways would lose the
+	        // joins they always had. Tying it to the flag keeps ROAD_BATCH_SEGMENTS a genuine
+	        // one-line revert rather than a half-revert that trades a zigzag for notched bends.
+	        float joinMinRadius = ROAD_JOIN_MIN_RADIUS;
+	        if (!ROAD_BATCH_SEGMENTS)
+	            joinMinRadius = 1.0;
+
 	        float joinRadius = stroke * 0.5;
-	        bool drawJoins = (joinRadius >= 1.0);
+	        bool drawJoins = (joinRadius >= joinMinRadius) && !m_bRoadDecimating;
 	        // Adaptive segment count — small circles get fewer triangles.
 	        int joinSegments = 6;
 	        if (joinRadius >= 4.0) joinSegments = 10;
 	        if (joinRadius >= 8.0) joinSegments = 14;
 
-	        // Walk the polyline. Skip segments fully off-canvas, and emit a join
-	        // circle at each interior vertex whose surrounding segments were
-	        // actually drawn.
-	        float prevSX, prevSY;
-	        bool havePrev = false;
-	        bool prevSegmentDrawn = false;
+	        // The remaining budget is handed down, not just checked between features: a single
+	        // pathological 20,000-vertex feature would otherwise blow straight through the cap
+	        // in one call, since the loop above only re-checks at the next feature.
+	        //
+	        // Clamped to the CLASS remainder, not just the pool. The per-class caps above only
+	        // gate entry to a feature, so handing down the whole pool would let one long merged
+	        // trail polyline return the entire budget and starve every paved road and highway
+	        // behind it — the exact failure the caps exist to prevent, made easier to hit by
+	        // counting vertices instead of commands.
+	        int avail = ROAD_VERTEX_BUDGET - emittedTotal;
+	        if (road.m_iPriority <= 1)
+	            avail = Math.Min(avail, capTrail - emittedTrail);
+	        else if (road.m_iPriority == 2)
+	            avail = Math.Min(avail, capPaved - emittedPaved);
 
-	        for (int i = 0; i + 1 < rawCount; i += 2)
+	        int added = EmitRoadPolyline(road, rawCount, vertexStep, stroke, color, joinRadius,
+	            joinSegments, drawJoins, avail);
+
+	        // Reported by the pass rather than assumed from the intent flag: a rebuild in which
+	        // every road was culled by the LOD band or the viewport AABB has not decimated
+	        // anything, and must not force a full rebuild of satellite, overlays, structures
+	        // and grid once the pan ends.
+	        if (vertexStep > 1 && added > 0)
+	            m_bRoadDecimationApplied = true;
+
+	        emittedTotal += added;
+	        if (road.m_iPriority <= 1)
+	            emittedTrail += added;
+	        else if (road.m_iPriority == 2)
+	            emittedPaved += added;
+	    }
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Walk one road's polyline and emit its visible geometry.
+	//!
+	//! The old version emitted one two-point LineDrawCommand per segment, so a 60-vertex road
+	//! cost 59 command objects and 59 four-float arrays every rebuild — and per the map audit
+	//! the script-heap allocation, not the GPU, is what actually hurts here. This accumulates
+	//! CONTIGUOUS visible segments into a single multi-vertex command and only breaks the run
+	//! where a segment is culled, which is the same shape the GRS renderer uses.
+	//! Returns the number of budget units emitted: one per polyline vertex, one per join.
+	protected int EmitRoadPolyline(AG0_TDLTerrainRoadFeature road, int rawCount, int vertexStep,
+	                               float stroke, int color, float joinRadius, int joinSegments,
+	                               bool drawJoins, int budgetRemaining)
+	{
+	    // Index of the first float of the LAST point. Points are (x, z) pairs, so this is the
+	    // largest even index with a partner — matching the old loop's `i + 1 < rawCount` bound
+	    // for both even and odd rawCount.
+	    int lastIndex = rawCount - 2;
+	    if (lastIndex % 2 != 0)
+	        lastIndex = lastIndex - 1;
+	    if (lastIndex < 2)
+	        return 0;
+
+	    if (budgetRemaining <= 0)
+	        return 0;
+
+	    int units = 0;
+	    int stride = 2 * vertexStep;
+
+	    array<float> run = null;
+	    float prevSX, prevSY;
+	    bool havePrev = false;
+	    bool prevSegmentDrawn = false;
+
+	    int i = 0;
+	    bool done = false;
+	    while (!done)
+	    {
+	        // The final vertex is always visited, whatever the stride lands on. Without this a
+	        // decimated road would render visibly short of its own end, which reads as the
+	        // network breaking up rather than as a level of detail.
+	        // Checked at the top, not only after a successful emit: the emit-side check lives
+	        // inside `if (segVisible)`, so a feature that runs off-screen after exhausting its
+	        // budget would otherwise keep paying a WorldToScreen per remaining vertex — and the
+	        // per-vertex projection cost is the thing this pass is being bounded for.
+	        if (units >= budgetRemaining)
+	            break;
+
+	        if (i >= lastIndex)
 	        {
-	            float sx, sy;
-	            WorldToScreen(Vector(road.m_aPoints[i], 0, road.m_aPoints[i + 1]), sx, sy);
+	            i = lastIndex;
+	            done = true;
+	        }
 
-	            if (havePrev)
+	        float sx, sy;
+	        WorldToScreen(Vector(road.m_aPoints[i], 0, road.m_aPoints[i + 1]), sx, sy);
+
+	        if (havePrev)
+	        {
+	            // Per-segment screen-space reject (handles long polylines
+	            // partially on-screen).
+	            bool offLeft   = (prevSX < -20 && sx < -20);
+	            bool offRight  = (prevSX > m_fCanvasWidth + 20 && sx > m_fCanvasWidth + 20);
+	            bool offTop    = (prevSY < -20 && sy < -20);
+	            bool offBottom = (prevSY > m_fCanvasHeight + 20 && sy > m_fCanvasHeight + 20);
+
+	            bool segVisible = !(offLeft || offRight || offTop || offBottom);
+
+	            if (segVisible)
 	            {
-	                // Per-segment screen-space reject (handles long polylines
-	                // partially on-screen).
-	                bool offLeft   = (prevSX < -20 && sx < -20);
-	                bool offRight  = (prevSX > m_fCanvasWidth + 20 && sx > m_fCanvasWidth + 20);
-	                bool offTop    = (prevSY < -20 && sy < -20);
-	                bool offBottom = (prevSY > m_fCanvasHeight + 20 && sy > m_fCanvasHeight + 20);
-
-	                bool segVisible = !(offLeft || offRight || offTop || offBottom);
-
-	                if (segVisible)
+	                if (!run)
 	                {
-	                    LineDrawCommand line = new LineDrawCommand();
-	                    line.m_iColor = color;
-	                    line.m_fWidth = stroke;
-	                    line.m_Vertices = {prevSX, prevSY, sx, sy};
-	                    m_aDrawCommands.Insert(line);
+	                    run = {};
+	                    run.Insert(prevSX);
+	                    run.Insert(prevSY);
+	                    units = units + 1;   // the run's opening vertex counts too
+	                }
+	                run.Insert(sx);
+	                run.Insert(sy);
+	                units = units + 1;
 
-	                    // Round-join at the SHARED vertex between this segment
-	                    // and the previous one (i.e. at prevSX/prevSY), but only
-	                    // if there actually was a previous segment drawn — no
-	                    // join at the very first endpoint of the polyline.
-	                    if (drawJoins && prevSegmentDrawn)
-	                    {
-	                        array<float> joinVerts = {};
-	                        TessellateCircle(prevSX, prevSY, joinRadius, joinSegments, joinVerts);
-	                        PolygonDrawCommand join = new PolygonDrawCommand();
-	                        join.m_iColor = color;
-	                        join.m_Vertices = joinVerts;
-	                        m_aDrawCommands.Insert(join);
-	                    }
+	                // One-line revert: with batching off this flushes after every segment, so
+	                // the emitted commands are identical to the pre-batching behaviour —
+	                // including the line-then-join ordering below, which is why the flush sits
+	                // above the join and not after it. Kept because nothing else in this mod
+	                // feeds a LineDrawCommand more than two points: if the engine turns out to
+	                // treat m_Vertices as disconnected pairs rather than a polyline, roads will
+	                // render as a zigzag and this constant is the fix.
+	                if (!ROAD_BATCH_SEGMENTS)
+	                {
+	                    FlushRoadRun(run, color, stroke);
+	                    run = null;
 	                }
 
-	                prevSegmentDrawn = segVisible;
+	                // Round-join at the SHARED vertex between this segment
+	                // and the previous one (i.e. at prevSX/prevSY), but only
+	                // if there actually was a previous segment drawn — no
+	                // join at the very first endpoint of the polyline.
+	                if (drawJoins && prevSegmentDrawn)
+	                {
+	                    array<float> joinVerts = {};
+	                    TessellateCircle(prevSX, prevSY, joinRadius, joinSegments, joinVerts);
+	                    PolygonDrawCommand join = new PolygonDrawCommand();
+	                    join.m_iColor = color;
+	                    join.m_Vertices = joinVerts;
+	                    m_aDrawCommands.Insert(join);
+	                    units = units + 1;
+	                }
+
+	                if (units >= budgetRemaining)
+	                {
+	                    FlushRoadRun(run, color, stroke);
+	                    return units;
+	                }
+	            }
+	            else
+	            {
+	                // Break in visibility ends the run.
+	                FlushRoadRun(run, color, stroke);
+	                run = null;
 	            }
 
-	            prevSX = sx;
-	            prevSY = sy;
-	            havePrev = true;
+	            prevSegmentDrawn = segVisible;
 	        }
+
+	        prevSX = sx;
+	        prevSY = sy;
+	        havePrev = true;
+	        i += stride;
 	    }
+
+	    FlushRoadRun(run, color, stroke);
+	    return units;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Emit an accumulated run as one polyline command. No-op for null or a run shorter than a
+	//! single segment, so callers can flush unconditionally.
+	protected void FlushRoadRun(array<float> run, int color, float stroke)
+	{
+	    if (!run || run.Count() < 4)
+	        return;
+
+	    LineDrawCommand line = new LineDrawCommand();
+	    line.m_iColor = color;
+	    line.m_fWidth = stroke;
+	    line.m_Vertices = run;
+	    m_aDrawCommands.Insert(line);
 	}
 
 	//------------------------------------------------------------------------------------------------
@@ -1177,6 +2431,26 @@ class AG0_TDLMapView
 	    float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
 	    float mapRotRad = m_fRotation * Math.DEG2RAD;
 
+	    // Sub-pixel rejection threshold, hoisted out of the loop and inverted into world units.
+	    // The old test computed halfW/halfL in SCREEN pixels and therefore ran AFTER
+	    // WorldToScreen — so every building inside the viewport paid a full projection before
+	    // being thrown away for being too small to see. The test depends only on the building's
+	    // size and the zoom, never on its position:
+	    //     halfW < 1  <=>  m_fWidth * 0.5 * pixelsPerWorldUnit < 1
+	    //                <=>  m_fWidth < 2 / pixelsPerWorldUnit
+	    // so it is a per-frame constant and the reject becomes two float compares.
+	    //
+	    // This is the win that matters at zoom-out, which is where the map fell over: at low
+	    // zoom nearly every building is sub-pixel, and they now cost two compares each instead
+	    // of an AABB test plus a projection.
+	    //
+	    // A non-positive scale rejects EVERYTHING, matching the old behaviour: halfW would have
+	    // been <= 0, hence < 1. Rejecting nothing there would emit a degenerate colinear quad
+	    // per record and trip the triangulator spam the OR-test below exists to prevent.
+	    float minWorldExtent = float.MAX;
+	    if (pixelsPerWorldUnit > 0)
+	        minWorldExtent = 2.0 / pixelsPerWorldUnit;
+
 	    // Per-frame world-space viewport AABB for cheap per-building rejection
 	    // (saves the WorldToScreen sin/cos for off-screen features). Diagonal-
 	    // sized to be rotation-safe, same trick as DrawApiTerrainRoads and
@@ -1194,6 +2468,15 @@ class AG0_TDLMapView
 	    foreach (AG0_TDLTerrainStructureRecord rec : m_aTerrainStructures)
 	    {
 	        if (!rec)
+	            continue;
+
+	        // Sub-pixel reject FIRST: two compares, no projection, and at zoom-out it rejects
+	        // almost everything. Still OR (not AND): a building with one axis sub-pixel is a
+	        // colinear strip after rotation, which trips the engine's polygon triangulator
+	        // ("DrawPolygon triangulation failed" log spam every frame, FPS hit). Tradeoff is
+	        // invisible-at-zoom-out buildings cull a frame earlier; they weren't readable at
+	        // that scale anyway.
+	        if (rec.m_fWidth < minWorldExtent || rec.m_fDepth < minWorldExtent)
 	            continue;
 
 	        // World-space cull. Half-extent bound = (w + d) * 0.5 is a tiny bit
@@ -1214,15 +2497,6 @@ class AG0_TDLMapView
 	        // Half-extents in screen pixels (API delivers full width/depth).
 	        float halfW = rec.m_fWidth * 0.5 * pixelsPerWorldUnit;
 	        float halfL = rec.m_fDepth * 0.5 * pixelsPerWorldUnit;
-
-	        // Skip sub-pixel buildings — keeps the canvas readable when zoomed out.
-	        // Use OR (not AND): a building with one axis sub-pixel is a colinear
-	        // strip after rotation, which trips the engine's polygon triangulator
-	        // ("DrawPolygon triangulation failed" log spam every frame, FPS hit).
-	        // Tradeoff is invisible-at-zoom-out buildings cull a frame earlier; they
-	        // weren't readable at that scale anyway.
-	        if (halfW < 1 || halfL < 1)
-	            continue;
 
 	        // Total rotation: see comment above for the negation rationale.
 	        // Building rotation is world-CCW; map rotation is also world-CCW (track
@@ -1697,7 +2971,7 @@ class AG0_TDLMapView
 			m_aDrawCommands.Insert(wpFill);
 			
 			// Per-waypoint label (from m_aWaypointLabels, offset above the dot)
-			if (waypointIdx < shape.m_aWaypointLabels.Count())
+			if (shape.m_aWaypointLabels && waypointIdx < shape.m_aWaypointLabels.Count())
 			{
 				string wpLabel = shape.m_aWaypointLabels[waypointIdx];
 				if (!wpLabel.IsEmpty())
@@ -1833,6 +3107,33 @@ class AG0_TDLMapView
 	// pixels-on-screen-to-meters-on-the-ground, which is invariant under
 	// rotation but changes with zoom; matches what every paper map / nav
 	// system does and what operators expect.
+	//------------------------------------------------------------------------------------------------
+	//------------------------------------------------------------------------------------------------
+	//! Zone designator + 100 km square, parked just above the scale bar.
+	//!
+	//! Constant for the whole map, so repeating it on every readout would be noise — but without
+	//! it somewhere on screen the grid line digits are unqualified and a player reading a
+	//! reference off the map has nothing to prefix it with.
+	protected void DrawGridLegend()
+	{
+		if (m_fCanvasWidth <= 0 || m_fCanvasHeight <= 0)
+			return;
+
+		string legend = AG0_MGRSGridUtils.GetGridSquareLegend();
+		if (legend.IsEmpty())
+			return;
+
+		// Sits directly above the scale bar's backdrop. Both are anchored to the same left
+		// margin so they read as one block of view metadata rather than two stray labels.
+		const float LEGEND_MARGIN_BOTTOM = 132.0;
+		const float LEGEND_SIZE = 15.0;
+
+		float legendX = 120.0 + (legend.Length() * SHAPE_LABEL_CHAR_WIDTH * 0.5);
+		float legendY = m_fCanvasHeight - LEGEND_MARGIN_BOTTOM;
+
+		DrawTextLabel(legend, legendX, legendY, LEGEND_SIZE, SHAPE_LABEL_TEXT_COLOR);
+	}
+
 	//------------------------------------------------------------------------------------------------
 	protected void DrawScaleBar()
 	{
@@ -2123,10 +3424,198 @@ class AG0_TDLMapView
 	    // Major lines (1000m) - always visible
 	    float majorSpacing = 1000.0;
 	    int majorColor = 0x60000000; // Semi-transparent black
-	    
+
 	    DrawGridLines(minX, maxX, minZ, maxZ, majorSpacing, majorColor, 2.0);
+	    DrawGridLabels(minX, maxX, minZ, maxZ, majorSpacing);
 	}
-	
+
+	//------------------------------------------------------------------------------------------------
+	//! Label each major grid line with its 1 km digits, at the point the line enters the canvas.
+	//!
+	//! Unlabelled grid lines make a map you can navigate but not report from — the whole point of
+	//! a grid is being able to read a reference off it and say it out loud. Anchoring to where the
+	//! line crosses the canvas edge is what a printed map sheet does, and it keeps working under
+	//! track-up: in north-up the clip degenerates to "top edge and left edge", which is exactly
+	//! where these belong.
+	protected void DrawGridLabels(float minX, float maxX, float minZ, float maxZ, float spacing)
+	{
+	    float pixelsPerWorldUnit = m_fCanvasWidth / (m_fMapSizeX * m_fZoom);
+
+	    // Below this the labels collide with each other and turn the edges into noise. The grid
+	    // lines themselves stay — they still read as a grid without digits on them.
+	    if (spacing * pixelsPerWorldUnit < GRID_LABEL_MIN_SPACING_PX)
+	        return;
+
+	    float startX = Math.Floor(minX / spacing) * spacing;
+	    float startZ = Math.Floor(minZ / spacing) * spacing;
+
+	    // Eastings — constant world X. Anchored at whichever end sits higher on screen, so in
+	    // north-up they all read along the top edge.
+	    for (float x = startX; x <= maxX; x += spacing)
+	    {
+	        float x0, y0, x1, y1;
+	        WorldToScreen(Vector(x, 0, minZ), x0, y0);
+	        WorldToScreen(Vector(x, 0, maxZ), x1, y1);
+
+	        float cx0, cy0, cx1, cy1;
+	        if (!ClipSegmentToCanvas(x0, y0, x1, y1, cx0, cy0, cx1, cy1))
+	            continue;
+
+	        if (cy1 < cy0)
+	            PlaceGridLabel(AG0_MGRSGridUtils.GetKilometreGridDigits(x), cx1, cy1, cx0, cy0);
+	        else
+	            PlaceGridLabel(AG0_MGRSGridUtils.GetKilometreGridDigits(x), cx0, cy0, cx1, cy1);
+	    }
+
+	    // Northings — constant world Z. Anchored at whichever end sits further left.
+	    for (float z = startZ; z <= maxZ; z += spacing)
+	    {
+	        float x0, y0, x1, y1;
+	        WorldToScreen(Vector(minX, 0, z), x0, y0);
+	        WorldToScreen(Vector(maxX, 0, z), x1, y1);
+
+	        float cx0, cy0, cx1, cy1;
+	        if (!ClipSegmentToCanvas(x0, y0, x1, y1, cx0, cy0, cx1, cy1))
+	            continue;
+
+	        if (cx1 < cx0)
+	            PlaceGridLabel(AG0_MGRSGridUtils.GetKilometreGridDigits(z), cx1, cy1, cx0, cy0);
+	        else
+	            PlaceGridLabel(AG0_MGRSGridUtils.GetKilometreGridDigits(z), cx0, cy0, cx1, cy1);
+	    }
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Place one grid label a fixed distance in from where its line enters the canvas.
+	//!
+	//! Walks ALONG the line rather than offsetting in screen X or Y. Under track-up a constant-X
+	//! line can enter through a side edge, and a fixed downward offset then slides the label
+	//! along that edge instead of into the canvas — which is how these ended up clipped. Moving
+	//! down the line itself works for whichever edge was crossed, and keeps the label visibly
+	//! attached to the line it belongs to.
+	//!
+	//! @param anchorX/anchorY Clipped entry point — the end the label reads from
+	//! @param towardX/towardY The line's other clipped end, giving the inward direction
+	protected void PlaceGridLabel(string text, float anchorX, float anchorY, float towardX, float towardY)
+	{
+	    float dx = towardX - anchorX;
+	    float dy = towardY - anchorY;
+	    float chord = Math.Sqrt(dx * dx + dy * dy);
+
+	    // A line that only nicks a corner has nowhere legible to put a label, and walking the
+	    // inset would overshoot its far end.
+	    if (chord < GRID_LABEL_MIN_CHORD_PX)
+	        return;
+
+	    float step = GRID_LABEL_INSET_PX / chord;
+	    float labelX = anchorX + dx * step;
+	    float labelY = anchorY + dy * step;
+
+	    // The pill is centred on the anchor, so its own half-extents plus a margin define how
+	    // close to an edge that centre may sit. A corner entry can still leave a walked-in
+	    // anchor within half a pill of the edge, so clamp as the final guarantee — by this
+	    // point the label is already on the interior side, so the clamp nudges rather than
+	    // detaching it from its line.
+	    float halfW = (text.Length() * SHAPE_LABEL_CHAR_WIDTH) * 0.5 + SHAPE_LABEL_PAD + GRID_LABEL_EDGE_MARGIN_PX;
+	    float halfH = SHAPE_LABEL_HEIGHT * 0.5 + SHAPE_LABEL_PAD + GRID_LABEL_EDGE_MARGIN_PX;
+
+	    if (labelX < halfW)
+	        labelX = halfW;
+	    if (labelX > m_fCanvasWidth - halfW)
+	        labelX = m_fCanvasWidth - halfW;
+	    if (labelY < halfH)
+	        labelY = halfH;
+	    if (labelY > m_fCanvasHeight - halfH)
+	        labelY = m_fCanvasHeight - halfH;
+
+	    DrawTextLabel(text, labelX, labelY, GRID_LABEL_SIZE, GRID_LABEL_TEXT_COLOR);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Liang-Barsky clip of a screen-space segment against the canvas rect.
+	//!
+	//! Grid lines are generated across the view diagonal so they still span the canvas when the
+	//! map is rotated, which means both endpoints are normally well outside it. Finding where a
+	//! line actually enters is therefore a clip, not a clamp — clamping would slide every label
+	//! into a corner instead of leaving it attached to its own line.
+	//!
+	//! Returns false when the segment misses the canvas entirely.
+	protected bool ClipSegmentToCanvas(float x0, float y0, float x1, float y1,
+	    out float cx0, out float cy0, out float cx1, out float cy1)
+	{
+	    cx0 = x0;
+	    cy0 = y0;
+	    cx1 = x1;
+	    cy1 = y1;
+
+	    float dx = x1 - x0;
+	    float dy = y1 - y0;
+
+	    float tEnter = 0;
+	    float tExit = 1;
+
+	    // Edges in order: left, right, top, bottom. Written as an indexed loop with the p/q
+	    // pair selected inline rather than a helper taking them by reference — an `inout float`
+	    // on a script-side method has no precedent anywhere in this codebase, and no local
+	    // arrays because this runs once per grid line per frame.
+	    for (int edge = 0; edge < 4; edge++)
+	    {
+	        float p = 0;
+	        float q = 0;
+	        if (edge == 0)
+	        {
+	            p = -dx;
+	            q = x0;
+	        }
+	        else if (edge == 1)
+	        {
+	            p = dx;
+	            q = m_fCanvasWidth - x0;
+	        }
+	        else if (edge == 2)
+	        {
+	            p = -dy;
+	            q = y0;
+	        }
+	        else
+	        {
+	            p = dy;
+	            q = m_fCanvasHeight - y0;
+	        }
+
+	        if (p == 0)
+	        {
+	            // Parallel to this edge: inside only if it starts on the correct side.
+	            if (q < 0)
+	                return false;
+
+	            continue;
+	        }
+
+	        float t = q / p;
+	        if (p < 0)
+	        {
+	            if (t > tExit)
+	                return false;
+	            if (t > tEnter)
+	                tEnter = t;
+	        }
+	        else
+	        {
+	            if (t < tEnter)
+	                return false;
+	            if (t < tExit)
+	                tExit = t;
+	        }
+	    }
+
+	    cx0 = x0 + dx * tEnter;
+	    cy0 = y0 + dy * tEnter;
+	    cx1 = x0 + dx * tExit;
+	    cy1 = y0 + dy * tExit;
+	    return true;
+	}
+
 	//------------------------------------------------------------------------------------------------
 	protected void DrawGridLines(float minX, float maxX, float minZ, float maxZ, float spacing, int color, float width)
 	{
@@ -2185,14 +3674,17 @@ class AG0_TDLMapView
 
         if (marker.m_bShowHeading)
         {
-            DrawHeadingIndicator(screenX, screenY, marker.m_fHeading, size, marker.m_iColor);
+            DrawHeadingIndicator(screenX, screenY, GetMarkerScreenHeading(marker.m_vWorldPos, marker.m_fHeading), size, marker.m_iColor);
         }
     }
-    
+
     //------------------------------------------------------------------------------------------------
-    protected void DrawHeadingIndicator(float x, float y, float heading, float size, int color)
+    //! `screenHeading` is already in screen space — resolved by GetMarkerScreenHeading so
+    //! canvas ticks agree with the widget markers under a hosted 3D pane, where the correct
+    //! angle depends on where the marker sits under perspective and not on view rotation alone.
+    protected void DrawHeadingIndicator(float x, float y, float screenHeading, float size, int color)
     {
-        float rotRad = (heading + m_fRotation) * Math.DEG2RAD;
+        float rotRad = screenHeading * Math.DEG2RAD;
         float length = size * 2;
         
         float tipX = x + Math.Sin(rotRad) * length;
@@ -2277,8 +3769,41 @@ class AG0_TDLMapView
     //------------------------------------------------------------------------------------------------
     vector GetCenter() { return m_vCenterWorld; }
     float GetZoom() { return m_fZoom; }
-    float GetRotation() { return m_fRotation; }
     bool IsTextureLoaded() { return m_bTextureLoaded; }
+
+    //------------------------------------------------------------------------------------------------
+    //! While the 3D pane is up this reports the camera's yaw (negated: a camera yawed
+    //! right shows the world rotated left on screen), so rotation consumers — the
+    //! compass heading indicator above all — track the orbit instead of a 2D rotation
+    //! state that is not being rendered. m_fRotation itself is left untouched so the
+    //! 2D view resumes exactly where it was when the 3D map closes.
+    float GetRotation()
+    {
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (view)
+            return -view.GetCameraYaw();
+
+        return m_fRotation;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Screen rotation for a marker at `worldPos` facing `worldHeading`. Split out from
+    //! GetRotation because under perspective the correct answer depends on WHERE the
+    //! marker is, not just on the view: the 3D map projects a point ahead of the marker
+    //! and measures the on-screen angle, which a flat heading+rotation sum cannot match
+    //! at shallow camera pitch.
+    float GetMarkerScreenHeading(vector worldPos, float worldHeading)
+    {
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (view)
+        {
+            float projectedDeg;
+            if (view.ProjectHeadingToPane(worldPos, worldHeading, projectedDeg))
+                return projectedDeg;
+        }
+
+        return worldHeading + GetRotation();
+    }
 }
 
 //------------------------------------------------------------------------------------------------

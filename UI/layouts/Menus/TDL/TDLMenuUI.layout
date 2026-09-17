@@ -81,6 +81,25 @@ FrameWidgetClass {
             OffsetBottom 0
            }
           }
+          RenderTargetWidgetClass "{69F36598D36D6464}" {
+           Name "RenderTarget0"
+           Slot FrameWidgetSlot "{69F36598BE8C75FC}" {
+            Anchor 0 0 1 1
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX -1315
+            OffsetRight 0
+            SizeY -1050
+            OffsetBottom 0
+           }
+           "Is Visible" 0
+           camera 10
+           "max FPS" 30
+           "MSAA mode" "MSAA from setup"
+           "Image correction" 1
+          }
           ButtonWidgetClass "{672776DF191E1E28}" {
            Name "MapDragSurface"
            Slot FrameWidgetSlot "{672776DF61B9C9F0}" {
@@ -563,12 +582,12 @@ FrameWidgetClass {
             Anchor 0 0.5 0 0.5
             PositionX 50
             OffsetLeft 50
-            PositionY -100.626
-            OffsetTop -100.6
+            PositionY -138.126
+            OffsetTop -138.1
             SizeX 100
             OffsetRight -150
-            SizeY 300
-            OffsetBottom -199.4
+            SizeY 375
+            OffsetBottom -236.9
            }
            {
             ButtonWidgetClass "{672744BF189D2876}" {
@@ -672,6 +691,57 @@ FrameWidgetClass {
                     Padding 5 5 5 5
                    }
                    Texture "{B00DF20357CD4ACF}UI/Textures/Icons/tdl_target.edds"
+                   Size 48 48
+                   "Blend Mode" Additive
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+            ButtonWidgetClass "{A03D3D0000000010}" {
+             Name "Map3DButton"
+             Slot LayoutSlot "{672744BED246674C}" {
+              Padding 5 5 5 5
+             }
+             components {
+              SCR_ModularButtonComponent "{A03D3D0000000011}" {
+               m_aEffects {
+                SCR_ButtonEffectColor "{A03D3D0000000012}" {
+                 m_eEvents 6149
+                 m_sWidgetName "Map3DImage"
+                 m_fAnimationTime 0.08
+                 m_cDefault 0.75 0.75 0.75 1
+                 m_cHovered 0.2 0.8 0.8 1
+                 m_cActivated 0.2 0.8 0.8 1
+                 m_cActivatedHovered 0.3 1 1 1
+                 m_cClicked 0.3 1 1 1
+                 m_cFocusGained 0.2 0.8 0.8 1
+                 m_cFocusLost 0.75 0.75 0.75 1
+                }
+               }
+               m_bFocusOnMouseEnter 1
+              }
+             }
+             style blank
+             {
+              SizeLayoutWidgetClass "{A03D3D0000000013}" {
+               Name "SizeLayout0"
+               Slot ButtonWidgetSlot "{67275C1BAA1557B3}" {
+               }
+               {
+                OverlayWidgetClass "{A03D3D0000000014}" {
+                 Name "Overlay0"
+                 Slot AlignableSlot "{67275C1BB68F4311}" {
+                 }
+                 {
+                  ImageWidgetClass "{A03D3D0000000015}" {
+                   Name "Map3DImage"
+                   Slot OverlayWidgetSlot "{67275C1BB4F61DF4}" {
+                    Padding 5 5 5 5
+                   }
+                   Texture "{6D3CDC483EE6F29D}UI/Textures/Icons/tdl_map.edds"
                    Size 48 48
                    "Blend Mode" Additive
                   }
@@ -938,6 +1008,112 @@ FrameWidgetClass {
             SizeY 200
             OffsetBottom -200
             Alignment 1 0
+           }
+          }
+          VerticalLayoutWidgetClass "{6A03208E5268DC72}" {
+           Name "PointReadouts"
+           Slot FrameWidgetSlot "{672880530762BD67}" {
+            Anchor 1 0 1 0
+            PositionX -40
+            OffsetLeft -40
+            PositionY 400
+            OffsetTop 400
+            SizeX 1420
+            OffsetRight -1380
+            SizeY 1080
+            OffsetBottom -1480
+            Alignment 1 1
+            SizeToContent 1
+           }
+           {
+            OverlayWidgetClass "{6A03208E5268DC74}" {
+             Name "PointReadout"
+             Slot LayoutSlot "{67288053E62CE46F}" {
+              Padding 10 10 10 10
+             }
+             "Z Order" 99
+             {
+              ImageWidgetClass "{6A03208E5268DC76}" {
+               Name "BackgroundPanel"
+               Slot OverlayWidgetSlot "{672C1C7088C128E9}" {
+                HorizontalAlign 3
+                VerticalAlign 3
+               }
+               Color 0.0118 0.0118 0.0118 0.8
+               Texture "{012010010314EB94}UI/Textures/Icons/tdl_self_panel.edds"
+               Size 350 190
+              }
+              FrameWidgetClass "{6A03208E5268DC77}" {
+               Name "PointFrame"
+               Slot OverlayWidgetSlot "{672C1C7088C128C8}" {
+                Padding 10 10 10 10
+               }
+               {
+                SizeLayoutWidgetClass "{6A03208E5268DC78}" {
+                 Name "SizeLayout0"
+                 Slot FrameWidgetSlot "{67288053FD3956B8}" {
+                  PositionX 0
+                  OffsetLeft 0
+                  PositionY 0
+                  OffsetTop 0
+                  SizeX 317.622
+                  OffsetRight -317.622
+                  SizeY 46.516
+                  OffsetBottom -46.516
+                 }
+                 AllowWidthOverride 1
+                 WidthOverride 300
+                 AllowHeightOverride 1
+                 HeightOverride 200
+                }
+                VerticalLayoutWidgetClass "{6A03208E5268DC79}" {
+                 Name "VerticalLayout0"
+                 Slot FrameWidgetSlot "{672744B5227EC68A}" {
+                  Anchor 0 0 1 1
+                  PositionX 0
+                  OffsetLeft 0
+                  PositionY 0
+                  OffsetTop 0
+                  SizeX 0
+                  OffsetRight 0
+                  SizeY 0
+                  OffsetBottom 0
+                  Alignment 0 0
+                  SizeToContent 1
+                 }
+                 {
+                  TextWidgetClass "{6A03208E5268DC7A}" {
+                   Name "PointReadoutLabel"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "PointReadoutLabel"
+                  }
+                  TextWidgetClass "{6A03208E5268DC7D}" {
+                   Name "PointReadoutGrid"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "PointReadoutGrid"
+                  }
+                  TextWidgetClass "{6A03208E5268DC7F}" {
+                   Name "PointReadoutElev"
+                   Slot LayoutSlot "{672744B597F61BBA}" {
+                    SizeMode Fill
+                   }
+                   Text "---MSL"
+                  }
+                  TextWidgetClass "{6A03208E5268DC00}" {
+                   Name "PointReadoutRange"
+                   Slot LayoutSlot "{672744B5942D0E66}" {
+                    SizeMode Fill
+                   }
+                   Text "---*M"
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
            }
           }
          }
@@ -1694,6 +1870,7 @@ FrameWidgetClass {
           VerticalAlign 3
           Padding 0 100 0 0
          }
+         "Is Visible" 0
          {
           ButtonWidgetClass "{69472DC70EE0AAD6}" : "{C9DF0E6590F6C388}UI/layouts/WidgetLibrary/SpinBox/WLib_SpinBox.layout" {
            Name "MarkerToolTypeSpinBox"

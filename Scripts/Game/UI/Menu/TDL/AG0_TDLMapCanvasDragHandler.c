@@ -5,9 +5,18 @@
 
 class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
 {
+    //! Engine mouse button ordinal for right-click, as reported to the widget event.
+    protected static const int RIGHT_BUTTON = 1;
+
     protected bool m_bDragging;
     protected int m_iLastMouseX;
     protected int m_iLastMouseY;
+
+    // Right-button drag, tracked independently of the left-button pan so a consumer can
+    // bind the two to different axes (3D view: left orbits, right pans).
+    protected bool m_bRightDragging;
+    protected int m_iLastRightMouseX;
+    protected int m_iLastRightMouseY;
     // Tracked for click-vs-drag detection — accumulated absolute movement
     // since mouse-down. If under CLICK_THRESHOLD on mouse-up we treat as a
     // click and fire m_OnClick rather than just ending the drag.
@@ -28,6 +37,14 @@ class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
     //! rubber-band ghost between clicks. Independent of drag state so the
     //! ghost tracks even when the user is just hovering after a click.
     ref ScriptInvoker m_OnCursorMove = new ScriptInvoker();
+
+    //! Fired on right-button release when the button barely moved. Mirrors m_OnClick's
+    //! click-vs-drag rule for the right channel, because right-drag already means orbit —
+    //! the radial has to be a short press or it would fire at the end of every orbit.
+    //! Coords are absolute screen pixels, as with m_OnClick.
+    ref ScriptInvoker m_OnRightClick = new ScriptInvoker();
+
+    protected float m_fTotalRightMoved;
     // Tracks the previous polled cursor position so we only fire m_OnCursorMove
     // when it actually changed — keeps idle hand off the invoker stream.
     protected int m_iLastPolledMouseX = -1;
@@ -45,6 +62,19 @@ class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
     //------------------------------------------------------------------------------------------------
     override bool OnMouseButtonDown(Widget w, int x, int y, int button)
     {
+        // Right button drives a second, independent drag axis. It is deliberately not
+        // routed through the click-vs-drag or freehand-suppression logic below: those
+        // exist to protect marker placement and stroke sampling, which are left-button
+        // behaviours. Keeping the channels separate means a right-drag can never place
+        // a marker or interrupt a stroke.
+        if (button == RIGHT_BUTTON)
+        {
+            m_bRightDragging = true;
+            m_fTotalRightMoved = 0;
+            WidgetManager.GetMousePos(m_iLastRightMouseX, m_iLastRightMouseY);
+            return false;
+        }
+
         if (button != 0)
             return false;
 
@@ -62,6 +92,22 @@ class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
     //------------------------------------------------------------------------------------------------
     override bool OnMouseButtonUp(Widget w, int x, int y, int button)
     {
+        if (button == RIGHT_BUTTON)
+        {
+            m_bRightDragging = false;
+
+            // Resolved on release, not press: a press cannot yet know whether it is the
+            // start of an orbit or a request for the context menu.
+            if (m_fTotalRightMoved < CLICK_THRESHOLD_PX)
+            {
+                int rightX, rightY;
+                WidgetManager.GetMousePos(rightX, rightY);
+                m_OnRightClick.Invoke(rightX, rightY);
+            }
+
+            return false;
+        }
+
         if (button == 0)
         {
             bool suppressClick = m_bFreehandActive;
@@ -85,6 +131,7 @@ class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
     override bool OnMouseLeave(Widget w, Widget enterW, int x, int y)
     {
         m_bDragging = false;
+        m_bRightDragging = false;
         return false;
     }
     
@@ -129,6 +176,34 @@ class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
     }
 
     //------------------------------------------------------------------------------------------------
+    bool IsRightDragging()
+    {
+        return m_bRightDragging;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Right-button drag delta. Freehand suppression does not apply here — the draw
+    //! tools are left-button only, so a right-drag stays available even mid-stroke.
+    bool GetRightDragDelta(out int deltaX, out int deltaY)
+    {
+        if (!m_bRightDragging)
+            return false;
+
+        int mouseX, mouseY;
+        WidgetManager.GetMousePos(mouseX, mouseY);
+
+        deltaX = mouseX - m_iLastRightMouseX;
+        deltaY = mouseY - m_iLastRightMouseY;
+
+        m_iLastRightMouseX = mouseX;
+        m_iLastRightMouseY = mouseY;
+
+        m_fTotalRightMoved = m_fTotalRightMoved + Math.AbsFloat(deltaX) + Math.AbsFloat(deltaY);
+
+        return (deltaX != 0 || deltaY != 0);
+    }
+
+    //------------------------------------------------------------------------------------------------
     //! Toggle pan-suppression for draw mode. True while the user is actively
     //! drawing (e.g. TDLDraw held + FREEHAND tool armed); false otherwise so
     //! the user can pan freely between draws. The drag handler is purely a
@@ -143,6 +218,7 @@ class AG0_TDLMapCanvasDragHandler : ScriptedWidgetComponent
     void CancelDrag()
     {
         m_bDragging = false;
+        m_bRightDragging = false;
     }
 
     //------------------------------------------------------------------------------------------------

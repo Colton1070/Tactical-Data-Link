@@ -60,7 +60,17 @@ modded class SCR_PlayerController
 	protected int m_iTerrainRoadReceivedChunks;
 	protected ref array<string> m_aTerrainRoadChunkBuffer;
 	protected ref array<bool> m_aTerrainRoadChunkReceived;
-	
+
+	// TDL terrain heightmap (elevation grid streamed from /api/mod/terrain/heightmap)
+	// Same chunked-RPC reassembly pattern as structures and roads.
+	protected ref AG0_TDLTerrainHeightmapManager m_TDLTerrainHeightmapManager = new AG0_TDLTerrainHeightmapManager();
+	protected string m_sTerrainHeightmapSyncHash;
+	protected string m_sTerrainHeightmapBufferedHash;
+	protected int m_iTerrainHeightmapExpectedChunks;
+	protected int m_iTerrainHeightmapReceivedChunks;
+	protected ref array<string> m_aTerrainHeightmapChunkBuffer;
+	protected ref array<bool> m_aTerrainHeightmapChunkReceived;
+
 	// ============================================
 	// EUD SCREEN ADJUSTMENT
 	// ============================================
@@ -100,6 +110,10 @@ modded class SCR_PlayerController
 	protected ref AG0_TDL_NetworkNameDialog m_NetworkNameDialog;
 	protected ref AG0_TDL_NetworkPasswordDialog m_NetworkPasswordDialog;
 	
+	//! HUD map mirror. Owned here rather than by a component so its lifetime tracks the local
+	//! controller, which is also what gates every condition it hides on.
+	protected ref AG0_TDLMapPeripheral m_TDLMapPeripheral;
+
 	protected RplId m_PendingRadioCryptoRplId;
 	protected EditBoxWidget m_PendingRadioCryptoEditBox;
 	protected ref AG0_TDL_KeyDialog m_RadioCryptoDialog;
@@ -122,6 +136,11 @@ modded class SCR_PlayerController
 				m_TDLInputManager.AddActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
 	    		m_TDLInputManager.AddActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
 				m_TDLInputManager.AddActionListener("TDLFocusToggle", EActionTrigger.DOWN, OnTDLFocusToggle);
+				// Listener rather than a per-frame poll because the toggle is an edge, not a
+				// state: the wheel/trigger zoom actions this view also owns are polled inside
+				// AG0_TDLMap3DView for the opposite reason.
+				m_TDLInputManager.AddActionListener("TDLMap3D", EActionTrigger.DOWN, OnMap3DToggle);
+				m_TDLInputManager.AddActionListener("TDLPeripheralToggle", EActionTrigger.DOWN, OnPeripheralToggle);
 			}
 		}
     }
@@ -134,6 +153,14 @@ modded class SCR_PlayerController
 			m_TDLInputManager.RemoveActionListener("TDLAdjustUp", EActionTrigger.DOWN, OnEUDAdjustUp);
 		    m_TDLInputManager.RemoveActionListener("TDLAdjustDown", EActionTrigger.DOWN, OnEUDAdjustDown);
 			m_TDLInputManager.RemoveActionListener("TDLFocusToggle", EActionTrigger.DOWN, OnTDLFocusToggle);
+			m_TDLInputManager.RemoveActionListener("TDLMap3D", EActionTrigger.DOWN, OnMap3DToggle);
+			m_TDLInputManager.RemoveActionListener("TDLPeripheralToggle", EActionTrigger.DOWN, OnPeripheralToggle);
+		}
+
+		if (m_TDLMapPeripheral)
+		{
+			m_TDLMapPeripheral.Cleanup();
+			m_TDLMapPeripheral = null;
 		}
 	}
     
@@ -149,12 +176,45 @@ modded class SCR_PlayerController
 
             UpdateTDLNetworkState(timeSlice);
             UpdateHeldDeviceCache(timeSlice);
+            UpdateMapPeripheral(timeSlice);
         }
 
         // Drive the per-PC photo manager's tick (decode pipeline, reassembler stall sweep).
         // No-op on PCs that haven't received any image traffic yet.
         if (m_TDLPhotoManager)
             m_TDLPhotoManager.Update(timeSlice);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Local controller only, and allocated no earlier than the first enable: the peripheral
+    //! is a HUD element for the player sitting at this machine, and a client holds an
+    //! SCR_PlayerController per connected player — one instance each would stack that many
+    //! map mirrors on the same workspace.
+    protected void UpdateMapPeripheral(float timeSlice)
+    {
+        if (!m_TDLMapPeripheral)
+        {
+            if (!AG0_TDLMapPeripheral.GetEnabled())
+                return;
+
+            m_TDLMapPeripheral = new AG0_TDLMapPeripheral();
+        }
+
+        m_TDLMapPeripheral.Update(timeSlice);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Gated here rather than at registration: EOnInit only excludes a headless server, so on a
+    //! player-hosted one the host process owns an SCR_PlayerController per connected player and
+    //! every one of them registers this listener. A parity flip run N times is a no-op on even
+    //! player counts — the peripheral would simply refuse to turn on. m_bIsLocalPlayerController
+    //! is not reliably set at EOnInit time, which is why the guard lives in the handler.
+    protected void OnPeripheralToggle()
+    {
+        if (!m_bIsLocalPlayerController)
+            return;
+
+        AG0_TDLMapPeripheral.Toggle();
     }
 
     //------------------------------------------------------------------------------------------------
@@ -271,6 +331,15 @@ modded class SCR_PlayerController
     //! (so the toggle is always an exit when something is focused, even if the
     //! player is no longer looking at it). Otherwise pick the first device that
     //! reports IsFocusEligible — that's the one the player is looking at right now.
+    //------------------------------------------------------------------------------------------------
+    //! Routed through the map view rather than AG0_TDLMap3DView directly because only the
+    //! view knows which canvas host is currently live.
+    protected void OnMap3DToggle()
+    {
+        AG0_TDLMapView.ToggleMap3DOnActiveView();
+    }
+
+    //------------------------------------------------------------------------------------------------
     protected void OnTDLFocusToggle()
     {
         // First pass — exit-priority. If any held device is already focused, that's the one.
@@ -1549,6 +1618,23 @@ modded class SCR_PlayerController
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Server → Client: satellite raster path for the loaded world.
+	//! Unchunked because a ResourceName is one short string, far inside the per-parameter
+	//! limit that forces the terrain datasets through reassembly.
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_ReceiveSatelliteResourceName(string resourceName, float exposureBias)
+	{
+		AG0_TDLMapSatelliteOverride.SetFromServer(resourceName, exposureBias);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Called by AG0_TDLSystem.PushPlayerSatelliteResourceName.
+	void ReceiveSatelliteResourceName(string resourceName, float exposureBias)
+	{
+		Rpc(RpcDo_ReceiveSatelliteResourceName, resourceName, exposureBias);
+	}
+
+	//------------------------------------------------------------------------------------------------
 	//! Roads chunk RPC. Same reassembly contract as terrain structures —
 	//! see RpcDo_ReceiveTDLTerrainStructuresChunk for the rationale comments.
 	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
@@ -1625,6 +1711,87 @@ modded class SCR_PlayerController
 	void ReceiveTDLTerrainRoadsChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
 	{
 		Rpc(RpcDo_ReceiveTDLTerrainRoadsChunk, syncHash, totalChunks, chunkIndex, chunkData);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Heightmap chunk RPC. Same reassembly contract as terrain structures —
+	//! see RpcDo_ReceiveTDLTerrainStructuresChunk for the rationale comments.
+	//! This dataset is the largest of the three: a 129x129 grid runs several tens of KB
+	//! even delta-encoded, so it always arrives as a multi-chunk transfer.
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_ReceiveTDLTerrainHeightmapChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
+	{
+		if (!syncHash.IsEmpty() && syncHash == m_sTerrainHeightmapSyncHash)
+			return;
+
+		if (totalChunks <= 0)
+			return;
+
+		bool startNewTransfer = (m_iTerrainHeightmapExpectedChunks == 0)
+			|| (syncHash != m_sTerrainHeightmapBufferedHash);
+
+		if (startNewTransfer)
+		{
+			m_sTerrainHeightmapBufferedHash = syncHash;
+			m_iTerrainHeightmapExpectedChunks = totalChunks;
+			m_iTerrainHeightmapReceivedChunks = 0;
+			m_aTerrainHeightmapChunkBuffer = new array<string>();
+			m_aTerrainHeightmapChunkBuffer.Resize(totalChunks);
+			m_aTerrainHeightmapChunkReceived = new array<bool>();
+			m_aTerrainHeightmapChunkReceived.Resize(totalChunks);
+		}
+
+		if (chunkIndex < 0 || chunkIndex >= m_iTerrainHeightmapExpectedChunks)
+			return;
+
+		if (!m_aTerrainHeightmapChunkReceived[chunkIndex])
+		{
+			m_aTerrainHeightmapChunkReceived[chunkIndex] = true;
+			m_iTerrainHeightmapReceivedChunks = m_iTerrainHeightmapReceivedChunks + 1;
+		}
+		m_aTerrainHeightmapChunkBuffer[chunkIndex] = chunkData;
+
+		if (m_iTerrainHeightmapReceivedChunks == m_iTerrainHeightmapExpectedChunks)
+		{
+			string fullPayload = string.Empty;
+			for (int i = 0; i < m_iTerrainHeightmapExpectedChunks; i = i + 1)
+			{
+				fullPayload = fullPayload + m_aTerrainHeightmapChunkBuffer[i];
+			}
+
+			m_sTerrainHeightmapSyncHash = syncHash;
+
+			if (!m_TDLTerrainHeightmapManager)
+				m_TDLTerrainHeightmapManager = new AG0_TDLTerrainHeightmapManager();
+
+			if (fullPayload.IsEmpty())
+			{
+				m_TDLTerrainHeightmapManager.Clear();
+				Print("[TDL_HEIGHTMAP_CLIENT] Cleared (empty payload)", LogLevel.DEBUG);
+			}
+			else
+			{
+				int count = m_TDLTerrainHeightmapManager.ParseColumnarPayload(fullPayload);
+				Print(string.Format("[TDL_HEIGHTMAP_CLIENT] Reassembled %1 chunks → %2 samples (hash: %3)",
+					m_iTerrainHeightmapExpectedChunks, count, syncHash), LogLevel.DEBUG);
+			}
+
+			m_aTerrainHeightmapChunkBuffer = null;
+			m_aTerrainHeightmapChunkReceived = null;
+			m_sTerrainHeightmapBufferedHash = string.Empty;
+			m_iTerrainHeightmapExpectedChunks = 0;
+			m_iTerrainHeightmapReceivedChunks = 0;
+		}
+	}
+
+	AG0_TDLTerrainHeightmapManager GetTDLTerrainHeightmapManager()
+	{
+		return m_TDLTerrainHeightmapManager;
+	}
+
+	void ReceiveTDLTerrainHeightmapChunk(string syncHash, int totalChunks, int chunkIndex, string chunkData)
+	{
+		Rpc(RpcDo_ReceiveTDLTerrainHeightmapChunk, syncHash, totalChunks, chunkIndex, chunkData);
 	}
     
     //------------------------------------------------------------------------------------------------

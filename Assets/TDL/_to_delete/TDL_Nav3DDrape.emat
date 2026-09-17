@@ -1,0 +1,5 @@
+MatPBRBasic {
+ MetalnessScale 0
+ DielectricReflectance 0
+ BCRMap "$rendertarget"
+}

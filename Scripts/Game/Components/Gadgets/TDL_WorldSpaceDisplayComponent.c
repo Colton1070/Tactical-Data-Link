@@ -278,18 +278,22 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // of whether interaction is enabled. The tween must keep advancing even if
         // the player tabs out / opens a menu, otherwise the camera gets stuck mid-blend.
         UpdateFocus(timeSlice);
-        
-        // Update the display controller each frame
+
+        // Update the display controller each frame. The controller always ticks — the
+        // cadence below only decides how often it PAINTS. See ApplyRenderCadence.
         if (m_DisplayController)
+        {
+            ApplyRenderCadence();
             m_DisplayController.Update(timeSlice);
+        }
 
         // Bloodhound — push this frame's cursor world position to the
         // controller BEFORE its Tick() runs so UpdateBloodhound sees a
         // fresh override. On world-space the cursor's world position is
         // m_fCursorX/Y (in ContentFrame screen pixels) projected through
         // the MapView's ScreenToWorld after subtracting the MapCanvas's
-        // screen offset. Menu doesn't push — its UpdateBloodhound falls
-        // back to mapView.GetCenter().
+        // screen offset. The menu doesn't push — its UpdateBloodhound
+        // resolves the crosshair itself.
         if (m_MenuController)
         {
             if (AG0_TDLMenuController.GetBloodhoundEnabled())
@@ -320,6 +324,11 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                 m_MenuController.OnShapeCursorWorldFromWorldSpace(shapeCursorWorld);
         }
 
+        // The wheel opens on whatever the operator is pointing with, and on this surface
+        // that is the device's own cursor — not the crosshair the fullscreen menu drives.
+        if (m_MenuController)
+            m_MenuController.SetDevicePointer(m_fCursorX, m_fCursorY);
+
         // Tick the shared menu controller — drives plugins' OnMenuUpdate,
         // image-card rendering, periodic canvas redraw, scroll-to-bottom.
         // Marker tool action poll + camera button state are folded in too
@@ -347,6 +356,118 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             DrawDebug();
     }
     
+    // ============================================
+    // RENDER VISIBILITY GATING
+    // ============================================
+
+    //! Distance beyond which this screen is too small to read, so there is no point painting it.
+    protected static const float RENDER_MAX_DISTANCE = 8.0;
+
+    //! Inside this, the operator is holding the device up and reading it.
+    protected static const float RENDER_NEAR_DISTANCE = 2.0;
+
+    //! cos of the half-angle of the "can the operator see this" cone, measured from the camera
+    //! forward axis. Deliberately WIDER than the real frustum (~70 deg vs ~35): the margin is the
+    //! warm-up window. A device that only starts painting once it is dead centre would have to
+    //! rebuild its whole static command prefix on the frame it becomes visible, which at a
+    //! zoomed-out pose is thousands of commands in one frame — a hitch every time the operator
+    //! glances down. Starting while it is still off to the side means the rebuild has already
+    //! landed and the visible frame is a cached-prefix re-submit.
+    protected static const float RENDER_VIEW_CONE_COS = 0.34;
+
+    //! Paint rates per tier. FULL is every tick; the map view's own 30 Hz motion cap and dirty
+    //! gate keep that from meaning "rebuild everything 60 times a second".
+    protected static const float RENDER_INTERVAL_NEAR = 0.05;   // 20 Hz
+    protected static const float RENDER_INTERVAL_FAR  = 0.2;    //  5 Hz
+
+    //------------------------------------------------------------------------------------------------
+    //! Decide how often this surface should paint and tell the display controller.
+    //!
+    //! Every TDL device the player carries hosts one of these components and, before this,
+    //! every one of them rebuilt a full map command list every frame — including a spare in a
+    //! backpack, and including this one while the fullscreen ATAK menu was covering it. The
+    //! cost of a zoomed-out map was therefore paid continuously by every device the operator
+    //! owned, whether or not any of them was on screen. That is the whole mechanism behind
+    //! "the frame rate dropped after I used the map and never came back": the zoom persists by
+    //! design, and nothing stopped paying for it.
+    //!
+    //! Note this gates PAINTING only. The controller still ticks its state every frame, so a
+    //! suspended surface stays synced to the shared map pose and cannot wake up holding a
+    //! stale pose it would then propagate. See AG0_TDLDisplayController.SetRenderCadence.
+    protected void ApplyRenderCadence()
+    {
+        // Focus mode: this screen IS the viewport. Always full rate.
+        if (m_eFocusState != TDL_EFocusState.IDLE)
+        {
+            m_DisplayController.SetRenderCadence(0, false);
+            return;
+        }
+
+        // The fullscreen ATAK menu on top. This is the double-draw case worth killing: the menu
+        // covers the world AND runs its own display controller, so with the gadget in hand the
+        // player was paying for two full maps every frame, one of them behind an opaque menu.
+        //
+        // Tested specifically for AG0_TDLMenuUI rather than "is any menu open". The pre-existing
+        // GetTopMenu() check in UpdateInteraction is fine as-is because it only suppresses input,
+        // but suspending PIXELS on any menu would freeze this screen behind the inventory, a
+        // dialog or a chat panel — all of which leave the world, and this device, plainly visible.
+        MenuManager menuManager = GetGame().GetMenuManager();
+        if (menuManager && AG0_TDLMenuUI.Cast(menuManager.GetTopMenu()))
+        {
+            m_DisplayController.SetRenderCadence(0, true);
+            return;
+        }
+
+        if (!m_ScreenEntity)
+        {
+            m_DisplayController.SetRenderCadence(0, true);
+            return;
+        }
+
+        vector camOrigin, camDir;
+        if (!GetCameraRay(camOrigin, camDir))
+        {
+            // No camera to test against. Fail toward painting rather than toward a frozen
+            // screen — a wrong answer here is a few wasted milliseconds, the other way round
+            // it is a display that never updates.
+            m_DisplayController.SetRenderCadence(RENDER_INTERVAL_FAR, false);
+            return;
+        }
+
+        vector screenPos = m_ScreenEntity.GetOrigin();
+        vector toScreen = screenPos - camOrigin;
+        float dist = toScreen.Length();
+
+        if (dist > RENDER_MAX_DISTANCE)
+        {
+            m_DisplayController.SetRenderCadence(0, true);
+            return;
+        }
+
+        // Degenerate case: camera essentially inside the screen. Treat as near rather than
+        // dividing by ~0 to build a direction.
+        if (dist < 0.01)
+        {
+            m_DisplayController.SetRenderCadence(RENDER_INTERVAL_NEAR, false);
+            return;
+        }
+
+        // camDir is the camera's forward basis vector, already unit length.
+        if (vector.Dot(toScreen.Normalized(), camDir) < RENDER_VIEW_CONE_COS)
+        {
+            // Behind the operator, or off to the side far enough that they are not reading it.
+            // This is what excludes a device stowed in a backpack without needing to know
+            // anything about inventory: it sits at the operator's back, outside every cone.
+            m_DisplayController.SetRenderCadence(0, true);
+            return;
+        }
+
+        if (dist < RENDER_NEAR_DISTANCE)
+            m_DisplayController.SetRenderCadence(RENDER_INTERVAL_NEAR, false);
+        else
+            m_DisplayController.SetRenderCadence(RENDER_INTERVAL_FAR, false);
+    }
+
     //------------------------------------------------------------------------------------------------
     override void OnDelete(IEntity owner)
     {
@@ -478,6 +599,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             m_DisplayController = null;
             return;
         }
+
+        // Say which surface this is. The 3D map's pane arbitration used to work it out by
+        // walking the widget tree for an RTTextureWidget above the host, which is a guess
+        // about layout structure rather than a fact about the surface — and it got the
+        // fullscreen menu wrong, refusing it the pane for as long as a device held one.
+        m_DisplayController.SetWorldSpaceSurface(true);
 
         // Menu controller construction is held-state-gated — see
         // EnsureControllerForHeld(). The display controller above is eagerly
@@ -768,6 +895,13 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                 // MenuBack / TDLScreenClick live so HandleClickAndDrag below behaves
                 // identically to the raycast path.
                 m_InputManager.ActivateContext("TDLScreenContext");
+                m_InputManager.ActivateContext("TDLDeviceNavContext");
+                // Focus mode is the one state where the left stick belongs to the map rather
+                // than to the player's feet, so this is the only path that claims it
+                // exclusively. Outside focus the same action still reads, non-exclusively,
+                // through TDLScreenContext — panning a map you are glancing at should not
+                // stop you walking.
+                m_InputManager.ActivateContext("TDLMapPanContext");
             }
             // Use EOnFrame's actual timeSlice (plumbed through UpdateInteraction)
             // instead of the previous hardcoded 0.016 — that hardcode made the
@@ -775,6 +909,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             // fast at 30fps. Mouse path doesn't read ts (it's already per-frame
             // delta), so this only affects the stick branch.
             DriveCursorFromInput(timeSlice);
+            DriveMapPanFromInput(timeSlice);
+            if (m_MenuController)
+            {
+                m_MenuController.DriveZoomFromInput(timeSlice, m_InputManager);
+                m_MenuController.DriveMarkerGrabFromInput(timeSlice, m_InputManager);
+            }
             UpdateFocusCursorWidget();
             SetLookingAtScreen(true);
             UpdateHoveredWidget();
@@ -812,8 +952,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             // Calculate world hit point
             vector hitPoint = camOrigin + camDir * (hitFraction * m_fMaxInteractionDistance);
 
-            // Transform to UI coordinates
-            TransformWorldToUI(hitPoint, m_fCursorX, m_fCursorY);
+            // Held still while the context wheel is up. The wheel captured a target point
+            // from this cursor when it opened, and the entries were built for that point —
+            // letting head aim keep dragging it means confirming an entry acts somewhere the
+            // operator never chose.
+            if (!m_MenuController || !m_MenuController.IsRadialConsumingClicks())
+                TransformWorldToUI(hitPoint, m_fCursorX, m_fCursorY);
 
             // Update cursor position
             if (m_wCursor)
@@ -839,6 +983,10 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
             if (m_InputManager)
             {
                 m_InputManager.ActivateContext("TDLScreenContext");
+                m_InputManager.ActivateContext("TDLDeviceNavContext");
+                DriveMapPanFromInput(timeSlice);
+                if (m_MenuController)
+                    m_MenuController.DriveZoomFromInput(timeSlice, m_InputManager);
                 HandleClickAndDrag();
             }
         }
@@ -2046,6 +2194,26 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         if (!m_InputManager)
             return;
 
+        // Back is answered before anything stands down, because the wheel is exactly what a
+        // Back press means while it is up — one page at a time, then the wheel itself.
+        if (m_InputManager.GetActionTriggered("MenuBack") && m_MenuController
+            && m_MenuController.CloseRadialOnBack())
+            return;
+
+        // Right-click raises the wheel over the device cursor, and raises it again to dismiss.
+        // Answered above the radial gate below so the second press can still reach it.
+        if (m_InputManager.GetActionTriggered("TDLRadialMouse") && m_MenuController)
+        {
+            m_MenuController.ToggleRadialAtScreen(m_fCursorX, m_fCursorY);
+            return;
+        }
+
+        // Every other branch below acts on the same button the wheel confirms with. The drain
+        // inside IsRadialConsumingClicks is what stops the press that chose an entry from
+        // arriving here as a map click on the frame it is released.
+        if (m_MenuController && m_MenuController.IsRadialConsumingClicks())
+            return;
+
         // Check if click is held (not just triggered)
         bool clickHeld = m_InputManager.GetActionValue("TDLScreenClick") > 0 ||
                          m_InputManager.GetActionValue("MenuSelect") > 0;
@@ -2162,6 +2330,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                     // without moving the cursor would drop a stray marker.
                     m_MenuController.OnMapClickedForMarkerPlacement(m_fCursorX, m_fCursorY);
                     m_MenuController.OnMapClickedForBloodhound(m_fCursorX, m_fCursorY);
+                    m_MenuController.OnMapClickedForMap3DFocus(m_fCursorX, m_fCursorY);
                 }
             }
 
@@ -2173,9 +2342,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         }
 
         if (m_InputManager.GetActionTriggered("MenuBack"))
-        {
             OnBackAction();
-        }
     }
 
     //------------------------------------------------------------------------------------------------
@@ -2276,9 +2443,52 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     //! a higher-resolution RT would need proportionally more cursor pixels
     //! to traverse the visible screen, making sensitivity feel sluggish on
     //! 4K RTs and twitchy on low-res ones.
+    //! Left stick pans the map, matching the fullscreen menu and the vanilla map.
+    //!
+    //! Called only from the two gated interaction paths, never from the component's plain
+    //! per-frame tick: this component ticks for as long as the device is HELD, and panning
+    //! the map while the player is running around looking at something else would be the
+    //! device using input it has no claim on.
+    //!
+    //! Same quadratic response and speed as the menu's stick pan so the surfaces feel alike.
+    protected void DriveMapPanFromInput(float timeSlice)
+    {
+        if (!m_InputManager || !m_DisplayController)
+            return;
+
+        float panX = m_InputManager.GetActionValue("TDLMapPanHorizontal");
+        float panY = m_InputManager.GetActionValue("TDLMapPanVertical");
+
+        if (Math.AbsFloat(panX) <= MAP_PAN_DEADZONE && Math.AbsFloat(panY) <= MAP_PAN_DEADZONE)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return;
+
+        float curvedX = panX * Math.AbsFloat(panX);
+        float curvedY = panY * Math.AbsFloat(panY);
+
+        mapView.PanMap(-curvedX * MAP_PAN_SPEED * timeSlice,
+            -curvedY * MAP_PAN_SPEED * timeSlice);
+
+        AG0_TDLDisplayController.SetPlayerTracking(false);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected static const float MAP_PAN_SPEED = 1400.0;
+    protected static const float MAP_PAN_DEADZONE = 0.15;
+
+    //------------------------------------------------------------------------------------------------
     protected void DriveCursorFromInput(float timeSlice)
     {
         if (!m_InputManager || !m_wContentFrame)
+            return;
+
+        // The right stick belongs to the wheel while it is up — TDLCursorGamepad* and the
+        // wheel's TDLPanHorizontal/Vertical are the same physical stick, so without this the
+        // deflection that picks a slice also slides the cursor out from under the wheel.
+        if (m_MenuController && m_MenuController.IsRadialConsumingClicks())
             return;
 
         // Cap large frame-time spikes — server hitches, alt-tab returns, and

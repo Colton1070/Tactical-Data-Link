@@ -2814,6 +2814,108 @@ class AG0_TDLSystem : WorldSystem
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Push the current terrain heightmap dataset to a single player.
+	//! Same chunk budget as structures and roads; this dataset is the largest of the
+	//! three, so a full grid always spans many chunks.
+	protected void PushPlayerTerrainHeightmap(SCR_PlayerController controller, int playerId)
+	{
+		if (!m_ApiManager || !controller) return;
+
+		AG0_TDLTerrainHeightmapManager mgr = m_ApiManager.GetTerrainHeightmapManager();
+		if (!mgr)
+		{
+			controller.ReceiveTDLTerrainHeightmapChunk(string.Empty, 1, 0, string.Empty);
+			return;
+		}
+
+		string raw = mgr.GetLastRawJson();
+		string hash = mgr.GetLastSyncHash();
+
+		int totalLen = raw.Length();
+		if (totalLen == 0)
+		{
+			controller.ReceiveTDLTerrainHeightmapChunk(hash, 1, 0, string.Empty);
+			return;
+		}
+
+		int chunkBytes = TERRAIN_STRUCTURES_CHUNK_BYTES;
+		int totalChunks = (totalLen + chunkBytes - 1) / chunkBytes;
+
+		for (int i = 0; i < totalChunks; i = i + 1)
+		{
+			int start = i * chunkBytes;
+			int len = Math.Min(chunkBytes, totalLen - start);
+			string chunk = raw.Substring(start, len);
+			controller.ReceiveTDLTerrainHeightmapChunk(hash, totalChunks, i, chunk);
+		}
+
+		Print(string.Format("[TDL_HEIGHTMAP] Sent %1 chunks (%2 bytes) to player %3, hash=%4",
+			totalChunks, totalLen, playerId, hash), LogLevel.DEBUG);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Distribute the current terrain heightmap dataset to all connected players.
+	//! Same fan-out semantics as DistributeTerrainStructuresToClients.
+	void DistributeTerrainHeightmapToClients()
+	{
+		if (!Replication.IsServer()) return;
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr) return;
+
+		array<int> playerIds = {};
+		playerMgr.GetPlayers(playerIds);
+
+		foreach (int playerId : playerIds)
+		{
+			if (playerId <= 0) continue;
+			SCR_PlayerController controller = SCR_PlayerController.Cast(
+				playerMgr.GetPlayerController(playerId)
+			);
+			if (!controller) continue;
+			PushPlayerTerrainHeightmap(controller, playerId);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Send this server's satellite raster path to one player.
+	//! An empty string is a meaningful value, not a skipped push: it tells the client that
+	//! neither the config file nor the API named a raster, so its own prefab/config lookup
+	//! stands. Sending it unconditionally also clears a stale path after an admin edit.
+	protected void PushPlayerSatelliteResourceName(SCR_PlayerController controller, int playerId)
+	{
+		if (!controller) return;
+		if (!m_ApiManager) return;
+
+		controller.ReceiveSatelliteResourceName(
+			m_ApiManager.GetSatelliteResourceName(), m_ApiManager.GetMapExposureBias());
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Distribute the current satellite raster path to all connected players.
+	//! Same fan-out semantics as DistributeTerrainStructuresToClients.
+	void DistributeSatelliteResourceNameToClients()
+	{
+		if (!Replication.IsServer()) return;
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr) return;
+
+		array<int> playerIds = {};
+		playerMgr.GetPlayers(playerIds);
+
+		foreach (int playerId : playerIds)
+		{
+			if (playerId <= 0) continue;
+			SCR_PlayerController controller = SCR_PlayerController.Cast(
+				playerMgr.GetPlayerController(playerId)
+			);
+			if (!controller) continue;
+			PushPlayerSatelliteResourceName(controller, playerId);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
 	//! Register the OnPlayerAuditSuccess handler with SCR_BaseGameMode if not yet.
 	//! Idempotent — safe to call every tick.
 	protected void EnsurePlayerAuditHandlerRegistered()
@@ -2858,6 +2960,8 @@ class AG0_TDLSystem : WorldSystem
 
 		PushPlayerTerrainStructures(controller, playerId);
 		PushPlayerTerrainRoads(controller, playerId);
+		PushPlayerTerrainHeightmap(controller, playerId);
+		PushPlayerSatelliteResourceName(controller, playerId);
 	}
 	
     //------------------------------------------------------------------------------------------------

@@ -16,6 +16,47 @@
 //! controller — frontends subscribe to m_OnPanelChanged and handle their
 //! own widgets in response to the state transition.
 //------------------------------------------------------------------------------------------------
+
+//------------------------------------------------------------------------------------------------
+//! Which region of the frontend currently owns directional input.
+//!
+//! A gamepad has one stick to spare and four things that want it, so the map and the
+//! control regions cannot both be live at once. The zone says which one is, and it is the
+//! map by default because that is what a player opens the device to look at.
+//!
+//! Ordered so MAP is zero: the default-constructed value is the safe one.
+//------------------------------------------------------------------------------------------------
+enum ETDLFocusZone
+{
+    MAP,        // The map surface itself — sticks drive the view, not widget focus
+    CONTROLS,   // Left stack: compass, track, 2D/3D, zoom
+    TOOLBAR,    // Top strip: menu, network, camera, marker tool, bloodhound
+    PANEL       // Right side drawer, whatever ETDLPanelContent is showing
+}
+
+//------------------------------------------------------------------------------------------------
+//! A solved bloodhound measurement, handed to surfaces that render it without owning the
+//! controller that computed it.
+//!
+//! Carries the finished endpoints and readout strings rather than the inputs: the cursor a
+//! solution came from is per-frontend state (the world-space device pushes its own cursor
+//! world position each tick, the menu falls back to its map centre), so a mirror could not
+//! reproduce it. Handing over the result also keeps the terrain sample to one per solve and
+//! leaves exactly one copy of the distance/bearing formatting.
+//------------------------------------------------------------------------------------------------
+class AG0_TDLBloodhoundSolution
+{
+    vector m_vCursor;
+    vector m_vDevice;
+    string m_sGrid;
+    string m_sElev;
+    string m_sDist;
+    string m_sAz;
+    float  m_fDistance;
+    float  m_fBearingDeg;
+}
+
+//------------------------------------------------------------------------------------------------
 class AG0_TDLMenuController
 {
     // ============================================
@@ -80,6 +121,65 @@ class AG0_TDLMenuController
     // ============================================
     protected Widget m_wRoot;
     protected ETDLPanelContent m_eActivePanel = ETDLPanelContent.NETWORK_LIST;
+
+    //! Kept as a kill switch rather than inlined: the exclusive context this arms consumes
+    //! physical input, and the RB-held d-pad combos in TDLMenuContext share buttons with the
+    //! zone entries. If that collision turns out to cost a player their movement controls,
+    //! flipping this off is a one-line rollback that does not touch the input configs.
+    static const bool ZONE_NAV_ENABLED = true;
+
+    //! Exclusive, so while the map holds focus it consumes the d-pad before vanilla widget
+    //! navigation sees it. That is the whole reason it exists: on the map those presses mean
+    //! "go to a control region", and vanilla would otherwise spend them moving widget focus
+    //! somewhere the player cannot see.
+    //!
+    //! Peer priority with TDLScreenContext and TDLFocusContext, deliberately — and that
+    //! peerage is load-bearing. An exclusive context suppresses every lower-priority context
+    //! wholesale, not just the inputs it binds, so the only safe place for one is level with
+    //! the contexts it means to sit beside rather than above them. TDLFocusContext has run at
+    //! 100 with the same Exclusive flag on the device for as long as focus mode has existed;
+    //! this is that arrangement, not a new bet. The context that took the mouse down with it
+    //! was a different one, raised to 600, where it outranked the menu itself. Those two
+    //! already coexist at 100 with one of them Exclusive, which is the arrangement known to
+    //! work here. Raising this above them would put every action they carry behind a
+    //! question nobody has answered.
+    protected static const string MAP_ZONE_CONTEXT = "TDLMapZoneContext";
+
+    protected ETDLFocusZone m_eFocusZone = ETDLFocusZone.MAP;
+
+    //! Last containment mode applied, so the per-frame check re-walks the zone subtrees only
+    //! when the operator actually swaps between a pad and a mouse.
+    protected bool m_bDirectionalNavApplied = true;
+    protected bool m_bZoneListenersHooked;
+
+    //! Set by the frontend, per frame, while its map surface is genuinely being driven.
+    //! Holding a device is not enough: the world-space controller ticks every frame the
+    //! device is held, including while the player is running or shooting, and an Exclusive
+    //! context standing through gameplay would eat the d-pad out from under them.
+    protected bool m_bZoneInputActive;
+
+    //! The map's context menu. One per frontend, like the panel state beside it.
+    //! Crosshair offset from canvas centre, in canvas pixels. The crosshair is the console
+    //! cursor: a mouse user aims a pointer, a pad user aims the map under a fixed reticle
+    //! and then nudges the reticle itself. Held as an offset rather than an absolute so it
+    //! survives a canvas resize without landing off-screen.
+    protected float m_fCrosshairOffsetX;
+    protected float m_fCrosshairOffsetY;
+    protected bool m_bCrosshairActive;
+
+    protected ref AG0_TDLRadialMenu m_RadialMenu;
+
+    //! Where the hosting frontend's own pointer is, in its root's screen pixels. Only the
+    //! world-space device sets this — it draws and drives a cursor the controller knows
+    //! nothing about, and the wheel has to open under that cursor rather than under the
+    //! crosshair the fullscreen menu uses.
+    protected float m_fDevicePointerX;
+    protected float m_fDevicePointerY;
+    protected bool m_bHasDevicePointer;
+    protected bool m_bRadialListenerHooked;
+    protected Widget m_wZoneControls;
+    protected Widget m_wZoneToolbar;
+    protected Widget m_wZonePanel;
     protected AG0_ATAKPluginBase m_ActivePanelPlugin;
     protected AG0_TDLNetworkMember m_SelectedMember;
     protected RplId m_SelectedDeviceId;
@@ -154,6 +254,9 @@ class AG0_TDLMenuController
     protected Widget m_wSettingsButton;
     protected Widget m_wSettingsBackButton;
     protected Widget m_wMarkerToolButton;
+    //! Null until the layout carries a DrawToolButton. Inert while null, so the drawing tool is
+    //! still reachable from the radial in the meantime.
+    protected Widget m_wDrawToolButton;
 
     // Optional ref the menu may inject so the controller can update its
     // last-message-preview text after chat send. Not required.
@@ -176,11 +279,36 @@ class AG0_TDLMenuController
     //! itself is parented into the MarkerOverlay; the controller drives its
     //! position + text per frame from frontend tick when s_bBloodhoundEnabled.
     protected Widget m_wBloodhoundButton;
+    //! 2D/3D map mode toggle. Lives on the controller rather than the menu because both
+    //! frontends spawn this layout, and the world-space device should get the mode switch
+    //! without a second copy of the wiring.
+    protected Widget m_wMap3DButton;
+    //! HUD map peripheral toggle, in the Settings panel. The button only writes the static on
+    //! AG0_TDLMapPeripheral — the peripheral's own gating decides whether anything appears.
+    protected Widget m_wPeripheralButton;
+
+    //! Guarded for the same reason the radial and zone listeners are: the world-space device
+    //! re-runs Init on every re-equip against a widget tree that outlives the controller, and
+    //! a second subscription turns one press into two toggles.
+    protected bool m_bMap3DButtonHooked;
+    //! Same hazard, same guard — the peripheral button is a toggle too, so a doubled
+    //! subscription reads as a dead button rather than a glitch.
+    protected bool m_bPeripheralButtonHooked;
     protected Widget m_wBloodhoundReadout;
     protected TextWidget m_wBloodhoundGrid;
     protected TextWidget m_wBloodhoundElev;
     protected TextWidget m_wBloodhoundDist;
     protected TextWidget m_wBloodhoundAz;
+
+    //! Anchored point readout — ATAK's top-right position block. Distinct from the bloodhound
+    //! readout in every way that matters: it is chrome rather than a tool output, it sits in a
+    //! fixed corner instead of following the cursor, and it never draws over the map.
+    //! Null until the layout carries these names, and inert while null.
+    protected Widget m_wPointReadout;
+    protected TextWidget m_wPointReadoutLabel;
+    protected TextWidget m_wPointReadoutGrid;
+    protected TextWidget m_wPointReadoutElev;
+    protected TextWidget m_wPointReadoutRange;
 
     // Chat content (m_wChatContent already declared above in the panel
     // structure block — controller drove ChatContent visibility well before
@@ -296,6 +424,13 @@ class AG0_TDLMenuController
             s_aLiveControllers.Clear();
         s_LastSentMirrorSnapshot = null;
         s_fMirrorLastSendTimeMs = 0;
+
+        // The one path that drains the registry without going through Cleanup, so the
+        // empty-registry clear there never fires. A solution carries world coordinates and an
+        // MGRS string from the world being unloaded; a mirror only needs a device in the ruck
+        // to draw, so it would render the old world's range and bearing in the new one until
+        // some frontend happened to open.
+        ClearBloodhoundSolution();
     }
 
     //! First non-null entry in the live registry. Used by the dispatcher to find
@@ -336,6 +471,7 @@ class AG0_TDLMenuController
     // ============================================
     Widget GetRoot() { return m_wRoot; }
     ETDLPanelContent GetActivePanel() { return m_eActivePanel; }
+    ETDLFocusZone GetFocusZone() { return m_eFocusZone; }
     AG0_ATAKPluginBase GetActivePanelPlugin() { return m_ActivePanelPlugin; }
     AG0_TDLNetworkMember GetSelectedMember() { return m_SelectedMember; }
     RplId GetSelectedDeviceId() { return m_SelectedDeviceId; }
@@ -429,6 +565,7 @@ class AG0_TDLMenuController
         m_wSettingsButton = m_wRoot.FindAnyWidget("SettingsButton");
         m_wSettingsBackButton = m_wRoot.FindAnyWidget("SettingsBackButton");
         m_wMarkerToolButton = m_wRoot.FindAnyWidget("MarkerToolButton");
+        m_wDrawToolButton = m_wRoot.FindAnyWidget("DrawToolButton");
 
         m_wChatContactName = m_wRoot.FindAnyWidget("ContactName");
 
@@ -444,11 +581,39 @@ class AG0_TDLMenuController
         // calls are null-tolerant so older layouts (without the new widgets)
         // still load cleanly.
         m_wBloodhoundButton  = m_wRoot.FindAnyWidget("BloodhoundButton");
+        m_wMap3DButton       = m_wRoot.FindAnyWidget("Map3DButton");
+        m_wPeripheralButton  = m_wRoot.FindAnyWidget("PeripheralButton");
+
+        // A freshly built tree shows 2D until AG0_TDLMap3DView claims the pane. The
+        // authored RenderTargetWidget clears to opaque black with no world bound, so a
+        // pane left visible here covers the map canvas with a blank rectangle — which is
+        // what a newly opened menu or a newly equipped EUD would otherwise render. The
+        // layout ships it hidden; this re-asserts that for any tree built while the 3D
+        // view is live on the OTHER surface, and CreatePane shows it again when this
+        // surface wins arbitration.
+        m_wZoneControls = m_wRoot.FindAnyWidget("ZoomControls");
+        m_wZoneToolbar  = m_wRoot.FindAnyWidget("Toolbar");
+        m_wZonePanel    = m_wRoot.FindAnyWidget("SidePanel");
+
+        Widget map3DPane = m_wRoot.FindAnyWidget("RenderTarget0");
+        if (map3DPane)
+            map3DPane.SetVisible(false);
         m_wBloodhoundReadout = m_wRoot.FindAnyWidget("BloodhoundReadout");
         m_wBloodhoundGrid    = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundGrid"));
         m_wBloodhoundElev    = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundElev"));
         m_wBloodhoundDist    = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundDist"));
         m_wBloodhoundAz      = TextWidget.Cast(m_wRoot.FindAnyWidget("BloodhoundAz"));
+
+        m_wPointReadout      = m_wRoot.FindAnyWidget("PointReadout");
+        m_wPointReadoutLabel = TextWidget.Cast(m_wRoot.FindAnyWidget("PointReadoutLabel"));
+        m_wPointReadoutGrid  = TextWidget.Cast(m_wRoot.FindAnyWidget("PointReadoutGrid"));
+        m_wPointReadoutElev  = TextWidget.Cast(m_wRoot.FindAnyWidget("PointReadoutElev"));
+        m_wPointReadoutRange = TextWidget.Cast(m_wRoot.FindAnyWidget("PointReadoutRange"));
+
+        // Hidden until the first tick fills it, so a freshly built tree doesn't flash an empty
+        // box in the corner.
+        if (m_wPointReadout)
+            m_wPointReadout.SetVisible(false);
 
         // Tint readouts lime — the layout authors the widgets with the
         // engine's default text colour because layout-side "Color"/"Outline"
@@ -530,6 +695,19 @@ class AG0_TDLMenuController
         // The readout itself stays hidden until the first Tick computes
         // valid cursor + device positions and shows it.
         UpdateBloodhoundButtonVisual();
+        UpdateMap3DButtonVisual();
+        UpdatePeripheralButtonVisual();
+        UpdateFocusZoneVisual();
+        if (ZONE_NAV_ENABLED)
+        {
+            ApplyZoneFocusContainment();
+            m_bDirectionalNavApplied = IsDirectionalNavActive();
+        }
+
+        HookZoneActionListeners();
+
+        m_RadialMenu = new AG0_TDLRadialMenu(this);
+        HookRadialActionListener();
         if (m_wBloodhoundReadout)
             m_wBloodhoundReadout.SetVisible(false);
 
@@ -575,6 +753,16 @@ class AG0_TDLMenuController
             if (comp)
                 comp.m_OnClicked.Insert(OnSettingsBackClicked);
         }
+        if (m_wPeripheralButton && !m_bPeripheralButtonHooked)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wPeripheralButton.FindHandler(SCR_ModularButtonComponent));
+            if (comp)
+            {
+                comp.m_OnClicked.Insert(OnPeripheralButtonClicked);
+                m_bPeripheralButtonHooked = true;
+            }
+        }
         if (m_wMarkerToolButton)
         {
             SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
@@ -582,12 +770,29 @@ class AG0_TDLMenuController
             if (comp)
                 comp.m_OnClicked.Insert(OnMarkerToolButtonClicked);
         }
+        if (m_wDrawToolButton)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wDrawToolButton.FindHandler(SCR_ModularButtonComponent));
+            if (comp)
+                comp.m_OnClicked.Insert(OnDrawToolButtonClicked);
+        }
         if (m_wBloodhoundButton)
         {
             SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
                 m_wBloodhoundButton.FindHandler(SCR_ModularButtonComponent));
             if (comp)
                 comp.m_OnClicked.Insert(OnBloodhoundButtonClicked);
+        }
+        if (m_wMap3DButton && !m_bMap3DButtonHooked)
+        {
+            SCR_ModularButtonComponent comp = SCR_ModularButtonComponent.Cast(
+                m_wMap3DButton.FindHandler(SCR_ModularButtonComponent));
+            if (comp)
+            {
+                comp.m_OnClicked.Insert(OnMap3DButtonClicked);
+                m_bMap3DButtonHooked = true;
+            }
         }
 
         // -------- Shared frontend buttons (chat / callsign / camera / marker tool) --------
@@ -659,6 +864,14 @@ class AG0_TDLMenuController
         if (idx != -1)
             s_aLiveControllers.Remove(idx);
 
+        // With no frontend left, nothing recomputes the bloodhound — the last solution is a
+        // snapshot of wherever the operator's cursor happened to be when they put the device
+        // away. A mirror left drawing it would show a measurement no live surface agrees with,
+        // so the publication dies with the last publisher. Re-equipping recomputes it, pin
+        // included, on the next tick.
+        if (s_aLiveControllers.IsEmpty())
+            ClearBloodhoundSolution();
+
         // Tear down plugins first so OnPanelHidden + OnMenuClosed run while
         // the widget tree is still live. Idempotent if the frontend already
         // called DisablePlugins (e.g. menu's OnMenuClose path).
@@ -682,6 +895,15 @@ class AG0_TDLMenuController
         m_wBrightnessSlider = null;
         m_wBrightnessImage = null;
         m_BrightnessSliderComp = null;
+        UnhookRadialActionListener();
+        if (m_RadialMenu)
+            m_RadialMenu.Close();
+        m_RadialMenu = null;
+
+        UnhookZoneActionListeners();
+        m_wZoneControls = null;
+        m_wZoneToolbar = null;
+        m_wZonePanel = null;
     }
 
     // ============================================
@@ -717,7 +939,9 @@ class AG0_TDLMenuController
         bool showDetail = (content == ETDLPanelContent.MEMBER_DETAIL);
         bool showChat = (content == ETDLPanelContent.DIRECT_CHAT);
         bool showSettings = (content == ETDLPanelContent.SETTINGS);
-        bool showMarkerTool = (content == ETDLPanelContent.MARKER_TOOL);
+        // Both tool modes render into the same content frame — they are one panel wearing two
+        // hats, differing in which categories its type spinbox offers.
+        bool showMarkerTool = (content == ETDLPanelContent.MARKER_TOOL || content == ETDLPanelContent.DRAW_TOOL);
         bool showPluginTool = willBePluginTool;
 
         string title = "CONTACTS";
@@ -734,6 +958,9 @@ class AG0_TDLMenuController
                 break;
             case ETDLPanelContent.MARKER_TOOL:
                 title = "MARKER TOOL";
+                break;
+            case ETDLPanelContent.DRAW_TOOL:
+                title = "DRAW TOOL";
                 break;
             case ETDLPanelContent.PLUGIN_TOOL:
                 if (m_ActivePanelPlugin)
@@ -817,10 +1044,22 @@ class AG0_TDLMenuController
         if (m_MarkerToolPanel)
         {
             if (showMarkerTool)
+            {
+                // Tell the panel which hat it is wearing BEFORE showing it, so the type spinbox
+                // is already rebuilt for this mode when the sub-forms spawn against it.
+                m_MarkerToolPanel.SetToolMode(content == ETDLPanelContent.DRAW_TOOL);
                 m_MarkerToolPanel.OnPanelShown();
+            }
             else
+            {
                 m_MarkerToolPanel.OnPanelHidden();
+            }
         }
+
+        // Panel content spawns bare-focusable, so containment has to be re-stated whenever
+        // the panel is rebuilt or the region would leak focus again on the next d-pad press.
+        if (ZONE_NAV_ENABLED)
+            ApplyZoneFocusContainment();
 
         // Centre-screen crosshair tracking.
         UpdateMarkerCrosshairVisibility();
@@ -906,8 +1145,12 @@ class AG0_TDLMenuController
             IEntity player = GetGame().GetPlayerController().GetControlledEntity();
             if (player)
             {
-                float dist = vector.Distance(player.GetOrigin(), m_SelectedMember.GetPosition());
-                m_wDetailDistance.SetTextFormat("%1 m", Math.Round(dist).ToString());
+                // Same horizontal-plane solve and same formatter as the bloodhound, so the
+                // detail card and the map readout never disagree about the same pair of points.
+                vector memberWorld = m_SelectedMember.GetPosition();
+                float dist    = HorizontalDistance(player.GetOrigin(), memberWorld);
+                float bearing = MilitaryBearingDeg(player.GetOrigin(), memberWorld);
+                m_wDetailDistance.SetTextFormat("%1 / BRG %2 deg", FormatDistanceValue(dist), FormatBearingValue(dist, bearing));
             }
         }
 
@@ -1158,8 +1401,40 @@ class AG0_TDLMenuController
         m_wBrightnessImage.SetColor(Color.FromRGBA(0, 0, 0, alphaByte));
     }
 
+    //! Toggles, the way the contacts button does. A button that only ever opens leaves the
+    //! operator hunting for another panel to close this one with, and leaving the marker tool
+    //! open is what strands a half-drawn shape on the map.
+    //! True while either tool mode owns the panel. The marker tool and the drawing tool are one
+    //! panel wearing two hats, so everything downstream of "is a placement tool open" — the
+    //! crosshair, the place-action poll, the shape ghost, the delete sweep — has to accept both.
+    //! Only the toolbar buttons care which of the two it is, because each toggles its own.
+    bool IsToolPanelActive()
+    {
+        return m_eActivePanel == ETDLPanelContent.MARKER_TOOL
+            || m_eActivePanel == ETDLPanelContent.DRAW_TOOL;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void OnDrawToolButtonClicked()
+    {
+        if (m_eActivePanel == ETDLPanelContent.DRAW_TOOL)
+        {
+            SetPanelContent(ETDLPanelContent.NONE);
+            return;
+        }
+
+        SetPanelContent(ETDLPanelContent.DRAW_TOOL);
+    }
+
+    //------------------------------------------------------------------------------------------------
     protected void OnMarkerToolButtonClicked()
     {
+        if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL)
+        {
+            SetPanelContent(ETDLPanelContent.NONE);
+            return;
+        }
+
         SetPanelContent(ETDLPanelContent.MARKER_TOOL);
     }
 
@@ -1171,9 +1446,6 @@ class AG0_TDLMenuController
     {
         s_bBloodhoundEnabled = !s_bBloodhoundEnabled;
         UpdateBloodhoundButtonVisual();
-        // Reset the diagnostic one-shot so each enable produces a fresh
-        // sample line in the log without needing a game restart.
-        m_bBloodhoundFirstTickPrinted = false;
 
         // Disable handling: clear UI ONLY if no pin is active. A pinned
         // bloodhound is treated like a saved range/bearing overlay — it
@@ -1181,8 +1453,6 @@ class AG0_TDLMenuController
         // turn the tool off to do other things on the map, then either
         // click the pin to dismiss it or re-enable the tool to drop a new
         // one (which auto-clears the previous pin in OnMapClickedForBloodhound).
-        // When unpinned, behaviour is unchanged from before: tool off clears
-        // the readout + line on the same frame.
         if (!s_bBloodhoundEnabled && !s_bBloodhoundPinned)
         {
             if (m_wBloodhoundReadout)
@@ -1208,6 +1478,9 @@ class AG0_TDLMenuController
     //! freeze on. No-op when the tool is disabled.
     void OnMapClickedForBloodhound(int absMouseX, int absMouseY)
     {
+        if (IsRadialConsumingClicks())
+            return;
+
         // Both pin AND unpin require the tool to be active — this handler
         // gets called on every map click (both frontends route every click
         // here so each tool can decide whether to act), and if unpin ran
@@ -1224,7 +1497,7 @@ class AG0_TDLMenuController
         // single click to both drop a marker AND set/clear a bloodhound pin.
         // The bloodhound readout itself keeps tracking (the tool's "active"
         // state isn't paused) — only the click→pin interaction is suppressed.
-        if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL)
+        if (IsToolPanelActive())
             return;
         if (!m_DisplayController || !m_wRoot)
             return;
@@ -1254,6 +1527,927 @@ class AG0_TDLMenuController
         s_bBloodhoundPinned = true;
     }
 
+    //------------------------------------------------------------------------------------------------
+    //! Routed through a map view rather than AG0_TDLMap3DView directly: only the view knows
+    //! which canvas host is live. This controller's OWN view is preferred over the active-view
+    //! static, because with both frontends alive the static names whichever drew last, which
+    //! is not necessarily the surface whose button was pressed.
+    protected void OnMap3DButtonClicked()
+    {
+        AG0_TDLMapView mapView;
+        if (m_DisplayController)
+            mapView = m_DisplayController.GetMapView();
+
+        if (mapView)
+            mapView.ToggleMap3D();
+        else
+            AG0_TDLMapView.ToggleMap3DOnActiveView();
+
+        UpdateMap3DButtonVisual();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Amber while 3D is up, matching the bloodhound button's engaged tint — the toolbar's
+    //! cyan hover colour cannot also mean "this mode is active" without reading as hover.
+    void UpdateMap3DButtonVisual()
+    {
+        if (!m_wMap3DButton)
+            return;
+        ImageWidget icon = ImageWidget.Cast(m_wMap3DButton.FindAnyWidget("Map3DImage"));
+        if (!icon)
+            return;
+        if (AG0_TDLMap3DView.IsViewOpen())
+            icon.SetColor(Color.FromRGBA(255, 200, 50, 255));
+        else
+            icon.SetColor(Color.FromRGBA(191, 191, 191, 255));
+    }
+
+    AG0_TDLRadialMenu GetRadialMenu() { return m_RadialMenu; }
+
+    //------------------------------------------------------------------------------------------------
+    //! Move the crosshair with the right stick, and report whether it is being driven.
+    //!
+    //! This is what makes the right stick a cursor rather than a second pan axis. Left stick
+    //! moves the map, right stick moves the reticle over it — the vanilla map's split, with
+    //! the reticle standing in for the pointer a pad does not have.
+    //!
+    //! Clamped to the canvas so the reticle can never leave the surface it is aiming at, and
+    //! it stays where it was left rather than springing back to centre, because an operator
+    //! placing several markers along a road should not have to re-aim from the middle each
+    //! time.
+    //! Wheel and triggers zoom the 2D map.
+    //!
+    //! Called by the frontends rather than from Tick, and only while they are actually
+    //! driving their surface — the world-space device ticks this controller whenever the
+    //! player merely has a device in hand, and zooming a map nobody is looking at is not a
+    //! feature. The 3D view polls the same two actions itself and SetZoom hands off to it
+    //! while its pane is up, so this stands down then rather than stepping twice per notch.
+    void DriveZoomFromInput(float tDelta, InputManager im)
+    {
+        if (!im || AG0_TDLMap3DView.IsViewOpen())
+            return;
+
+        if (IsRadialConsumingClicks() || !m_DisplayController)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return;
+
+        // Both read as values and subtracted into a signed axis, so a device reporting both
+        // at once cancels instead of fighting itself.
+        float axis = im.GetActionValue(ZOOM_IN_ACTION) - im.GetActionValue(ZOOM_OUT_ACTION);
+
+        if (Math.AbsFloat(axis) < ZOOM_DEADZONE)
+        {
+            m_bZoomLatched = false;
+            m_fZoomHeldS = 0;
+            return;
+        }
+
+        // A wheel notch should step once; a held trigger should keep going. An edge latch
+        // plus a repeat delay serves both without having to know which device fired — the
+        // same arrangement the 3D view settled on.
+        bool step = !m_bZoomLatched;
+        if (m_bZoomLatched)
+        {
+            m_fZoomHeldS = m_fZoomHeldS + tDelta;
+            if (m_fZoomHeldS >= ZOOM_REPEAT_S)
+            {
+                m_fZoomHeldS = 0;
+                step = true;
+            }
+        }
+
+        m_bZoomLatched = true;
+        if (!step)
+            return;
+
+        if (axis > 0)
+            mapView.ZoomIn(ZOOM_STEP);
+        else
+            mapView.ZoomOut(ZOOM_STEP);
+    }
+
+    protected static const string ZOOM_IN_ACTION = "TDLMapZoomIn";
+    protected static const string ZOOM_OUT_ACTION = "TDLMapZoomOut";
+
+    //! Low because a wheel notch reports a small value even amplified by the action's
+    //! Multiplier, where a trigger reports most of its 0..1 range. One threshold serves both
+    //! only if it clears wheel noise without demanding a hard scroll.
+    protected static const float ZOOM_DEADZONE = 0.02;
+    protected static const float ZOOM_REPEAT_S = 0.12;
+
+    //! Same notch the on-screen zoom buttons take, so the two routes agree.
+    protected static const float ZOOM_STEP = 0.05;
+
+    protected bool m_bZoomLatched;
+    protected float m_fZoomHeldS;
+
+    //------------------------------------------------------------------------------------------------
+    void DriveCrosshairFromStick(float tDelta, InputManager im)
+    {
+        if (!im || !m_wRoot)
+            return;
+
+        // The wheel takes the right stick while it is up — it is picking a slice with it,
+        // and a reticle sliding out from under the wheel would move the target the entries
+        // were built for.
+        if (m_RadialMenu && m_RadialMenu.IsOpen())
+            return;
+
+        float stickX = im.GetActionValue("TDLPanHorizontal");
+        float stickY = im.GetActionValue("TDLPanVertical");
+
+        // Confirm held plus the right stick is the pad's version of the mouse's click-drag,
+        // which is the only gesture that orbits. Without this a controller cannot turn the 3D
+        // view at all — OrbitInput was reachable from a mouse delta and nothing else.
+        if (DriveOrbitFromStick(tDelta, im, stickX, stickY))
+            return;
+
+        if (Math.AbsFloat(stickX) <= CROSSHAIR_DEADZONE && Math.AbsFloat(stickY) <= CROSSHAIR_DEADZONE)
+        {
+            UpdateMarkerCrosshairVisibility();
+            return;
+        }
+
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return;
+
+        float canvasW;
+        float canvasH;
+        canvasWidget.GetScreenSize(canvasW, canvasH);
+        if (canvasW <= 0 || canvasH <= 0)
+            return;
+
+        // Same quadratic response the map pan uses, so fine aiming is possible near centre
+        // stick without making long sweeps feel sluggish.
+        float curvedX = stickX * Math.AbsFloat(stickX);
+        float curvedY = stickY * Math.AbsFloat(stickY);
+
+        m_fCrosshairOffsetX = m_fCrosshairOffsetX + curvedX * CROSSHAIR_SPEED * tDelta;
+        m_fCrosshairOffsetY = m_fCrosshairOffsetY - curvedY * CROSSHAIR_SPEED * tDelta;
+
+        float halfW = canvasW * 0.5;
+        float halfH = canvasH * 0.5;
+        m_fCrosshairOffsetX = Math.Clamp(m_fCrosshairOffsetX, -halfW, halfW);
+        m_fCrosshairOffsetY = Math.Clamp(m_fCrosshairOffsetY, -halfH, halfH);
+
+        m_bCrosshairActive = true;
+
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        if (m_wMarkerCrosshair && workspace)
+            FrameSlot.SetPos(m_wMarkerCrosshair,
+                workspace.DPIUnscale(m_fCrosshairOffsetX),
+                workspace.DPIUnscale(m_fCrosshairOffsetY));
+
+        UpdateMarkerCrosshairVisibility();
+    }
+
+    protected static const float CROSSHAIR_SPEED = 900.0;
+    protected static const float CROSSHAIR_DEADZONE = 0.15;
+
+    //! The marker currently being carried, if any. A ref rather than a plain handle: the
+    //! commit removes it from the manager before adding it back, and without an owner of our
+    //! own the instance is collected in between — leaving the re-add holding nothing.
+    protected ref SCR_MapMarkerBase m_GrabbedMarker;
+    protected bool m_bGrabLatched;
+
+    //------------------------------------------------------------------------------------------------
+    //! Pick up the marker under the pointer, carry it, and drop it where the button is
+    //! released.
+    //!
+    //! The carry is genuinely local: every marker's widget is positioned from its own world
+    //! position each frame, so moving the instance IS the ghost — nothing has to draw a
+    //! preview, and nobody else sees anything until the drop. What the drop costs is a new
+    //! marker id, because the vanilla sync component offers only add and remove; there is no
+    //! move, so a move is one of each. See CommitMarkerMove.
+    void DriveMarkerGrabFromInput(float tDelta, InputManager im)
+    {
+        if (!im || !m_MarkerToolPanel)
+            return;
+
+        bool held = im.GetActionValue("TDLMarkerGrab") > 0.5;
+
+        if (held && !m_bGrabLatched)
+        {
+            m_bGrabLatched = true;
+            m_GrabbedMarker = m_MarkerToolPanel.FindOwnedMarkerAt(GetCrosshairWorld());
+            return;
+        }
+
+        if (held)
+        {
+            if (m_GrabbedMarker)
+                m_MarkerToolPanel.SetMarkerWorldPosLocal(m_GrabbedMarker, GetCrosshairWorld());
+
+            return;
+        }
+
+        m_bGrabLatched = false;
+
+        if (!m_GrabbedMarker)
+            return;
+
+        m_MarkerToolPanel.CommitMarkerMove(m_GrabbedMarker);
+        m_GrabbedMarker = null;
+    }
+
+    //! Screen pixels of equivalent drag per second at full stick, chosen so a full sweep
+    //! turns the view about as far as a firm mouse drag across the pane does.
+    protected static const float ORBIT_STICK_SPEED = 700.0;
+
+    //------------------------------------------------------------------------------------------------
+    //! Orbit the 3D view from the right stick while confirm is held, reporting whether it
+    //! took the stick. Returns false in 2D and whenever confirm is up, which leaves the stick
+    //! to the crosshair — the same split the mouse has, where a plain move aims and a drag
+    //! turns the world.
+    protected bool DriveOrbitFromStick(float tDelta, InputManager im, float stickX, float stickY)
+    {
+        if (!AG0_TDLMap3DView.IsViewOpen())
+            return false;
+
+        if (im.GetActionValue("TDLScreenClick") <= 0.5)
+            return false;
+
+        if (Math.AbsFloat(stickX) <= CROSSHAIR_DEADZONE && Math.AbsFloat(stickY) <= CROSSHAIR_DEADZONE)
+            return true;
+
+        if (!m_DisplayController)
+            return true;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return true;
+
+        // Pan is the orbit seam while the 3D pane is up — see AG0_TDLMapView.Pan.
+        mapView.Pan(stickX * ORBIT_STICK_SPEED * tDelta, -stickY * ORBIT_STICK_SPEED * tDelta);
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! World position under the crosshair — the console equivalent of "under the cursor".
+    //! Falls back to the map centre when the reticle has never been moved, which is also
+    //! where it is drawn, so the two answers agree.
+    vector GetCrosshairWorld()
+    {
+        AG0_TDLMapView mapView;
+        if (m_DisplayController)
+            mapView = m_DisplayController.GetMapView();
+
+        if (!mapView)
+            return vector.Zero;
+
+        float localX;
+        float localY;
+        if (m_bHasDevicePointer)
+        {
+            if (!ResolveCanvasLocal(m_fDevicePointerX, m_fDevicePointerY, localX, localY))
+                return mapView.GetCenter();
+        }
+        else if (!GetCrosshairCanvasPos(localX, localY))
+        {
+            return mapView.GetCenter();
+        }
+
+        vector worldPos;
+        mapView.ScreenToWorld(localX, localY, worldPos);
+        return worldPos;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! World position under whatever is actually pointing right now — device cursor, mouse, or
+    //! gamepad reticle, in that order.
+    //!
+    //! Kept separate from GetCrosshairWorld because that one feeds marker PLACEMENT, and
+    //! placement must not follow the mouse: the panel's Place button is clicked with the pointer
+    //! over the button, so a mouse-following placement would drop the marker under the side
+    //! panel. A readout has no such hazard, and reporting the map centre while the operator
+    //! moves the mouse across the map is useless.
+    protected bool ResolvePointerWorld(AG0_TDLMapView mapView, out vector worldPos)
+    {
+        worldPos = vector.Zero;
+        if (!mapView)
+            return false;
+
+        float localX;
+        float localY;
+
+        if (m_bHasDevicePointer)
+        {
+            if (!ResolveCanvasLocal(m_fDevicePointerX, m_fDevicePointerY, localX, localY))
+                return false;
+
+            mapView.ScreenToWorld(localX, localY, worldPos);
+            return true;
+        }
+
+        if (ResolveMouseCanvasLocal(localX, localY))
+        {
+            mapView.ScreenToWorld(localX, localY, worldPos);
+            return true;
+        }
+
+        if (GetCrosshairCanvasPos(localX, localY))
+        {
+            mapView.ScreenToWorld(localX, localY, worldPos);
+            return true;
+        }
+
+        return false;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Mouse position in MapCanvas-local pixels, rejected when the pointer is outside the canvas.
+    //!
+    //! The bounds test is the point of it: WidgetManager.GetMousePos is global, so without it a
+    //! pointer resting over the side panel or the toolbar would still drive a map readout.
+    protected bool ResolveMouseCanvasLocal(out float outX, out float outY)
+    {
+        outX = 0;
+        outY = 0;
+
+        if (!m_wRoot)
+            return false;
+
+        // On a pad the mouse is parked wherever it was last left, so it is not a pointer.
+        InputManager im = GetGame().GetInputManager();
+        if (im && !im.IsUsingMouseAndKeyboard())
+            return false;
+
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return false;
+
+        int mouseX;
+        int mouseY;
+        WidgetManager.GetMousePos(mouseX, mouseY);
+
+        float canvasScreenX;
+        float canvasScreenY;
+        canvasWidget.GetScreenPos(canvasScreenX, canvasScreenY);
+
+        float canvasW;
+        float canvasH;
+        canvasWidget.GetScreenSize(canvasW, canvasH);
+        if (canvasW <= 0 || canvasH <= 0)
+            return false;
+
+        outX = mouseX - canvasScreenX;
+        outY = mouseY - canvasScreenY;
+
+        return outX >= 0 && outY >= 0 && outX <= canvasW && outY <= canvasH;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Screen pixels to MapCanvas-local pixels. The device reports its cursor in its root's
+    //! space, which is the same conversion a mouse click already goes through.
+    protected bool ResolveCanvasLocal(float screenX, float screenY, out float outX, out float outY)
+    {
+        outX = 0;
+        outY = 0;
+
+        if (!m_wRoot)
+            return false;
+
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return false;
+
+        float canvasScreenX;
+        float canvasScreenY;
+        canvasWidget.GetScreenPos(canvasScreenX, canvasScreenY);
+
+        outX = screenX - canvasScreenX;
+        outY = screenY - canvasScreenY;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Where the crosshair sits in MapCanvas-local physical pixels. False when there is no
+    //! canvas to measure against or the reticle has never been driven, which is the caller's
+    //! cue to fall back to the map centre — the same point the reticle is drawn at.
+    bool GetCrosshairCanvasPos(out float outX, out float outY)
+    {
+        outX = 0;
+        outY = 0;
+
+        if (!m_bCrosshairActive || !m_wRoot)
+            return false;
+
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return false;
+
+        float canvasW;
+        float canvasH;
+        canvasWidget.GetScreenSize(canvasW, canvasH);
+        if (canvasW <= 0 || canvasH <= 0)
+            return false;
+
+        outX = canvasW * 0.5 + m_fCrosshairOffsetX;
+        outY = canvasH * 0.5 + m_fCrosshairOffsetY;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Centre of the map canvas in its own physical pixels — where the wheel opens when
+    //! nothing more specific named the target.
+    protected bool GetCanvasCentre(out float outX, out float outY)
+    {
+        outX = 0;
+        outY = 0;
+
+        if (!m_wRoot)
+            return false;
+
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return false;
+
+        float canvasW;
+        float canvasH;
+        canvasWidget.GetScreenSize(canvasW, canvasH);
+        if (canvasW <= 0 || canvasH <= 0)
+            return false;
+
+        outX = canvasW * 0.5;
+        outY = canvasH * 0.5;
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! True while the context menu owns the confirm button on this frontend. Map click
+    //! handling asks this rather than IsOpen so the press that chose an entry cannot also
+    //! land as a map click when it is released.
+    bool IsRadialConsumingClicks()
+    {
+        return m_RadialMenu && m_RadialMenu.IsConsumingClicks();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Give the context menu first refusal on a Back press. True means it took it, and the
+    //! frontend's own Back chain must not also run — one tap dismisses one thing.
+    bool CloseRadialOnBack()
+    {
+        return m_RadialMenu && m_RadialMenu.CloseOnBack();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Recentre once, without arming tracking — the wheel's "Centre On Me" answers "where am
+    //! I", which is a different question from "follow me", and that one has its own button.
+    //! Declared by a frontend that draws its own cursor, every frame it drives one. Latched
+    //! rather than consumed: the world-space device keeps drawing its cursor between ticks,
+    //! and the fullscreen menu simply never calls this, so the flag reads "which surface am
+    //! I hosted on" without either having to say so explicitly.
+    void SetDevicePointer(float screenX, float screenY)
+    {
+        m_fDevicePointerX = screenX;
+        m_fDevicePointerY = screenY;
+        m_bHasDevicePointer = true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Drop a range/bearing pin on a picked point, so "measure to this" is one wheel entry
+    //! instead of arm-then-click-the-right-pixel. The pin is what makes the reading survive
+    //! panning away from the target.
+    //!
+    //! The tool is left DISARMED on purpose. A pin renders on its own — UpdateBloodhound's gate
+    //! passes on either armed or pinned — while OnMapClickedForBloodhound ignores every click
+    //! with the tool off. So the measurement stays exactly where the operator put it, and the
+    //! next map click goes to whatever they actually meant it for instead of dragging the pin.
+    //! Re-arming the tool is what makes the pin movable again.
+    void PinRangeBearingAt(vector worldPos)
+    {
+        s_vBloodhoundPinPos = worldPos;
+        s_bBloodhoundPinned = true;
+        s_bBloodhoundEnabled = false;
+        ClearBloodhoundSolution();
+        UpdateBloodhoundButtonVisual();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Open a contact's detail panel straight from the map rather than making the operator find
+    //! the same person again in the contacts list.
+    void ShowDetailForMember(RplId memberRplId)
+    {
+        AG0_TDLNetworkMember member = GetNetworkMemberById(memberRplId);
+        if (!member)
+            return;
+
+        ShowDetailView(member, memberRplId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void OpenChatForMember(RplId memberRplId)
+    {
+        AG0_TDLNetworkMember member = GetNetworkMemberById(memberRplId);
+        if (!member)
+            return;
+
+        OpenDirectChat(memberRplId, member.GetPlayerName());
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void CentreMapOnPlayer()
+    {
+        if (!m_DisplayController)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (mapView)
+            mapView.CenterOnPlayer();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! True while any live frontend has its context menu up.
+    //!
+    //! Static because the consumers are pan and zoom on AG0_TDLMapView, which has no
+    //! controller reference and should not grow one just to ask this. Walking the live
+    //! controllers is the same route the bloodhound state sync already takes.
+    static bool IsAnyRadialOpen()
+    {
+        if (!s_aLiveControllers)
+            return false;
+
+        foreach (AG0_TDLMenuController c : s_aLiveControllers)
+        {
+            if (c && c.m_RadialMenu && c.m_RadialMenu.IsOpen())
+                return true;
+        }
+
+        return false;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Guarded for the same reason the zone listeners are: the world-space device re-runs
+    //! Init on every re-equip, and a second subscription would open and immediately close
+    //! the radial on one press.
+    protected void HookRadialActionListener()
+    {
+        if (m_bRadialListenerHooked)
+            return;
+
+        InputManager im = GetGame().GetInputManager();
+        if (!im)
+            return;
+
+        im.AddActionListener("TDLRadial", EActionTrigger.DOWN, OnRadialAction);
+        m_bRadialListenerHooked = true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void UnhookRadialActionListener()
+    {
+        if (!m_bRadialListenerHooked)
+            return;
+
+        InputManager im = GetGame().GetInputManager();
+        if (im)
+            im.RemoveActionListener("TDLRadial", EActionTrigger.DOWN, OnRadialAction);
+
+        m_bRadialListenerHooked = false;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The pad's road in. TDLRadial is bound to gamepad X alone — the mouse deliberately
+    //! does not reach the wheel through an input action, because the drag handler is the
+    //! only thing that can tell a right-click from a right-drag orbit, and two roads to the
+    //! same wheel means one press opens and closes it in the same frame.
+    protected void OnRadialAction()
+    {
+        ToggleRadial();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Aims at the crosshair, which is the pad's cursor. Falls back to the middle of the
+    //! canvas when the reticle has never been driven, which is where it is drawn anyway.
+    void ToggleRadial()
+    {
+        if (!m_RadialMenu || !m_DisplayController)
+            return;
+
+        // A frontend with its own pointer has already told us where it is, and that is the
+        // thing the operator is aiming with on that surface.
+        if (m_bHasDevicePointer)
+        {
+            ToggleRadialAtScreen(m_fDevicePointerX, m_fDevicePointerY);
+            return;
+        }
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return;
+
+        float localX;
+        float localY;
+        if (!GetCrosshairCanvasPos(localX, localY) && !GetCanvasCentre(localX, localY))
+            return;
+
+        vector worldPos;
+        mapView.ScreenToWorld(localX, localY, worldPos);
+        m_RadialMenu.Toggle(worldPos, localX, localY);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The mouse road in. Takes the click's absolute screen pixels because on a desk the
+    //! pointer is the thing being aimed, not the crosshair — right-clicking a spot has to
+    //! act on that spot and open the wheel over it.
+    void ToggleRadialAtScreen(float absMouseX, float absMouseY)
+    {
+        if (!m_RadialMenu || !m_DisplayController || !m_wRoot)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return;
+
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return;
+
+        float canvasScreenX;
+        float canvasScreenY;
+        canvasWidget.GetScreenPos(canvasScreenX, canvasScreenY);
+
+        float localX = absMouseX - canvasScreenX;
+        float localY = absMouseY - canvasScreenY;
+
+        vector worldPos;
+        mapView.ScreenToWorld(localX, localY, worldPos);
+        m_RadialMenu.Toggle(worldPos, localX, localY);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Routed through the map view for the same reason the toolbar button is — only the view
+    //! knows which canvas host is live.
+    void ToggleMap3DFromRadial()
+    {
+        AG0_TDLMapView mapView;
+        if (m_DisplayController)
+            mapView = m_DisplayController.GetMapView();
+
+        if (mapView)
+            mapView.ToggleMap3D();
+        else
+            AG0_TDLMapView.ToggleMap3DOnActiveView();
+
+        UpdateMap3DButtonVisual();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Subscribe the d-pad zone-entry actions.
+    //!
+    //! Hooked once per frontend rather than per frame, and guarded because a world-space
+    //! device re-runs Init on every re-equip against a widget tree that outlives the
+    //! controller — double-subscribing would move two zones per press.
+    protected void HookZoneActionListeners()
+    {
+        if (m_bZoneListenersHooked)
+            return;
+
+        InputManager im = GetGame().GetInputManager();
+        if (!im)
+            return;
+
+        if (!ZONE_NAV_ENABLED)
+            return;
+
+        im.AddActionListener("TDLZoneControls", EActionTrigger.DOWN, OnZoneControls);
+        im.AddActionListener("TDLZoneToolbar", EActionTrigger.DOWN, OnZoneToolbar);
+        im.AddActionListener("TDLZonePanel", EActionTrigger.DOWN, OnZonePanel);
+        m_bZoneListenersHooked = true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void UnhookZoneActionListeners()
+    {
+        if (!m_bZoneListenersHooked)
+            return;
+
+        InputManager im = GetGame().GetInputManager();
+        if (im)
+        {
+            im.RemoveActionListener("TDLZoneControls", EActionTrigger.DOWN, OnZoneControls);
+            im.RemoveActionListener("TDLZoneToolbar", EActionTrigger.DOWN, OnZoneToolbar);
+            im.RemoveActionListener("TDLZonePanel", EActionTrigger.DOWN, OnZonePanel);
+        }
+
+        m_bZoneListenersHooked = false;
+    }
+
+    protected void OnZoneControls() { SetFocusZone(ETDLFocusZone.CONTROLS); }
+    protected void OnZoneToolbar()  { SetFocusZone(ETDLFocusZone.TOOLBAR); }
+    protected void OnZonePanel()    { SetFocusZone(ETDLFocusZone.PANEL); }
+
+    //------------------------------------------------------------------------------------------------
+    //! Hand directional input back to the map. Returns true when it actually moved, so a
+    //! caller handling a Back press can consume it — otherwise leaving a control region and
+    //! closing the panel behind it would both happen on one press.
+    void SetZoneInputActive()
+    {
+        m_bZoneInputActive = true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Hand directional input back to the map. Returns true when it actually moved, so a
+    //! caller handling a Back press can consume it.
+    bool ReturnToMapZone()
+    {
+        if (m_eFocusZone == ETDLFocusZone.MAP)
+            return false;
+
+        SetFocusZone(ETDLFocusZone.MAP);
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Move directional input to another region. No-op when it is already there, so callers
+    //! can push the current zone every frame without churning the widget tree.
+    void SetFocusZone(ETDLFocusZone zone)
+    {
+        if (m_eFocusZone == zone)
+            return;
+
+        m_eFocusZone = zone;
+        UpdateFocusZoneVisual();
+        ApplyZoneFocusContainment();
+        FocusZoneEntryWidget();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Make exactly one region reachable by directional input, and nothing else.
+    //!
+    //! This is what makes B the only way out. Placing focus on an entry widget is not enough
+    //! on its own — vanilla's navigation solver looks at every focusable widget on the screen,
+    //! so the next d-pad press simply walks out of the region and into whatever happens to lie
+    //! that way. Taking NOFOCUS off the live region and putting it on the others leaves the
+    //! solver nowhere to wander to, which turns "the region has focus" from a highlight into
+    //! a fact.
+    //!
+    //! With the map zone live, every region is closed and focus is cleared outright. The map
+    //! has no widgets to navigate, so anything focused there is somewhere the operator did not
+    //! put it and cannot see.
+    //!
+    //! Gamepad only. NOFOCUS leaves a widget clickable, so the original read was that this
+    //! costs a mouse player nothing — but it also stops a widget ever becoming the FOCUSED
+    //! widget, and that is what an EditBoxWidget needs before it will accept a keystroke. With
+    //! the map zone live by default and no d-pad to leave it with, a mouse player got a
+    //! callsign box that highlights, clicks, and silently swallows every character typed into
+    //! it. Nothing to contain without a directional solver driving, so nothing is contained.
+    protected void ApplyZoneFocusContainment()
+    {
+        if (!IsDirectionalNavActive())
+        {
+            SetSubtreeFocusable(m_wZoneControls, true);
+            SetSubtreeFocusable(m_wZoneToolbar,  true);
+            SetSubtreeFocusable(m_wZonePanel,    true);
+            return;
+        }
+
+        SetSubtreeFocusable(m_wZoneControls, m_eFocusZone == ETDLFocusZone.CONTROLS);
+        SetSubtreeFocusable(m_wZoneToolbar,  m_eFocusZone == ETDLFocusZone.TOOLBAR);
+        SetSubtreeFocusable(m_wZonePanel,    m_eFocusZone == ETDLFocusZone.PANEL);
+
+        if (m_eFocusZone != ETDLFocusZone.MAP)
+            return;
+
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        if (workspace)
+            workspace.SetFocusedWidget(null);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Whether vanilla's directional navigation solver is the thing moving focus right now.
+    //! Defaults to true when there is no input manager to ask, so a failure to read the device
+    //! leaves the gamepad containment intact rather than silently unfencing it.
+    protected bool IsDirectionalNavActive()
+    {
+        InputManager im = GetGame().GetInputManager();
+        if (!im)
+            return true;
+
+        return !im.IsUsingMouseAndKeyboard();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Open or close a whole subtree to directional navigation. Recursive because the flag is
+    //! per widget rather than inherited, so a container alone would leave every button under
+    //! it exactly as reachable as before.
+    protected void SetSubtreeFocusable(Widget root, bool focusable)
+    {
+        if (!root)
+            return;
+
+        if (focusable)
+            root.ClearFlags(WidgetFlags.NOFOCUS);
+        else
+            root.SetFlags(WidgetFlags.NOFOCUS);
+
+        Widget child = root.GetChildren();
+        while (child)
+        {
+            SetSubtreeFocusable(child, focusable);
+            child = child.GetSibling();
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Put gamepad focus on a known control when a region takes over, so the first d-pad
+    //! press inside it moves from somewhere the player can see. Without this the region
+    //! lights up while focus is still wherever it was left, and the pad appears dead.
+    //!
+    //! One entry point per region rather than the last-focused control: returning to a
+    //! predictable place is worth more than resuming, and it is what makes the region
+    //! learnable. The side panel is the exception — its content changes, so the frontends
+    //! own that through m_OnPanelChanged and this leaves their choice alone.
+    protected void FocusZoneEntryWidget()
+    {
+        WorkspaceWidget workspace = GetGame().GetWorkspace();
+        if (!workspace)
+            return;
+
+        // The side panel's focusable content depends on which panel is showing, and the
+        // frontends already resolve that on panel change. Re-firing that rather than naming
+        // a widget here keeps one implementation of "where does focus go in the panel".
+        if (m_eFocusZone == ETDLFocusZone.PANEL)
+        {
+            m_OnPanelChanged.Invoke();
+            return;
+        }
+
+        Widget entry;
+        if (m_eFocusZone == ETDLFocusZone.CONTROLS && m_wZoneControls)
+            entry = m_wZoneControls.FindAnyWidget("CompassButton");
+        else if (m_eFocusZone == ETDLFocusZone.TOOLBAR && m_wZoneToolbar)
+            entry = m_wZoneToolbar.FindAnyWidget("MenuButton");
+
+        if (entry)
+            workspace.SetFocusedWidget(entry);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Dim the regions that are not taking directional input.
+    //!
+    //! Whether the right stick is about to orbit the world or step through a list is the one
+    //! thing a pad player must never have to guess, and it cannot be inferred from the map —
+    //! the map looks identical either way. Opacity carries it rather than colour because
+    //! SCR_ButtonEffectColor drives the colour of every button in these regions on hover and
+    //! focus events, and would overwrite a tint on the next mouse move.
+    //!
+    //! Called on change rather than per frame for that same reason: nothing else writes
+    //! opacity, so unlike the button tints beside it this does not need re-asserting.
+    protected void UpdateFocusZoneVisual()
+    {
+        ApplyZoneOpacity(m_wZoneControls, m_eFocusZone == ETDLFocusZone.CONTROLS);
+        ApplyZoneOpacity(m_wZoneToolbar,  m_eFocusZone == ETDLFocusZone.TOOLBAR);
+        ApplyZoneOpacity(m_wZonePanel,    m_eFocusZone == ETDLFocusZone.PANEL);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Unfocused regions stay legible rather than fading out — an operator still needs to read
+    //! the member list while driving the map, so this marks which region is live without
+    //! hiding the others.
+    protected void ApplyZoneOpacity(Widget zone, bool focused)
+    {
+        if (!zone)
+            return;
+
+        float opacity = ZONE_OPACITY_UNFOCUSED;
+        if (focused || m_eFocusZone == ETDLFocusZone.MAP)
+            opacity = 1.0;
+
+        zone.SetOpacity(opacity);
+    }
+
+    //! Deep enough to read at a glance on a device screen rendered into a world-space
+    //! render target, where the whole panel is already small and often off-angle.
+    protected static const float ZONE_OPACITY_UNFOCUSED = 0.55;
+
+    //------------------------------------------------------------------------------------------------
+    //! Settings-panel toggle for the HUD map peripheral. Same amber-engaged convention as the
+    //! bloodhound button below so the two read as the same kind of control.
+    protected void OnPeripheralButtonClicked()
+    {
+        AG0_TDLMapPeripheral.Toggle();
+        UpdatePeripheralButtonVisual();
+    }
+
+    void UpdatePeripheralButtonVisual()
+    {
+        if (!m_wPeripheralButton)
+            return;
+        ImageWidget icon = ImageWidget.Cast(m_wPeripheralButton.FindAnyWidget("PeripheralImage"));
+        if (!icon)
+            return;
+        if (AG0_TDLMapPeripheral.GetEnabled())
+            icon.SetColor(Color.FromRGBA(255, 200, 50, 255));
+        else
+            icon.SetColor(Color.FromRGBA(191, 191, 191, 255));
+    }
+
+    //------------------------------------------------------------------------------------------------
     //! Tint the BloodhoundImage amber when active, default gray when inactive.
     //! Mirrors UpdateCameraButtonState's pattern — SCR_ModularButtonComponent
     //! has hover/focus colour effects but no built-in "toggle held" state, so
@@ -1285,27 +2479,22 @@ class AG0_TDLMenuController
     //      world-space (its cursor lives in ContentFrame screen coords) or
     //      the map view's centre on the full-screen menu (no cursor there).
     //   2. Reads the local player's position as the device endpoint.
-    //   3. Samples terrain elevation at the cursor via ChimeraWorld.
+    //   3. Samples terrain elevation at the cursor via the shared height source.
     //   4. Computes distance + bearing (clockwise from world-Z = north).
     //   5. Updates the four readout TextWidgets, positions the readout at
     //      the cursor in layout space, and pushes the line endpoints to the
     //      map view for DrawBloodhound() to consume.
     // ============================================
 
-    //! World-space frontend pushes its cursor's world position here each tick.
-    //! Menu doesn't push — UpdateBloodhound falls back to map centre when
-    //! m_bBloodhoundCursorOverrideValid is false.
+    //! World-space frontend pushes its cursor's world position here each tick, because that
+    //! surface has a real cursor the controller cannot see. The menu doesn't push — with no
+    //! override, UpdateBloodhound resolves the crosshair itself.
     protected vector m_vBloodhoundCursorOverride;
     protected bool   m_bBloodhoundCursorOverrideValid;
-    //! One-shot diagnostic — flipped true after the first UpdateBloodhound
-    //! tick prints widget-ref + distance/bearing values. Reset to false in
-    //! OnBloodhoundButtonClicked so each enable produces a fresh sample
-    //! line in the log (handy when iterating without restarting the game).
-    protected bool   m_bBloodhoundFirstTickPrinted;
 
     //! Bloodhound pin state — when set, UpdateBloodhound sources the cursor
     //! world position from s_vBloodhoundPinPos instead of the per-frame
-    //! override / map centre. Toggled by OnMapClickedForBloodhound: first
+    //! override / crosshair. Toggled by OnMapClickedForBloodhound: first
     //! click pins at the click's world position, second click unpins.
     //!
     //! STATIC so that a pin set on the world-space display is visible on
@@ -1315,6 +2504,157 @@ class AG0_TDLMenuController
     //! s_bBloodhoundEnabled (the tool toggle) is already shared.
     static protected bool   s_bBloodhoundPinned;
     static protected vector s_vBloodhoundPinPos;
+
+    //! Last solution computed by whichever frontend is live, published for surfaces that render
+    //! the map without owning a controller (the HUD peripheral).
+    static protected ref AG0_TDLBloodhoundSolution s_BloodhoundSolution;
+
+    //! Pin-fallback cache, kept separate from the live publication so clearing one doesn't
+    //! invalidate the other. Re-solved when the player has moved a metre.
+    static protected ref AG0_TDLBloodhoundSolution s_PinSolution;
+    static protected vector s_vPinSolutionDevice;
+    protected static const float PIN_RESOLVE_DISTANCE_M = 1.0;
+
+    //! Below this separation a bearing is meaningless and Atan2 is undefined, so readouts
+    //! show "---" instead.
+    protected static const float BEARING_MIN_DISTANCE_M = 0.5;
+
+    protected static void ClearBloodhoundSolution()
+    {
+        s_BloodhoundSolution = null;
+
+        // The pin cache goes too: the events that clear the live publication are teardown and
+        // world unload, and a cached solve from the old world would outlive its coordinates.
+        s_PinSolution = null;
+    }
+
+    //! Entry point for mirror surfaces. Prefers the live solution; falls back to solving the pin
+    //! itself when no frontend is computing one.
+    //!
+    //! The fallback is the whole reason a pin is worth having. A pin is a saved measurement, and
+    //! the moment the operator closes the menu or stows the device the last controller tears
+    //! down — which is exactly when the peripheral is the only surface still up. Without this it
+    //! would drop the measurement at the instant it becomes the only thing showing it.
+    static AG0_TDLBloodhoundSolution GetBloodhoundSolutionForMirror()
+    {
+        if (s_BloodhoundSolution)
+            return s_BloodhoundSolution;
+
+        if (!s_bBloodhoundPinned)
+            return null;
+
+        PlayerController pc = GetGame().GetPlayerController();
+        if (!pc)
+            return null;
+
+        IEntity controlled = pc.GetControlledEntity();
+        if (!controlled)
+            return null;
+
+        // Cached on the device position because a pin is stationary by definition, so the only
+        // input that moves is the player. Without this the mirror re-runs a terrain sample, an
+        // MGRS conversion and three string allocations every tick for a measurement that is
+        // unchanged for as long as the operator stands still — and this fallback's whole reason
+        // to exist is the stowed-device case, where it would run forever.
+        vector devicePos = controlled.GetOrigin();
+        if (s_PinSolution)
+        {
+            float moved = vector.Distance(devicePos, s_vPinSolutionDevice);
+            if (moved < PIN_RESOLVE_DISTANCE_M)
+                return s_PinSolution;
+        }
+
+        s_vPinSolutionDevice = devicePos;
+        s_PinSolution = SolveBloodhound(s_vBloodhoundPinPos, devicePos);
+        return s_PinSolution;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Horizontal-plane separation. Every TDL range readout measures on the ground plane, so a
+    //! contact on a hillside above you reads the same distance everywhere in the UI — a 3D
+    //! straight-line answer alongside a plane answer looks like one of the two is broken.
+    static float HorizontalDistance(vector fromPos, vector toPos)
+    {
+        float dx = toPos[0] - fromPos[0];
+        float dz = toPos[2] - fromPos[2];
+        return Math.Sqrt(dx * dx + dz * dz);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Military bearing — clockwise from world +Z (north), 0..360. Math.Atan2(dx, dz) measures
+    //! clockwise from +Z, which is already the convention we want.
+    static float MilitaryBearingDeg(vector fromPos, vector toPos)
+    {
+        float dx = toPos[0] - fromPos[0];
+        float dz = toPos[2] - fromPos[2];
+        float bearingDeg = Math.Atan2(dx, dz) * Math.RAD2DEG;
+        if (bearingDeg < 0)
+            bearingDeg = bearingDeg + 360.0;
+
+        return bearingDeg;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Whole metres below 1 km, one decimal of km above. The km branch uses int math rather than
+    //! a float divide plus ToString because Enfusion prints full precision ("1.20000"), which
+    //! reads like measurement noise in a tactical readout. Rounding at 100 m granularity keeps
+    //! the last digit meaningful — 1.2 km means 1200 m, not 1.2345 km.
+    static string FormatDistanceValue(float distance)
+    {
+        if (distance < 1000.0)
+            return string.Format("%1 m", Math.Round(distance).ToString());
+
+        int deciKm = Math.Round(distance / 100.0);
+        int whole  = deciKm / 10;
+        int tenths = deciKm % 10;
+        return string.Format("%1.%2 km", whole.ToString(), tenths.ToString());
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Bearing text, guarding the coincident-points case. Atan2(0,0) is implementation-defined,
+    //! and the menu's default cursor sits exactly on the device whenever tracking is on, so the
+    //! guard fires in ordinary use rather than only at an edge.
+    static string FormatBearingValue(float distance, float bearingDeg)
+    {
+        if (distance < BEARING_MIN_DISTANCE_M)
+            return "---";
+
+        return Math.Round(bearingDeg).ToString();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Pure solve — no instance state, so a surface with no controller can run it. Caller supplies
+    //! the device position because the frontends resolve it differently (the live path falls back
+    //! to the active device's owner when there's no controlled entity; a mirror has no such
+    //! fallback and wouldn't be drawing without one anyway).
+    static AG0_TDLBloodhoundSolution SolveBloodhound(vector cursorWorld, vector deviceWorld)
+    {
+        AG0_TDLBloodhoundSolution sol = new AG0_TDLBloodhoundSolution();
+
+        // Snap cursor to terrain elevation so distance/azimuth are sampled against the terrain
+        // surface (cursor came in at Y=0 from ScreenToWorld / GetCenter, both of which return
+        // zero-Y points). Goes through the shared sampler rather than GetSurfaceY directly so
+        // the readout agrees with the 3D mesh and inherits its off-terrain sentinel clamp —
+        // a raw sample over water used to report the engine's ~-256 rather than 0.
+        float cursorElev = AG0_TDLMap3DView.SampleTerrainY(cursorWorld[0], cursorWorld[2]);
+        cursorWorld[1] = cursorElev;
+
+        sol.m_vCursor = cursorWorld;
+        sol.m_vDevice = deviceWorld;
+
+        float distance   = HorizontalDistance(deviceWorld, cursorWorld);
+        float bearingDeg = MilitaryBearingDeg(deviceWorld, cursorWorld);
+
+        sol.m_fDistance = distance;
+        sol.m_fBearingDeg = bearingDeg;
+
+        sol.m_sGrid = AG0_MGRSGridUtils.GetFullMGRS(cursorWorld, 4);
+        sol.m_sElev = string.Format("ELEV %1 m", Math.Round(cursorElev).ToString());
+        sol.m_sDist = string.Format("DIST %1", FormatDistanceValue(distance));
+        sol.m_sAz   = string.Format("BRG %1 deg", FormatBearingValue(distance, bearingDeg));
+
+        return sol;
+    }
     void SetBloodhoundCursorWorld(vector worldPos)
     {
         m_vBloodhoundCursorOverride = worldPos;
@@ -1323,6 +2663,350 @@ class AG0_TDLMenuController
     void ClearBloodhoundCursorWorld()
     {
         m_bBloodhoundCursorOverrideValid = false;
+    }
+
+    //! Pick radius in screen pixels. Screen-space rather than world-space because a fixed metre
+    //! radius is unhittable zoomed in and indiscriminate zoomed out — the 30 m the delete sweep
+    //! uses covers most of a town at low zoom.
+    protected static const float PICK_RADIUS_PX = 22.0;
+    protected static const float PICK_RADIUS_MIN_M = 4.0;
+    protected static const float PICK_RADIUS_MAX_M = 300.0;
+
+    //------------------------------------------------------------------------------------------------
+    //! What is under a world position: self, a contact, a marker, a shape, or nothing.
+    //!
+    //! The primitive the 2D map never had. Everything context-sensitive needs it — the radial
+    //! choosing its ring, the position block naming what it describes, and later marker details.
+    //! Resolution is most-specific-first (see AG0_ETDLPickKind), and within markers the nearest
+    //! wins, so a cluster resolves to the one the operator was actually aiming at.
+    //!
+    //! Unowned markers resolve too. Delete stays owner-gated, but inspecting somebody else's
+    //! marker is a core action and the old FindOwnedMarkerAt could not express it.
+    AG0_TDLMapPickResult ResolveTargetAt(vector worldPos)
+    {
+        AG0_TDLMapPickResult result = new AG0_TDLMapPickResult();
+
+        AG0_TDLMapView mapView;
+        if (m_DisplayController)
+            mapView = m_DisplayController.GetMapView();
+
+        if (!mapView)
+            return result;
+
+        float radius = PICK_RADIUS_PX * mapView.GetWorldUnitsPerPixel();
+        if (radius < PICK_RADIUS_MIN_M)
+            radius = PICK_RADIUS_MIN_M;
+        if (radius > PICK_RADIUS_MAX_M)
+            radius = PICK_RADIUS_MAX_M;
+
+        float radiusSq = radius * radius;
+        float bestSq = radiusSq;
+
+        // Self first — the operator's own position outranks anything drawn on top of it.
+        vector selfWorld;
+        if (ResolveSelfWorldPos(selfWorld))
+        {
+            float selfSq = FlatDistanceSq(selfWorld, worldPos);
+            if (selfSq <= bestSq)
+            {
+                bestSq = selfSq;
+                result.m_eKind = AG0_ETDLPickKind.SELF;
+                result.m_sLabel = "SELF";
+                result.m_vWorldPos = selfWorld;
+            }
+        }
+
+        // Each stage returns the narrowed best rather than taking it by reference — `inout` on a
+        // script-side method has no precedent in this codebase and is not worth a compile to test.
+        bestSq = PickMemberAt(worldPos, bestSq, result);
+        bestSq = PickMarkerAt(worldPos, bestSq, result);
+        PickShapeAt(worldPos, radius, result);
+
+        return result;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Horizontal squared separation. Squared so the hot path never takes a square root, and
+    //! horizontal for the same reason every other TDL range is: the map is a plan view.
+    protected static float FlatDistanceSq(vector a, vector b)
+    {
+        float dx = a[0] - b[0];
+        float dz = a[2] - b[2];
+        return dx * dx + dz * dz;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected float PickMemberAt(vector worldPos, float bestSq, AG0_TDLMapPickResult result)
+    {
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return bestSq;
+
+        AG0_TDLNetworkMembers data = pc.GetAggregatedTDLMembers();
+        if (!data)
+            return bestSq;
+
+        int count = data.Count();
+        for (int i = 0; i < count; i++)
+        {
+            AG0_TDLNetworkMember member = data.Get(i);
+            if (!member)
+                continue;
+
+            vector memberWorld = member.GetPosition();
+            float dSq = FlatDistanceSq(memberWorld, worldPos);
+            if (dSq > bestSq)
+                continue;
+
+            bestSq = dSq;
+            result.m_eKind = AG0_ETDLPickKind.MEMBER;
+            result.m_sLabel = member.GetPlayerName();
+            result.m_vWorldPos = memberWorld;
+            result.m_MemberRplId = member.GetRplId();
+        }
+
+        return bestSq;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected float PickMarkerAt(vector worldPos, float bestSq, AG0_TDLMapPickResult result)
+    {
+        SCR_MapMarkerManagerComponent markerMgr = SCR_MapMarkerManagerComponent.GetInstance();
+        if (!markerMgr)
+            return bestSq;
+
+        int selfPlayerId = -1;
+        PlayerController pc = GetGame().GetPlayerController();
+        if (pc)
+            selfPlayerId = pc.GetPlayerId();
+
+        array<SCR_MapMarkerBase> markers = CollectPickableMarkers(markerMgr);
+        foreach (SCR_MapMarkerBase marker : markers)
+        {
+            if (!marker)
+                continue;
+
+            int type = marker.GetType();
+            if (type != SCR_EMapMarkerType.PLACED_CUSTOM && type != SCR_EMapMarkerType.PLACED_MILITARY)
+                continue;
+
+            // GetWorldPos writes an int[2] out-array: index 0 is world X, index 1 is world Z.
+            // Markers live on the map plane and carry no Y.
+            int mPos[2];
+            marker.GetWorldPos(mPos);
+            vector markerWorld = Vector(mPos[0], 0, mPos[1]);
+
+            float dSq = FlatDistanceSq(markerWorld, worldPos);
+            if (dSq > bestSq)
+                continue;
+
+            bestSq = dSq;
+            result.m_vWorldPos = markerWorld;
+            result.m_Marker = marker;
+            result.m_iMarkerId = marker.GetMarkerID();
+            result.m_MemberRplId = RplId.Invalid();
+
+            if (marker.GetMarkerOwnerID() == selfPlayerId)
+                result.m_eKind = AG0_ETDLPickKind.OWN_MARKER;
+            else
+                result.m_eKind = AG0_ETDLPickKind.OTHER_MARKER;
+
+            string customText = marker.GetCustomText();
+            if (customText.IsEmpty())
+                result.m_sLabel = string.Format("MARKER #%1", marker.GetMarkerID());
+            else
+                result.m_sLabel = customText;
+        }
+
+        return bestSq;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Union of static and disabled lists, mirroring the marker tool's own collection — vanilla
+    //! shuffles off-frame markers into m_aDisabledMarkers, so the static list alone goes blind
+    //! to anything currently scrolled out of the M-map's view.
+    protected array<SCR_MapMarkerBase> CollectPickableMarkers(SCR_MapMarkerManagerComponent markerMgr)
+    {
+        array<SCR_MapMarkerBase> all = {};
+        if (!markerMgr)
+            return all;
+
+        array<SCR_MapMarkerBase> statics = markerMgr.GetStaticMarkers();
+        if (statics)
+        {
+            foreach (SCR_MapMarkerBase s : statics)
+            {
+                if (s)
+                    all.Insert(s);
+            }
+        }
+
+        array<SCR_MapMarkerBase> disabled = markerMgr.GetDisabledMarkers();
+        if (disabled)
+        {
+            foreach (SCR_MapMarkerBase d : disabled)
+            {
+                if (d && all.Find(d) == -1)
+                    all.Insert(d);
+            }
+        }
+
+        return all;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Shapes resolve last and only onto bare ground. A shape is a large area, so letting it win
+    //! on proximity would mask every marker drawn inside it.
+    protected void PickShapeAt(vector worldPos, float radius, AG0_TDLMapPickResult result)
+    {
+        if (!result.IsEmpty())
+            return;
+
+        SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
+        if (!pc)
+            return;
+
+        AG0_TDLMapShapeManager shapeMgr = pc.GetTDLShapeManager();
+        if (!shapeMgr)
+            return;
+
+        array<ref AG0_TDLMapShape> shapes = shapeMgr.GetShapes();
+        if (!shapes)
+            return;
+
+        foreach (AG0_TDLMapShape shape : shapes)
+        {
+            if (!shape || shape.m_sId.IsEmpty())
+                continue;
+
+            if (!AG0_TDLMarkerToolPanel.IsShapeUnderCursor(shape, worldPos, radius))
+                continue;
+
+            result.m_eKind = AG0_ETDLPickKind.SHAPE;
+            result.m_vWorldPos = shape.m_vCenter;
+            result.m_Shape = shape;
+            result.m_sShapeId = shape.m_sId;
+
+            if (shape.m_sLabel.IsEmpty())
+                result.m_sLabel = "SHAPE";
+            else
+                result.m_sLabel = shape.m_sLabel;
+
+            return;
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Fill ATAK's top-right position block: what the pointer is over, its grid, its elevation,
+    //! and its range/bearing from self.
+    //!
+    //! Deliberately NOT part of UpdateBloodhound. That is a measurement tool the operator arms
+    //! and disarms; this is chrome that reports where the pointer is. Sharing one code path is
+    //! what led to the tool's readout being forced permanently on — the two have different
+    //! lifetimes and belong apart even though they run the same solve.
+    //!
+    //! Real ATAK shows this block on selection and clears it on deselect. TDL has no click-to-
+    //! select yet, so this tracks the pointer instead and names whatever it is over — which is
+    //! the same information, arrived at without an extra click.
+    void UpdatePointReadout()
+    {
+        if (!m_wPointReadout)
+            return;
+
+        if (!m_DisplayController)
+        {
+            m_wPointReadout.SetVisible(false);
+            return;
+        }
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView || !mapView.IsReady())
+        {
+            m_wPointReadout.SetVisible(false);
+            return;
+        }
+
+        vector cursorWorld;
+        if (!ResolvePointerWorld(mapView, cursorWorld))
+        {
+            m_wPointReadout.SetVisible(false);
+            return;
+        }
+
+        // Range and bearing are measured from self, so with no self position there is nothing
+        // to measure against and the block would be half-empty. Hide rather than show blanks.
+        vector deviceWorld;
+        if (!ResolveSelfWorldPos(deviceWorld))
+        {
+            m_wPointReadout.SetVisible(false);
+            return;
+        }
+
+        // Snap to whatever the pointer is over, so the readout describes the contact rather than
+        // the patch of ground next to it — this is what ATAK's block does on selection.
+        AG0_TDLMapPickResult pick = ResolveTargetAt(cursorWorld);
+        if (!pick.IsEmpty())
+            cursorWorld = pick.m_vWorldPos;
+
+        AG0_TDLBloodhoundSolution sol = SolveBloodhound(cursorWorld, deviceWorld);
+
+        if (m_wPointReadoutLabel)
+            m_wPointReadoutLabel.SetText(ResolvePointReadoutLabel(pick));
+        if (m_wPointReadoutGrid)
+            m_wPointReadoutGrid.SetText(sol.m_sGrid);
+        if (m_wPointReadoutElev)
+            m_wPointReadoutElev.SetText(sol.m_sElev);
+        if (m_wPointReadoutRange)
+        {
+            m_wPointReadoutRange.SetTextFormat("BRG %1  DIST %2",
+                FormatBearingValue(sol.m_fDistance, sol.m_fBearingDeg),
+                FormatDistanceValue(sol.m_fDistance));
+        }
+
+        m_wPointReadout.SetVisible(true);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! What the readout is describing. Bare ground reports the pointer itself rather than going
+    //! blank, because an empty first line reads as a broken widget.
+    protected string ResolvePointReadoutLabel(AG0_TDLMapPickResult pick)
+    {
+        if (pick && !pick.IsEmpty() && !pick.m_sLabel.IsEmpty())
+            return pick.m_sLabel;
+
+        return "CURSOR";
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Local player position, preferring the controlled entity because that is how the rest of
+    //! the TDL UI defines "self" (self marker, GPS panel). Falls back to the active device's
+    //! owner when there is no controlled entity — loading, dead, in a vehicle transition.
+    protected bool ResolveSelfWorldPos(out vector worldPos)
+    {
+        worldPos = vector.Zero;
+
+        PlayerController pc = GetGame().GetPlayerController();
+        if (pc)
+        {
+            IEntity controlled = pc.GetControlledEntity();
+            if (controlled)
+            {
+                worldPos = controlled.GetOrigin();
+                return true;
+            }
+        }
+
+        if (m_ActiveDevice)
+        {
+            IEntity owner = m_ActiveDevice.GetOwner();
+            if (owner)
+            {
+                worldPos = owner.GetOrigin();
+                return true;
+            }
+        }
+
+        return false;
     }
 
     void UpdateBloodhound()
@@ -1346,143 +3030,79 @@ class AG0_TDLMenuController
                 if (mv)
                     mv.SetBloodhound(false, vector.Zero, vector.Zero);
             }
+            ClearBloodhoundSolution();
             return;
         }
 
+        // Cleared on every bail: a frontend whose display controller failed to build goes
+        // silent while still counting as a live controller, so the empty-registry clear in
+        // Cleanup never fires and a mirror would render the last solution indefinitely.
         if (!m_DisplayController)
+        {
+            ClearBloodhoundSolution();
             return;
+        }
         AG0_TDLMapView mapView = m_DisplayController.GetMapView();
         if (!mapView)
+        {
+            ClearBloodhoundSolution();
             return;
+        }
+
+        // IsReady gates on a measured canvas, and this runs before Draw() refreshes that
+        // measurement — so on the first tick after a build ScreenToWorld and WorldToLayout
+        // both answer from a zero-width canvas and the readout flashes at the frame origin
+        // for a frame. The mirror already guarded this; the menu can hit it too on the first
+        // tick after arming.
+        if (!mapView.IsReady())
+        {
+            if (m_wBloodhoundReadout)
+                m_wBloodhoundReadout.SetVisible(false);
+            mapView.SetBloodhound(false, vector.Zero, vector.Zero);
+            ClearBloodhoundSolution();
+            return;
+        }
 
         // Resolve cursor world position. Priority order:
         //   1. Pinned position (user clicked to lock it) — survives map pan
         //      and cursor movement until a second click unpins.
         //   2. Frontend-supplied live cursor override (world-space variant
         //      pushes its m_fCursorX/Y-derived world pos each tick).
-        //   3. Map centre — full-screen menu has no real cursor on the map.
+        //   3. The crosshair, which resolves the device pointer when there is one and
+        //      otherwise the reticle, falling back to map centre before it has been moved.
+        //      Using it rather than the bare centre is what makes the readout track the
+        //      right stick instead of reporting wherever the map happens to be scrolled.
         vector cursorWorld;
         if (s_bBloodhoundPinned)
             cursorWorld = s_vBloodhoundPinPos;
         else if (m_bBloodhoundCursorOverrideValid)
             cursorWorld = m_vBloodhoundCursorOverride;
         else
-            cursorWorld = mapView.GetCenter();
+            cursorWorld = GetCrosshairWorld();
 
-        // Resolve device (= local player) world position. Prefer the local
-        // player's controlled entity since that's consistent with how the
-        // rest of the TDL UI treats "self" (self marker, GPS panel). Falls
-        // back to the active device's owner entity if no controlled entity
-        // is available (loading, dead, etc.).
-        vector deviceWorld = vector.Zero;
-        bool haveDevicePos = false;
-        PlayerController pc = GetGame().GetPlayerController();
-        if (pc)
-        {
-            IEntity controlled = pc.GetControlledEntity();
-            if (controlled)
-            {
-                deviceWorld = controlled.GetOrigin();
-                haveDevicePos = true;
-            }
-        }
-        if (!haveDevicePos && m_ActiveDevice)
-        {
-            IEntity owner = m_ActiveDevice.GetOwner();
-            if (owner)
-            {
-                deviceWorld = owner.GetOrigin();
-                haveDevicePos = true;
-            }
-        }
-        if (!haveDevicePos)
+        vector deviceWorld;
+        if (!ResolveSelfWorldPos(deviceWorld))
         {
             // Without a self position, distance/azimuth + the line all break
             // down. Bail without rendering rather than show garbage.
             if (m_wBloodhoundReadout)
                 m_wBloodhoundReadout.SetVisible(false);
             mapView.SetBloodhound(false, vector.Zero, vector.Zero);
+            ClearBloodhoundSolution();
             return;
         }
 
-        // Snap cursor to terrain elevation so distance/azimuth are sampled
-        // against the terrain surface (cursor came in at Y=0 from
-        // ScreenToWorld / GetCenter, both of which return zero-Y points).
-        float cursorElev = 0;
-        ChimeraWorld world = ChimeraWorld.CastFrom(GetGame().GetWorld());
-        if (world)
-            cursorElev = world.GetSurfaceY(cursorWorld[0], cursorWorld[2]);
-        cursorWorld[1] = cursorElev;
-
-        // Distance + bearing in the horizontal plane.
-        float dx = cursorWorld[0] - deviceWorld[0];
-        float dz = cursorWorld[2] - deviceWorld[2];
-        float distance = Math.Sqrt(dx * dx + dz * dz);
-        // Military bearing — clockwise from world-Z (north), 0..360.
-        // Math.Atan2(y, x) returns atan2 in radians; passing (dx, dz) gives
-        // the angle measured clockwise from +Z which is exactly what we want.
-        float bearingRad = Math.Atan2(dx, dz);
-        float bearingDeg = bearingRad * Math.RAD2DEG;
-        if (bearingDeg < 0)
-            bearingDeg = bearingDeg + 360.0;
-
-        // Update text widgets. Switched to SetTextFormat (the pattern used by
-        // the existing GPS panel — m_wHeading.SetTextFormat("%1°M", ...)) so
-        // the formatting path matches a known-working call exactly, and so we
-        // sidestep any string.Format quirks around the substitution being
-        // assigned through a local before SetText.
-        //
-        // One-shot diagnostic Print on first frame after enable — set
-        // m_bBloodhoundFirstTickPrinted back to false from anywhere if you
-        // need another sample. Tells us whether the widget refs are non-null
-        // and what the math is actually producing so we don't have to guess.
-        if (!m_bBloodhoundFirstTickPrinted)
-        {
-            Print(string.Format("[Bloodhound] dist=%1 brg=%2 distRef=%3 azRef=%4",
-                distance, bearingDeg,
-                m_wBloodhoundDist != null,
-                m_wBloodhoundAz != null), LogLevel.NORMAL);
-            m_bBloodhoundFirstTickPrinted = true;
-        }
+        AG0_TDLBloodhoundSolution sol = SolveBloodhound(cursorWorld, deviceWorld);
+        cursorWorld = sol.m_vCursor;
 
         if (m_wBloodhoundGrid)
-            m_wBloodhoundGrid.SetText(AG0_MGRSGridUtils.GetFullMGRS(cursorWorld, 4));
+            m_wBloodhoundGrid.SetText(sol.m_sGrid);
         if (m_wBloodhoundElev)
-            m_wBloodhoundElev.SetTextFormat("ELEV %1 m", Math.Round(cursorElev).ToString());
-
-        // Distance readout — whole metres below 1km, one-decimal km above.
-        // The km branch uses int math (deciKm / 10 + deciKm % 10) instead of
-        // a float divide + ToString — Enfusion's float.ToString prints full
-        // precision ("1.20000"), which reads like measurement noise in a
-        // tactical readout. We do the rounding at 100m granularity so the
-        // last digit is meaningful (1.2 km = 1200m, not 1.2345 km).
+            m_wBloodhoundElev.SetText(sol.m_sElev);
         if (m_wBloodhoundDist)
-        {
-            if (distance < 1000.0)
-            {
-                m_wBloodhoundDist.SetTextFormat("DIST %1 m", Math.Round(distance).ToString());
-            }
-            else
-            {
-                int deciKm = Math.Round(distance / 100.0); // tenths-of-a-km
-                int whole  = deciKm / 10;
-                int tenths = deciKm % 10;
-                m_wBloodhoundDist.SetTextFormat("DIST %1.%2 km", whole.ToString(), tenths.ToString());
-            }
-        }
-
-        // Bearing — clamp NaN (Atan2(0,0) is implementation-defined) so
-        // SetTextFormat never sees a NaN-derived ToString() result. With the
-        // cursor sitting exactly on the device (menu's default when tracking
-        // is on), dx==dz==0 and bearing is undefined; show "---" in that case
-        // rather than whatever the engine returns for NaN.
+            m_wBloodhoundDist.SetText(sol.m_sDist);
         if (m_wBloodhoundAz)
-        {
-            if (distance < 0.5)
-                m_wBloodhoundAz.SetText("BRG --- deg");
-            else
-                m_wBloodhoundAz.SetTextFormat("BRG %1 deg", Math.Round(bearingDeg).ToString());
-        }
+            m_wBloodhoundAz.SetText(sol.m_sAz);
 
         // Position the floating readout at the cursor in layout coordinates.
         // WorldToLayout already DPIUnscales the result for us.
@@ -1495,7 +3115,11 @@ class AG0_TDLMenuController
         }
 
         // Hand the endpoints to the map view for line + tick rendering.
-        mapView.SetBloodhound(true, cursorWorld, deviceWorld);
+        mapView.SetBloodhound(true, sol.m_vCursor, sol.m_vDevice);
+
+        // Publish for mirror surfaces. Endpoints are world-space, so a mirror at a different
+        // centre, zoom and rotation projects them itself and lands on the same ground.
+        s_BloodhoundSolution = sol;
     }
 
     // ============================================
@@ -1559,12 +3183,10 @@ class AG0_TDLMenuController
     }
 
     // ============================================
-    // SHARED FRONTEND BEHAVIOUR — empty stubs
+    // SHARED FRONTEND BEHAVIOUR
     //
-    // Phase 1 of the world-space parity refactor: these are the public
-    // surface the frontends will call into. Bodies arrive in later phases —
-    // for now they're inert so callers can compile against the new API
-    // without behavior change.
+    // The public surface both frontends call into, so the fullscreen menu and
+    // the world-space device drive identical behaviour from their own loops.
     // ============================================
 
     // -------- Per-frame tick --------
@@ -1632,17 +3254,74 @@ class AG0_TDLMenuController
         // frame keeps the active tint visible.
         UpdateBloodhoundButtonVisual();
 
+        // Same per-frame re-apply as the bloodhound tint, with the extra reason that the
+        // keybind can toggle 3D without this button being touched — reading the mode back
+        // from the view every frame is what keeps the two entry points agreeing.
+        UpdateMap3DButtonVisual();
+
+        // Both reasons again: the effect component repaints on unhover, and TDLPeripheralToggle
+        // can flip the static from outside the menu entirely.
+        UpdatePeripheralButtonVisual();
+
+        // Re-activated every frame it should hold, the way the world-space focus context is.
+        // Deliberately NOT activated while a control region has focus: that is what lets
+        // vanilla widget navigation drive the d-pad inside a panel, so only the trip out of
+        // the map is TDL's to own.
+        // The frontend gate is the other half of this — see m_bZoneInputActive. Consumed
+        // rather than latched, so a frontend that stops driving its surface stops holding
+        // the context without having to remember to clear it.
+        // Picking up a pad mid-session has to re-fence the zones, and putting it down has to
+        // un-fence them. Checked every frame but acted on only at the transition — the apply
+        // walks three whole subtrees, and the answer changes about as often as the operator
+        // changes hands.
+        if (ZONE_NAV_ENABLED)
+        {
+            bool directionalNow = IsDirectionalNavActive();
+            if (directionalNow != m_bDirectionalNavApplied)
+            {
+                m_bDirectionalNavApplied = directionalNow;
+                ApplyZoneFocusContainment();
+            }
+        }
+
+        if (ZONE_NAV_ENABLED && im && m_bZoneInputActive && m_eFocusZone == ETDLFocusZone.MAP)
+            im.ActivateContext(MAP_ZONE_CONTEXT);
+
+        m_bZoneInputActive = false;
+
+        // Pumped every frame, not only while the wheel is up: it also has to watch the
+        // confirm button come back up after an entry fires — see IsConsumingClicks.
+        if (m_RadialMenu)
+            m_RadialMenu.Tick(tDelta, im);
+
         // Bloodhound — cursor info + range/bearing line. No-op (with cheap
         // hide-readout fall-through) when disabled. Runs after the map view
         // has been Update()'d by the frontend's display-controller tick so
-        // GetCenter() / WorldToLayout reflect this frame's view state.
+        // ScreenToWorld / WorldToLayout reflect this frame's view state.
         UpdateBloodhound();
+
+        // Anchored position block. Runs regardless of the bloodhound's state — it is chrome,
+        // not tool output — and no-ops entirely until the layout carries the PointReadout names.
+        UpdatePointReadout();
 
         // Marker tool placement actions (gamepad A / keyboard Enter / X / R).
         // Polled here because the menu's focus chain consumes the actions
         // before InputManager listeners fire — but GetActionTriggered still
         // works in this context.
-        if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL && m_MarkerToolPanel && im)
+        //
+        // Gated on the MAP zone. A is deliberately overloaded — on the map it places at the
+        // crosshair, inside a control region it activates the focused widget — and this poll
+        // reads the raw action, so without the gate both meanings fire at once: focus the
+        // toolbar, the left controls or the side panel, press A to work the widget under
+        // focus, and a marker lands on the map behind it. The panel's own Place button is
+        // unaffected because it routes through OnMarkerToolPlaceButtonClicked, not this poll,
+        // so placing from a focused panel still works exactly as before.
+        //
+        // Safe for mouse and keyboard: m_eFocusZone only ever leaves MAP through the three
+        // d-pad zone-entry actions, so a player who never touches a pad is always in MAP.
+        if (IsToolPanelActive() && m_MarkerToolPanel && im
+            && m_eFocusZone == ETDLFocusZone.MAP
+            && !IsRadialConsumingClicks() && !m_bHasDevicePointer)
             m_MarkerToolPanel.TickPlaceActionPoll(im);
 
         // Shape ghost preview — refresh every frame so the rubber-band
@@ -2389,30 +4068,30 @@ class AG0_TDLMenuController
         if (!mapView)
             return;
 
-        // Shape mode treats every place-action as "drop a point at the
-        // canvas centre" — gamepad / world-space frontend has no live
-        // pointer, the centre is what the user has framed in via pan/zoom.
+        // Everything lands under the crosshair, which is the pad's cursor. It answers with
+        // the map centre until the right stick has actually moved it, so a player who never
+        // touches the stick gets the framed-in centre this used to hardcode.
+        vector target = GetCrosshairWorld();
+
         if (m_MarkerToolPanel.IsShapeModeActive())
         {
-            m_MarkerToolPanel.OnShapeClick(mapView.GetCenter());
+            m_MarkerToolPanel.OnShapeClick(target);
             return;
         }
 
-        // Delete mode treats the place action as "delete near the
-        // canvas centre" — same gamepad ergonomics, just inverted in
-        // intent (remove instead of place).
+        // Delete mode treats the place action as "remove what is under the crosshair" — same
+        // ergonomics, inverted in intent.
         if (m_MarkerToolPanel.IsDeleteModeActive())
         {
-            m_MarkerToolPanel.SweepDeleteAt(mapView.GetCenter());
+            m_MarkerToolPanel.SweepDeleteAt(target);
             return;
         }
 
-        m_MarkerToolPanel.PlaceCurrentMarker(mapView.GetCenter(), isLocal);
+        m_MarkerToolPanel.PlaceCurrentMarker(target, isLocal);
     }
 
-    //! Mouse click on the dedicated panel-level Place button. Always a public
-    //! placement at canvas centre — mirrors the gamepad TDLPlaceMarker
-    //! action's behaviour.
+    //! Mouse click on the dedicated panel-level Place button. Always a public placement,
+    //! under the crosshair — mirrors the gamepad TDLPlaceMarker action's behaviour.
     void OnMarkerToolPlaceButtonClicked()
     {
         OnMarkerToolPlaceRequested(false);
@@ -2449,9 +4128,45 @@ class AG0_TDLMenuController
         if (!m_wMarkerCrosshair)
             return;
 
-        m_wMarkerCrosshair.SetVisible(m_eActivePanel == ETDLPanelContent.MARKER_TOOL);
+        // Shown for the marker tool as before, and additionally whenever the reticle is
+        // being used as a cursor — otherwise a pad user would be aiming something invisible.
+        m_wMarkerCrosshair.SetVisible(IsToolPanelActive()
+            || m_bCrosshairActive);
     }
 
+    //! Tap-to-recenter for the 3D view. Rides the same per-click dispatch as
+    //! the other tools and yields to every one of them: a click the marker
+    //! tool or bloodhound would act on must not ALSO swing the camera. What
+    //! remains — a bare tap on terrain while the 3D pane is up — re-aims the
+    //! orbit focus at the tapped point. This is the world-space surface's pan
+    //! (it has only one drag axis, and that one orbits); on the menu it
+    //! complements right-drag.
+    void OnMapClickedForMap3DFocus(int absMouseX, int absMouseY)
+    {
+        if (IsRadialConsumingClicks())
+            return;
+        if (IsToolPanelActive())
+            return;
+        if (s_bBloodhoundEnabled)
+            return;
+        if (!m_DisplayController || !m_wRoot)
+            return;
+
+        AG0_TDLMapView mapView = m_DisplayController.GetMapView();
+        if (!mapView)
+            return;
+
+        Widget canvasWidget = m_wRoot.FindAnyWidget("MapCanvas");
+        if (!canvasWidget)
+            return;
+
+        float canvasScreenX;
+        float canvasScreenY;
+        canvasWidget.GetScreenPos(canvasScreenX, canvasScreenY);
+        mapView.TapFocusMap3D(absMouseX - canvasScreenX, absMouseY - canvasScreenY);
+    }
+
+    //------------------------------------------------------------------------------------------------
     //! Fired by AG0_TDLMapCanvasDragHandler when the user left-clicks
     //! MapDragSurface without significant drag (KBM placement path).
     //! Converts the absolute workspace mouse coords into canvas-local pixels,
@@ -2459,7 +4174,9 @@ class AG0_TDLMenuController
     //! there. Only active while the marker tool panel is visible.
     void OnMapClickedForMarkerPlacement(int absMouseX, int absMouseY)
     {
-        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+        if (IsRadialConsumingClicks())
+            return;
+        if (!IsToolPanelActive())
             return;
         if (!m_MarkerToolPanel || !m_DisplayController)
             return;
@@ -2504,7 +4221,7 @@ class AG0_TDLMenuController
     //! fine — no caching needed.
     bool IsFreehandModeActive()
     {
-        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL || !m_MarkerToolPanel)
+        if (!IsToolPanelActive() || !m_MarkerToolPanel)
             return false;
         if (!m_MarkerToolPanel.IsShapeModeActive())
             return false;
@@ -2540,7 +4257,7 @@ class AG0_TDLMenuController
     {
         if (!im)
             return false;
-        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL || !m_MarkerToolPanel)
+        if (!IsToolPanelActive() || !m_MarkerToolPanel)
             return false;
         if (!m_MarkerToolPanel.IsDeleteModeActive())
             return false;
@@ -2564,7 +4281,7 @@ class AG0_TDLMenuController
     //! a stale/unknown cursor and the delete tool no-ops every frame.
     void OnMapCursorMovedForShape(int absMouseX, int absMouseY)
     {
-        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+        if (!IsToolPanelActive())
             return;
         if (!m_MarkerToolPanel)
             return;
@@ -2595,7 +4312,7 @@ class AG0_TDLMenuController
     //! path needs. Same gating as the KBM path.
     void OnShapeCursorWorldFromWorldSpace(vector worldPos)
     {
-        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+        if (!IsToolPanelActive())
             return;
         if (!m_MarkerToolPanel)
             return;
@@ -2625,7 +4342,7 @@ class AG0_TDLMenuController
     {
         if (!im || !m_MarkerToolPanel || !m_DisplayController)
             return;
-        if (m_eActivePanel != ETDLPanelContent.MARKER_TOOL)
+        if (!IsToolPanelActive())
             return;
         if (!m_MarkerToolPanel.IsShapeModeActive() && !m_MarkerToolPanel.IsDeleteModeActive())
             return;
@@ -2838,7 +4555,7 @@ class AG0_TDLMenuController
             return;
 
         bool show = false;
-        if (m_eActivePanel == ETDLPanelContent.MARKER_TOOL
+        if (IsToolPanelActive()
             && m_MarkerToolPanel
             && m_MarkerToolPanel.IsShapeModeActive())
         {
@@ -2989,16 +4706,6 @@ class AG0_TDLMenuController
         if (s_fMirrorLastSendTimeMs > 0 && (nowMs - s_fMirrorLastSendTimeMs) < MIRROR_MIN_SEND_INTERVAL_MS)
             return;
         s_fMirrorLastSendTimeMs = nowMs;
-
-        // Diagnostic: log the snapshot push when playerTracking flips. Lets us
-        // see whether tracking on/off transitions match what the web sent vs.
-        // some other path silently flipping it back.
-        if (s_LastSentMirrorSnapshot && s_LastSentMirrorSnapshot.playerTracking != snap.playerTracking)
-        {
-            Print(string.Format("[TDL_MIRROR_UPLINK] tracking flip in snapshot: %1 -> %2 (mapCenter=<%3,%4>)",
-                s_LastSentMirrorSnapshot.playerTracking, snap.playerTracking,
-                snap.mapCenterX, snap.mapCenterZ), LogLevel.DEBUG);
-        }
 
         string payload = snap.ToJson();
         pc.PushATAKPanelStateToServer(payload);

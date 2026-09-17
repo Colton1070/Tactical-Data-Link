@@ -24,7 +24,19 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     protected AG0_TDLDeviceComponent m_MPU5Device;
     protected AG0_TDLRadioComponent m_TDLRadio;
     protected Widget m_MenuRoot;
-    
+
+    // Which of this MPU5's transceivers the PTT overlay reports. Tracked
+    // from the player's active VON entry rather than pinned to 0 — the
+    // radio carries two transceivers and VON auto-tune puts the squad
+    // frequency on the first one, so a fixed index 0 reported the squad
+    // channel no matter which channel the player had keyed.
+    protected int m_iDisplayTransceiverIdx;
+
+    // Last string pushed into the PTT text widget. UpdatePTTOverlay runs
+    // every frame so a channel switch lands on the next one; the compare
+    // keeps that from turning into a SetText per frame.
+    protected string m_sLastPTTText;
+
     // Update throttling
     protected float m_fUpdateTimer;
     protected const float UPDATE_INTERVAL = 1.0;
@@ -43,8 +55,11 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
             GetSourceDevice().FindComponent(AG0_TDLDeviceComponent));
         m_TDLRadio = AG0_TDLRadioComponent.Cast(
             GetSourceDevice().FindComponent(AG0_TDLRadioComponent));
+
+        m_iDisplayTransceiverIdx = 0;
+        m_sLastPTTText = string.Empty;
     }
-    
+
     override void OnDisabled()
     {
         m_MPU5Device = null;
@@ -109,18 +124,25 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
             m_wPTTOverlay = null;
         }
 
+        m_wPTTFrequency = null;
+        m_sLastPTTText = string.Empty;
         m_MenuRoot = null;
     }
-    
+
     override void OnMenuUpdate(float tDelta)
     {
+        // Deliberately outside the UPDATE_INTERVAL gate — the overlay says
+        // which channel PTT will key, so lagging a channel switch by up to a
+        // second is misleading at exactly the moment it matters. The work is
+        // a short pointer walk plus a string compare; the widget is only
+        // touched when the reading actually changes.
+        UpdatePTTOverlay();
+
         m_fUpdateTimer += tDelta;
-        if (m_fUpdateTimer < UPDATE_INTERVAL) 
+        if (m_fUpdateTimer < UPDATE_INTERVAL)
             return;
         m_fUpdateTimer = 0;
-        
-        UpdatePTTOverlay();
-        
+
         if (m_wManagementPanel)
             UpdateManagementPanel();
     }
@@ -130,11 +152,69 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     //------------------------------------------------------------------------------------------------
     protected void UpdatePTTOverlay()
     {
-        if (!m_wPTTOverlay || !m_MPU5Device)
+        if (!m_wPTTOverlay || !m_MPU5Device || !m_wPTTFrequency)
             return;
 
-        if (m_wPTTFrequency)
-            m_wPTTFrequency.SetText(FormatFrequencyText(GetMPU5Frequency()));
+        RefreshDisplayTransceiverIdx();
+
+        string text = string.Format("CH%1 %2",
+            m_iDisplayTransceiverIdx + 1,
+            FormatFrequencyText(GetMPU5Frequency(m_iDisplayTransceiverIdx)));
+
+        if (text == m_sLastPTTText)
+            return;
+
+        m_sLastPTTText = text;
+        m_wPTTFrequency.SetText(text);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Point m_iDisplayTransceiverIdx at whichever of this MPU5's transceivers
+    //! the player currently has keyed.
+    //!
+    //! Channel selection lives on the local SCR_VONController, not on the
+    //! radio — the radio only knows each transceiver's frequency, so there is
+    //! no way to ask it which one the player picked. GetActiveEntry is the
+    //! same handle AG0_ControlDisplayUnitComponent uses to resolve the keyed
+    //! radio.
+    //!
+    //! The index is left alone when the active entry is direct speech or
+    //! belongs to a different radio, so the overlay keeps showing the last
+    //! channel this MPU5 was on instead of falling back to CH1 — which is the
+    //! squad channel and would read as a live value.
+    protected void RefreshDisplayTransceiverIdx()
+    {
+        IEntity sourceDevice = GetSourceDevice();
+        if (!sourceDevice)
+            return;
+
+        PlayerController playerController = GetGame().GetPlayerController();
+        if (!playerController)
+            return;
+
+        SCR_VONController vonController = SCR_VONController.Cast(
+            playerController.FindComponent(SCR_VONController));
+        if (!vonController)
+            return;
+
+        SCR_VONEntryRadio radioEntry = SCR_VONEntryRadio.Cast(vonController.GetActiveEntry());
+        if (!radioEntry)
+            return;
+
+        BaseTransceiver transceiver = radioEntry.GetTransceiver();
+        if (!transceiver)
+            return;
+
+        BaseRadioComponent radio = transceiver.GetRadio();
+        if (!radio || radio.GetOwner() != sourceDevice)
+            return;
+
+        // VON numbers transceivers from 1.
+        int idx = radioEntry.GetTransceiverNumber() - 1;
+        if (idx < 0)
+            return;
+
+        m_iDisplayTransceiverIdx = idx;
     }
 
     //------------------------------------------------------------------------------------------------
@@ -380,7 +460,7 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
     //------------------------------------------------------------------------------------------------
     // Helpers
     //------------------------------------------------------------------------------------------------
-    protected int GetMPU5Frequency()
+    protected int GetMPU5Frequency(int transceiverIdx)
     {
         if (!m_TDLRadio)
             return 0;
@@ -390,6 +470,6 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
         // frequency otherwise. Going through the transceiver directly would
         // always show the base frequency, which is misleading when the
         // radio is mid-hop.
-        return m_TDLRadio.GetCurrentFrequency(0);
+        return m_TDLRadio.GetCurrentFrequency(transceiverIdx);
     }
 }

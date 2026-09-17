@@ -10,9 +10,10 @@ enum ETDLPanelContent
     NONE,           // Panel hidden, map only
     NETWORK_LIST,   // Member list
     MEMBER_DETAIL,  // Selected member details
-	DIRECT_CHAT,
-    SETTINGS,       // Future: settings/config
-    MARKER_TOOL,    // Marker placement tool — type/subtype/colour/text picker; placement via PC click or console pan+confirm
+    DIRECT_CHAT,    // 1:1 thread with the selected member
+    SETTINGS,       // Callsign, brightness, HUD peripheral toggle
+    MARKER_TOOL,    // Point dropper — placed/military marker picker; placement via PC click or console pan+confirm
+    DRAW_TOOL,      // Drawing tool — shapes. Separate from MARKER_TOOL because markers and shapes are separate systems
     PLUGIN_TOOL     // Plugin-owned side panel content (e.g. MPU5 management). Active plugin tracked by AG0_TDLMenuController.
 }
 
@@ -147,6 +148,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             // Route map clicks to the controller — marker placement (KBM)
             // is shared between frontends.
             m_DragHandler.m_OnClick.Insert(OnMapClickedDelegated);
+            m_DragHandler.m_OnRightClick.Insert(OnMapRightClick);
             // Cursor-move samples feed the shape draw session's rubber-band
             // ghost. Only relevant while shape mode is armed; controller
             // gates the forward, so wiring it unconditionally is cheap.
@@ -231,9 +233,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
 
         // Create the shared menu controller and have it drive panel state on
         // this layout. Subscribe to OnPanelChanged for menu-specific reactions
-        // (marker tool sub-panel, crosshair, chat repopulate, gamepad focus)
-        // and to OnDetailShown for view-feed button visibility refresh that
-        // depends on remote feed state the controller can't see.
+        // (marker tool sub-panel, crosshair, chat repopulate, gamepad focus).
         //
         // Order matters: Init caches widgets and hooks nav handlers; we then
         // push devices in so RefreshPlugins has what it needs; then refresh
@@ -356,33 +356,81 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                     mapView.Pan(deltaX, -deltaY);
                 AG0_TDLDisplayController.SetPlayerTracking(false);
             }
+
+            // Right-drag is a second axis consumed only by the 3D map (left orbits,
+            // right pans). PanSecondary is inert while the 3D map is closed, so the 2D
+            // map keeps its existing single-axis behaviour.
+            int rightDeltaX, rightDeltaY;
+            if (m_DragHandler.GetRightDragDelta(rightDeltaX, rightDeltaY))
+            {
+                AG0_TDLMapView rightMapView = m_DisplayController.GetMapView();
+                if (rightMapView)
+                    rightMapView.PanSecondary(rightDeltaX, -rightDeltaY);
+            }
         }
-        
+
         // Marker tool action poll folded into controller.Tick.
 
-        // Process gamepad right stick pan input
+        // The fullscreen menu is a map surface for as long as it is open, so the zone
+        // context may stand the whole time it ticks. The world-space device deliberately
+        // does NOT do this yet: DisableFocusRecursive re-applies NOFOCUS across its entire
+        // widget tree every frame, so vanilla navigation inside a region would have nothing
+        // to move between and the zones would dim without navigating.
+        if (m_MenuController)
+            m_MenuController.SetZoneInputActive();
+
+        // Left stick pans, in both 2D and 3D, and it is the only stick that does. It goes
+        // through PanMap rather than Pan so that meaning survives the mode toggle.
         if (m_DisplayController && m_InputManager)
         {
-            float panX = m_InputManager.GetActionValue("TDLPanHorizontal");
-            float panY = m_InputManager.GetActionValue("TDLPanVertical");
-            
-            if (Math.AbsFloat(panX) > STICK_DEADZONE || Math.AbsFloat(panY) > STICK_DEADZONE)
+            float mapPanX = m_InputManager.GetActionValue("TDLMapPanHorizontal");
+            float mapPanY = m_InputManager.GetActionValue("TDLMapPanVertical");
+
+            if (Math.AbsFloat(mapPanX) > STICK_DEADZONE || Math.AbsFloat(mapPanY) > STICK_DEADZONE)
             {
-                // Quadratic response — see STICK_PAN_SPEED comment. val * |val|
-                // keeps the sign and squares the magnitude.
-                float curvedX = panX * Math.AbsFloat(panX);
-                float curvedY = panY * Math.AbsFloat(panY);
+                float mapCurvedX = mapPanX * Math.AbsFloat(mapPanX);
+                float mapCurvedY = mapPanY * Math.AbsFloat(mapPanY);
 
-                float deltaX = -curvedX * STICK_PAN_SPEED * tDelta;
-                float deltaY = curvedY * STICK_PAN_SPEED * tDelta;
+                float mapDeltaX = -mapCurvedX * STICK_PAN_SPEED * tDelta;
+                float mapDeltaY = mapCurvedY * STICK_PAN_SPEED * tDelta;
 
-                AG0_TDLMapView mapView = m_DisplayController.GetMapView();
-                if (mapView)
-                    mapView.Pan(deltaX, -deltaY);
+                AG0_TDLMapView panMapView = m_DisplayController.GetMapView();
+                if (panMapView)
+                    panMapView.PanMap(mapDeltaX, -mapDeltaY);
+
                 AG0_TDLDisplayController.SetPlayerTracking(false);
             }
         }
-        
+
+        // TDLScreenContext carries TDLScreenClick and the stick axes every map interaction
+        // polls. The world-space device re-activates it per frame for exactly this reason;
+        // the fullscreen menu never did, which left everything read from that context dead
+        // on this surface. Non-exclusive, so vanilla menu navigation is untouched.
+        if (m_InputManager)
+            m_InputManager.ActivateContext("TDLScreenContext");
+
+        // TDLMapPanContext raises the pan axes above the menu's own priority so the left
+        // stick reaches the map. It is deliberately NOT Exclusive: an exclusive context on
+        // this surface suppresses every lower-priority context wholesale rather than just the
+        // inputs it binds, which took the mouse down with it — no drag, no click, no
+        // right-click on the map at all.
+        //
+        // The cost of sharing rather than taking is that vanilla still sees the same stick
+        // and still moves widget focus with it. Panning works; focus wanders while you pan.
+        // Taking the stick outright needs the engine to stop reacting to it, which is a
+        // focus-side problem, not an input-priority one.
+        if (m_InputManager)
+            m_InputManager.ActivateContext("TDLMapPanContext");
+
+        // Right stick moves the crosshair, which IS the cursor on a pad — it no longer pans.
+        // Left stick owns panning in both modes; orbit in 3D is the click-drag gesture.
+        if (m_MenuController)
+        {
+            m_MenuController.DriveCrosshairFromStick(tDelta, m_InputManager);
+            m_MenuController.DriveZoomFromInput(tDelta, m_InputManager);
+            m_MenuController.DriveMarkerGrabFromInput(tDelta, m_InputManager);
+        }
+
         // ============================================
         // UPDATE DISPLAY CONTROLLER
         // ============================================
@@ -434,6 +482,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         if (m_DragHandler)
         {
             m_DragHandler.m_OnDragStart.Remove(OnMapDragStart);
+            m_DragHandler.m_OnRightClick.Remove(OnMapRightClick);
             m_DragHandler.CancelDrag();
         }
         
@@ -548,6 +597,16 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     }
     
     //------------------------------------------------------------------------------------------------
+    //------------------------------------------------------------------------------------------------
+    //! Short right-click on the map opens the context menu. A right-DRAG is orbit, and the
+    //! drag handler has already separated the two before this fires.
+    protected void OnMapRightClick(int absMouseX, int absMouseY)
+    {
+        if (m_MenuController)
+            m_MenuController.ToggleRadialAtScreen(absMouseX, absMouseY);
+    }
+
+    //------------------------------------------------------------------------------------------------
     protected void OnMapDragStart()
     {
         AG0_TDLDisplayController.SetPlayerTracking(false);
@@ -615,6 +674,7 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             return;
         m_MenuController.OnMapClickedForMarkerPlacement(absMouseX, absMouseY);
         m_MenuController.OnMapClickedForBloodhound(absMouseX, absMouseY);
+        m_MenuController.OnMapClickedForMap3DFocus(absMouseX, absMouseY);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -701,9 +761,11 @@ class AG0_TDLMenuUI : ChimeraMenuBase
             }
 
             case ETDLPanelContent.MARKER_TOOL:
-                // Focus the back button as a safe default until the panel
-                // controller provides a more specific first-focus widget
-                // (e.g. the type picker once it's authored).
+            case ETDLPanelContent.DRAW_TOOL:
+                // Both tool modes share one panel and one back button. Focusing it is a safe
+                // default — the type spinbox above it is one d-pad press away, and landing on
+                // the spinbox instead would let a stray press change category before the
+                // operator has looked at the panel.
                 if (m_wMarkerToolBackButton)
                     GetGame().GetWorkspace().SetFocusedWidget(m_wMarkerToolBackButton);
                 break;
@@ -742,17 +804,33 @@ class AG0_TDLMenuUI : ChimeraMenuBase
         
         if (m_InputManager.GetActionTriggered("MenuBack"))
         {
+            // Back walks out one level at a time, and the outermost level is "stop driving
+            // a control region". Consuming the press here is what stops one tap from both
+            // leaving the toolbar and collapsing the panel behind it.
+            if (m_MenuController.CloseRadialOnBack())
+                return;
+
+            if (m_MenuController.ReturnToMapZone())
+                return;
+
+            // One chain, not two: each branch reads the panel state the previous
+            // branch may have just written, so a bare `if` here lets a single press
+            // both pop a level and fall through to Close().
             if (m_MenuController.GetActivePanel() == ETDLPanelContent.MEMBER_DETAIL)
             {
                 SetPanelContent(ETDLPanelContent.NETWORK_LIST);
             }
-			if (m_MenuController.GetActivePanel() == ETDLPanelContent.DIRECT_CHAT)
-			{
-				SetPanelContent(ETDLPanelContent.MEMBER_DETAIL);
-			}
+            else if (m_MenuController.GetActivePanel() == ETDLPanelContent.DIRECT_CHAT)
+            {
+                SetPanelContent(ETDLPanelContent.MEMBER_DETAIL);
+            }
             else if (m_MenuController.GetActivePanel() == ETDLPanelContent.SETTINGS)
             {
                 SetPanelContent(ETDLPanelContent.NETWORK_LIST);
+            }
+            else if (m_MenuController.GetActivePanel() == ETDLPanelContent.DRAW_TOOL)
+            {
+                SetPanelContent(ETDLPanelContent.NONE);
             }
             else
             {

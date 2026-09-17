@@ -1,0 +1,432 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ Slot FrameWidgetSlot "{6736CE0B070536FC}" {
+  Anchor 0 0 1 1
+  PositionX 0
+  OffsetLeft 0
+  PositionY 0
+  OffsetTop 0
+  SizeX -1820
+  OffsetRight 0
+  SizeY -1050
+  OffsetBottom 0
+ }
+ {
+  FrameWidgetClass "{69F84C84CB5F14B6}" {
+   Name "MainFrame"
+   Slot FrameWidgetSlot "{672CCA4D7D8C4196}" {
+    Anchor 0.35 0.7 0.65 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY -756
+    SizeX 0
+    OffsetRight 0
+    SizeY 756
+    OffsetBottom 0
+   }
+   Clipping True
+   {
+    ImageWidgetClass "{69F84C84CB5F14AF}" {
+     Name "Image0"
+     Slot FrameWidgetSlot "{672C1C733C0EC9E4}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX 0
+      OffsetRight 0
+      SizeY 0
+      OffsetBottom 0
+     }
+     Color 0 0 0 1
+    }
+    HorizontalLayoutWidgetClass "{69F84C84CB5F14B7}" {
+     Name "HorizontalLayout0"
+     Slot FrameWidgetSlot "{6728802FCEA8D3E7}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 0
+      PositionY 0
+      OffsetTop 0
+      SizeX 0
+      OffsetRight 0
+      SizeY 0
+      OffsetBottom 0
+     }
+     {
+      OverlayWidgetClass "{69F84C84CB5F14B8}" {
+       Name "MainPanel"
+       Slot LayoutSlot "{6728802C8D85B067}" {
+        SizeMode Fill
+       }
+       {
+        FrameWidgetClass "{69F84C84CB5F14BA}" {
+         Name "MainView"
+         Slot OverlayWidgetSlot "{672C1C7088C120D9}" {
+          HorizontalAlign 3
+          VerticalAlign 3
+         }
+         {
+          CanvasWidgetClass "{69F84C84CB5F14BB}" {
+           Name "MapCanvas"
+           Slot FrameWidgetSlot "{67237B346D8AE5AC}" {
+            Anchor 0 0 1 1
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX 0
+            OffsetRight 0
+            SizeY 0
+            OffsetBottom 0
+           }
+          }
+          RenderTargetWidgetClass "{69F84C914C7F1899}" {
+           Name "RenderTarget0"
+           Slot FrameWidgetSlot "{69F36598BE8C75FC}" {
+            Anchor 0 0 1 1
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX -1315
+            OffsetRight 0
+            SizeY -1050
+            OffsetBottom 0
+           }
+           "Is Visible" 0
+           camera 10
+           "max FPS" 30
+           "MSAA mode" "MSAA from setup"
+           "Image correction" 1
+          }
+          FrameWidgetClass "{69F84C84CB5F1440}" {
+           Name "MarkerOverlay"
+           Slot FrameWidgetSlot "{67282DAA107C0E33}" {
+            Anchor 0 0 1 1
+            PositionX 0
+            OffsetLeft 0
+            PositionY 0
+            OffsetTop 0
+            SizeX 0
+            OffsetRight 0
+            SizeY 0
+            OffsetBottom 0
+           }
+          }
+          FrameWidgetClass "{69F84C84CB5F1445}" {
+           Name "BloodhoundReadout"
+           Slot FrameWidgetSlot "{B100D80000002001}" {
+            Anchor 0 0 0 0
+            OffsetLeft 0
+            OffsetTop 0
+            SizeX 128
+            OffsetRight -128
+            SizeY 128
+            OffsetBottom -128
+            Alignment 0.5 0.5
+           }
+           "Is Visible" 0
+           "Ignore Cursor" 1
+           {
+            ImageWidgetClass "{69F84C84CB5F62A2}" {
+             Name "UpperBG"
+             Slot FrameWidgetSlot "{695D666B4A0E50A0}" {
+              Anchor 0.5 0.5 0.5 0.5
+              PositionX 0
+              OffsetLeft 0
+              PositionY -25
+              OffsetTop -25
+              SizeX 75
+              OffsetRight -75
+              SizeY 20
+              OffsetBottom 5
+              Alignment 0.5 0.5
+             }
+             Opacity 0.5
+             Color 0.0652 0.0652 0.0652 1
+            }
+            ImageWidgetClass "{69F84C84CB5F62A0}" {
+             Name "LowerBG"
+             Slot FrameWidgetSlot "{695D666B4A0E50A0}" {
+              Anchor 0.5 0.5 0.5 0.5
+              PositionX 0
+              OffsetLeft 0
+              PositionY 25
+              OffsetTop 25
+              SizeX 50
+              OffsetRight -50
+              SizeY 20
+              OffsetBottom -45
+              Alignment 0.5 0.5
+             }
+             Opacity 0.5
+             Color 0.0652 0.0652 0.0652 1
+            }
+            TextWidgetClass "{69F84C84CB5F62AF}" {
+             Name "BloodhoundGrid"
+             Slot FrameWidgetSlot "{B100D80000002021}" {
+              Anchor 0.5 0.5 0.5 0.5
+              PositionX 0
+              OffsetLeft 0
+              PositionY -30
+              OffsetTop -30
+              SizeX 220
+              OffsetRight -220
+              SizeY 18
+              OffsetBottom 12
+              Alignment 0.5 0.5
+              SizeToContent 1
+             }
+             Text "00000 00000"
+             "Font Size" 8
+             "Min Font Size" 8
+            }
+            TextWidgetClass "{69F84C84CB5F62AE}" {
+             Name "BloodhoundElev"
+             Slot FrameWidgetSlot "{B100D80000002031}" {
+              Anchor 0.5 0.5 0.5 0.5
+              PositionX 0
+              OffsetLeft 0
+              PositionY -20
+              OffsetTop -20
+              SizeX 220
+              OffsetRight -220
+              SizeY 16
+              OffsetBottom 4
+              Alignment 0.5 0.5
+              SizeToContent 1
+             }
+             Text "ELEV --- m"
+             "Font Size" 8
+             "Min Font Size" 8
+            }
+            TextWidgetClass "{69F84C84CB5F62AD}" {
+             Name "BloodhoundDist"
+             Slot FrameWidgetSlot "{B100D80000002041}" {
+              Anchor 0.5 0.5 0.5 0.5
+              PositionX 0
+              OffsetLeft 0
+              PositionY 20
+              OffsetTop 20
+              SizeX 220
+              OffsetRight -220
+              SizeY 16
+              OffsetBottom -36
+              Alignment 0.5 0.5
+              SizeToContent 1
+             }
+             Text "DIST --- m"
+             "Font Size" 8
+             "Min Font Size" 8
+            }
+            TextWidgetClass "{69F84C84CB5F62AC}" {
+             Name "BloodhoundAz"
+             Slot FrameWidgetSlot "{B100D80000002051}" {
+              Anchor 0.5 0.5 0.5 0.5
+              PositionX 0
+              OffsetLeft 0
+              PositionY 30
+              OffsetTop 30
+              SizeX 220
+              OffsetRight -220
+              SizeY 16
+              OffsetBottom -46
+              Alignment 0.5 0.5
+              SizeToContent 1
+             }
+             Text "BRG ---°"
+             "Font Size" 8
+             "Min Font Size" 8
+            }
+           }
+          }
+          VerticalLayoutWidgetClass "{69F84C84CB5AEB24}" {
+           Name "StatusPanels"
+           Slot FrameWidgetSlot "{672880530762BD67}" {
+            Anchor 1 1 1 1
+            OffsetLeft 0
+            OffsetTop 0
+            OffsetRight -100
+            SizeY 100
+            OffsetBottom -100
+            Alignment 1 1
+            SizeToContent 1
+           }
+           {
+            OverlayWidgetClass "{69F84C84CB5AEB25}" {
+             Name "SelfPanel"
+             Slot LayoutSlot "{67288053E62CE46F}" {
+              Padding 5 5 5 5
+             }
+             "Z Order" 99
+             {
+              ImageWidgetClass "{69F84C84CB5AEB22}" {
+               Name "BackgroundPanel"
+               Slot OverlayWidgetSlot "{672C1C7088C128E9}" {
+                HorizontalAlign 3
+                VerticalAlign 3
+               }
+               Color 0.0118 0.0118 0.0118 0.8
+               Texture "{012010010314EB94}UI/Textures/Icons/tdl_self_panel.edds"
+               Size 150 50
+              }
+              FrameWidgetClass "{69F84C84CB5AEB23}" {
+               Name "SelfMarkerWidget"
+               Slot OverlayWidgetSlot "{672C1C7088C128C8}" {
+                HorizontalAlign 3
+                VerticalAlign 3
+                Padding 10 10 10 10
+               }
+               {
+                SizeLayoutWidgetClass "{69F84C84CB5AEAA9}" {
+                 Name "SizeLayout0"
+                 Slot FrameWidgetSlot "{67288053FD3956B8}" {
+                  PositionX 0
+                  OffsetLeft 0
+                  PositionY 0
+                  OffsetTop 0
+                  OffsetRight -100
+                  SizeY 50
+                  OffsetBottom -50
+                 }
+                 AllowWidthOverride 1
+                 WidthOverride 100
+                 AllowHeightOverride 1
+                 HeightOverride 70
+                }
+                VerticalLayoutWidgetClass "{69F84C84CB5AEAAA}" {
+                 Name "VerticalLayout0"
+                 Slot FrameWidgetSlot "{672744B5227EC68A}" {
+                  Anchor 0 0 1 1
+                  PositionX 0
+                  OffsetLeft 0
+                  PositionY 0
+                  OffsetTop 0
+                  SizeX 0
+                  OffsetRight 0
+                  SizeY 0
+                  OffsetBottom 0
+                  Alignment 0 0
+                  SizeToContent 1
+                 }
+                 {
+                  TextWidgetClass "{69F84C84CB5AEAAB}" {
+                   Name "GPSStatus"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "GPSStatus"
+                   "Font Size" 12
+                   "Min Font Size" 12
+                  }
+                  TextWidgetClass "{69F84C84CB5A5A66}" {
+                   Name "Callsign"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "Callsign"
+                   "Font Size" 12
+                   "Min Font Size" 12
+                  }
+                  TextWidgetClass "{69F84C84CB5A5A69}" {
+                   Name "Grid"
+                   Slot LayoutSlot "{672744B5324033A6}" {
+                   }
+                   Text "Grid"
+                   "Font Size" 12
+                   "Min Font Size" 12
+                  }
+                  HorizontalLayoutWidgetClass "{69F84C84CB5A5A68}" {
+                   Name "HorizontalLayout0"
+                   Slot LayoutSlot "{672744B58BA4611C}" {
+                   }
+                   {
+                    TextWidgetClass "{69F84C84CB5A5A6B}" {
+                     Name "Altitude"
+                     Slot LayoutSlot "{672744B597F61BBA}" {
+                      SizeMode Fill
+                     }
+                     Text "---MSL"
+                     "Font Size" 12
+                     "Min Font Size" 12
+                    }
+                    TextWidgetClass "{69F84C84CB5B9FAB}" {
+                     Name "Heading"
+                     Slot LayoutSlot "{672744B5942D0E66}" {
+                      SizeMode Fill
+                     }
+                     Text "---*M"
+                     "Font Size" 12
+                     "Min Font Size" 12
+                     "Horizontal Alignment" Right
+                    }
+                   }
+                  }
+                  HorizontalLayoutWidgetClass "{69F84C84CB5B9FAA}" {
+                   Name "HorizontalLayout1"
+                   Slot LayoutSlot "{672744B58BA4611C}" {
+                   }
+                   {
+                    TextWidgetClass "{69F84C84CB5B9FAD}" {
+                     Name "Speed"
+                     Slot LayoutSlot "{672744B597F61BBA}" {
+                      SizeMode Fill
+                     }
+                     Text "--MPH"
+                     "Font Size" 12
+                     "Min Font Size" 12
+                    }
+                    TextWidgetClass "{69F84C84CB5B9FAC}" {
+                     Name "Error"
+                     Slot LayoutSlot "{672744B5942D0E66}" {
+                      SizeMode Fill
+                     }
+                     Text "+/- --m"
+                     "Font Size" 12
+                     "Min Font Size" 12
+                     "Horizontal Alignment" Right
+                    }
+                   }
+                  }
+                 }
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+  OverlayWidgetClass "{69F84C84CB517D0E}" {
+   Name "BrightnessOverlay"
+   Slot FrameWidgetSlot "{695D66A9961DC2F2}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX -1820
+    OffsetRight 0
+    SizeY -1050
+    OffsetBottom 0
+   }
+   {
+    ImageWidgetClass "{69F84C84CB517D0F}" {
+     Name "BrightnessImage"
+     Slot OverlayWidgetSlot "{6961452A893258B9}" {
+      HorizontalAlign 3
+      VerticalAlign 3
+     }
+     Color 0 0 0 0
+    }
+   }
+  }
+ }
+}

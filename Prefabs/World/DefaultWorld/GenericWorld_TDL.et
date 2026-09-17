@@ -1,0 +1,12 @@
+GenericWorldEntity {
+ ID "69F3550F5A784D93"
+ SkyPreset "{621C7F2EC2763297}Terrains/Common/Sky/Atmosphere/Atmosphere.emat"
+ ShadowPreset Custom
+ CustomShadowPreset "ItemPreview"
+ DisableDistantShadows 1
+ PlanetPreset {
+  "{C8DD10DC67D45E10}Terrains/Common/Sky/Planets/Stars_01.emat" "{7037BF6589EEFD5D}Terrains/Common/Sky/Planets/Sun_01.emat" "{63C716F4064F5D43}Terrains/Common/Sky/Planets/Moon_01.emat"
+ }
+ OceanMaterial "{5BD82BC098CB7A2C}Terrains/Common/Water/Ocean/ocean.emat"
+ OceanSimulation "{824449EC2DE478DD}Terrains/Common/Water/Ocean/Simulation/oceanSimIsland.emat"
+}

@@ -19,7 +19,7 @@
 //!   SECTOR       — 3 clicks (center, radial1, radial2);  auto-commits on click 3
 //!   RANGE_RINGS  — variadic (center, ring1, ring2, …);   commit action closes (min 1 ring)
 //!   ROUTE        — variadic (waypoint × N);              commit action closes (min 2)
-//!   FREEHAND     — not supported in v1 (web API does not emit it either)
+//!   FREEHAND     — held-cursor sampling;                 commits on release (min 3)
 //------------------------------------------------------------------------------------------------
 
 //------------------------------------------------------------------------------------------------
