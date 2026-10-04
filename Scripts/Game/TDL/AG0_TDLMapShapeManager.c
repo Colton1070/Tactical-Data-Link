@@ -24,7 +24,9 @@ enum AG0_ETDLShapeType
 	FREEHAND,
 	ROUTE,
 	RANGE_RINGS,
-	SECTOR
+	SECTOR,
+	//! A place with no extent. Drawn as a dot of fixed screen size.
+	POINT
 }
 
 //------------------------------------------------------------------------------------------------
@@ -180,6 +182,7 @@ class AG0_TDLMapShape
 			case AG0_ETDLShapeType.ROUTE:        return "route";
 			case AG0_ETDLShapeType.RANGE_RINGS:  return "range_rings";
 			case AG0_ETDLShapeType.SECTOR:       return "sector";
+			case AG0_ETDLShapeType.POINT:        return "point";
 		}
 		return "";
 	}
@@ -461,6 +464,7 @@ class AG0_TDLMapShapeManager
 		if (typeStr == "route")        return AG0_ETDLShapeType.ROUTE;
 		if (typeStr == "range_rings")  return AG0_ETDLShapeType.RANGE_RINGS;
 		if (typeStr == "sector")       return AG0_ETDLShapeType.SECTOR;
+		if (typeStr == "point")        return AG0_ETDLShapeType.POINT;
 		
 		Print(string.Format("[TDL_SHAPES] Unknown shape type: '%1'", typeStr), LogLevel.WARNING);
 		return AG0_ETDLShapeType.UNKNOWN;

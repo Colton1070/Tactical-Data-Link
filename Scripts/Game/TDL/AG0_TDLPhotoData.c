@@ -131,26 +131,67 @@ class AG0_Base64
 //------------------------------------------------------------------------------------------------
 class AG0_TDLBase64Decoder
 {
-    protected string m_sInput;
+    //! string.ToAscii(i) walks the string from the start, so indexing a 200 KB payload is
+    //! quadratic (measured: ~256 chars per 8 ms). The input is cut into CHUNK-char pieces
+    //! up front (a handful of Substring calls) and decoded from those, which keeps every
+    //! ToAscii on a short string.
+    protected static const int CHUNK = 2048;   // multiple of 4
+
+    protected ref array<string> m_aChunks;
+    protected int    m_iChunk;       // chunk being decoded
+    protected int    m_iChunkPos;    // position inside it
+    protected string m_sCur;         // m_aChunks[m_iChunk]
+    protected int    m_iCurLen;
     protected int    m_iLen;
-    protected int    m_iInPos;
+    protected int    m_iInPos;       // overall position, for progress
     protected ref array<int> m_aOutput;
     protected int    m_iOutPos;
 
     void Init(string input)
     {
         AG0_Base64.InitLookup();
-        m_sInput = input;
         m_iLen   = input.Length();
         m_iInPos = 0;
 
+        m_aChunks = new array<string>();
+        for (int at = 0; at < m_iLen; at += CHUNK)
+        {
+            int take = CHUNK;
+            if (at + take > m_iLen)
+                take = m_iLen - at;
+            m_aChunks.Insert(input.Substring(at, take));
+        }
+        m_iChunk = 0;
+        m_iChunkPos = 0;
+        LoadChunk();
+
         int maxOut = (m_iLen / 4) * 3;
-        if (m_iLen >= 1 && input.ToAscii(m_iLen - 1) == 61) maxOut = maxOut - 1;
-        if (m_iLen >= 2 && input.ToAscii(m_iLen - 2) == 61) maxOut = maxOut - 1;
+        if (!m_aChunks.IsEmpty())
+        {
+            string last = m_aChunks[m_aChunks.Count() - 1];
+            int ll = last.Length();
+            if (ll >= 1 && last.ToAscii(ll - 1) == 61) maxOut = maxOut - 1;
+            if (ll >= 2 && last.ToAscii(ll - 2) == 61) maxOut = maxOut - 1;
+        }
 
         m_aOutput = new array<int>();
         m_aOutput.Resize(maxOut);
         m_iOutPos = 0;
+    }
+
+    protected void LoadChunk()
+    {
+        if (m_iChunk < m_aChunks.Count())
+        {
+            m_sCur = m_aChunks[m_iChunk];
+            m_iCurLen = m_sCur.Length();
+        }
+        else
+        {
+            m_sCur = "";
+            m_iCurLen = 0;
+        }
+        m_iChunkPos = 0;
     }
 
     //! Process input chars until either timeBudgetMs elapses or the input
@@ -172,10 +213,18 @@ class AG0_TDLBase64Decoder
 
         while (m_iInPos + 4 <= m_iLen)
         {
-            int charA = m_sInput.ToAscii(m_iInPos);
-            int charB = m_sInput.ToAscii(m_iInPos + 1);
-            int charC = m_sInput.ToAscii(m_iInPos + 2);
-            int charD = m_sInput.ToAscii(m_iInPos + 3);
+            if (m_iChunkPos + 4 > m_iCurLen)
+            {
+                m_iChunk++;
+                LoadChunk();
+                if (m_iCurLen < 4)
+                    break;
+            }
+            int charA = m_sCur.ToAscii(m_iChunkPos);
+            int charB = m_sCur.ToAscii(m_iChunkPos + 1);
+            int charC = m_sCur.ToAscii(m_iChunkPos + 2);
+            int charD = m_sCur.ToAscii(m_iChunkPos + 3);
+            m_iChunkPos = m_iChunkPos + 4;
 
             int a = AG0_Base64.s_Lookup[charA];
             int b = AG0_Base64.s_Lookup[charB];
@@ -242,12 +291,18 @@ class AG0_TDLPhotoData
     ref array<int> m_aPalette;      // ARGB colors
     ref array<int> m_aPixels;       // Indices into palette (W*H entries) — legacy path
     ref array<int> m_aRects;        // Rectangles, 5 ints per rect: [colorIdx, x, y, w, h]
+    //! Triangle meshes, one run per mesh: [colorIdx, nVerts, nTris, x0, y0, …, a0, b0, c0, …].
+    //! Vertices are pixel-corner coordinates (0..W, 0..H), same space the rects use.
+    //! Produced by the API's raster→vector pass; preferred over rects when present.
+    ref array<int> m_aTris;
+    int m_iTriCount;
 
     void AG0_TDLPhotoData()
     {
         m_aPalette = {};
         m_aPixels = {};
         m_aRects = {};
+        m_aTris = {};
     }
 
     //------------------------------------------------------------------------------------------------
@@ -269,6 +324,59 @@ class AG0_TDLPhotoData
     bool HasRects()
     {
         return m_aRects.Count() >= 5;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    bool HasTris()
+    {
+        return m_iTriCount > 0;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Decode the mesh wire layout (see tdl-vectorize.ts on the API), little-endian:
+    //!   [0] colorIdx u8, [1..2] nVerts u16, [3..4] nTris u16,
+    //!   nVerts × { x u16, y u16 }, nTris × { a u16, b u16, c u16 }
+    //! Sets m_iTriCount; a malformed tail is dropped rather than failing the whole image.
+    static array<int> DecodeTrisFromBytes(array<int> bytes, out int triCount)
+    {
+        array<int> tris = new array<int>();
+        triCount = 0;
+        int n = bytes.Count();
+        int off = 0;
+        while (off + 5 <= n)
+        {
+            int c  = bytes[off] & 0xFF;
+            int nV = (bytes[off + 1] & 0xFF) | ((bytes[off + 2] & 0xFF) << 8);
+            int nT = (bytes[off + 3] & 0xFF) | ((bytes[off + 4] & 0xFF) << 8);
+            off += 5;
+            int need = nV * 4 + nT * 6;
+            if (off + need > n)
+                break;
+            tris.Insert(c);
+            tris.Insert(nV);
+            tris.Insert(nT);
+            for (int i = 0; i < nV * 2; i++)
+            {
+                tris.Insert((bytes[off] & 0xFF) | ((bytes[off + 1] & 0xFF) << 8));
+                off += 2;
+            }
+            for (int i = 0; i < nT * 3; i++)
+            {
+                tris.Insert((bytes[off] & 0xFF) | ((bytes[off + 1] & 0xFF) << 8));
+                off += 2;
+            }
+            triCount += nT;
+        }
+        return tris;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The server's "tgz" field — base64(gzip(mesh records)).
+    static array<int> DecodeTrisBase64Gzip(string base64Input, out int triCount)
+    {
+        array<int> gz = AG0_Base64.Decode(base64Input);
+        array<int> raw = AG0_TDLGzip.Gunzip(gz);
+        return DecodeTrisFromBytes(raw, triCount);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -501,6 +609,7 @@ class AG0_TDLPhotoRenderer
 
     //------------------------------------------------------------------------------------------------
     AG0_TDLPhotoFitMode GetFitMode() { return m_eFitMode; }
+
     
     //------------------------------------------------------------------------------------------------
     bool Init(CanvasWidget canvas)
@@ -596,8 +705,9 @@ class AG0_TDLPhotoRenderer
 
         // Incremental path keeps the previous frame's commands live until
         // the new batch completes, so we DON'T clear m_aDrawCommands here.
-        // Sync paths clear right before they refill.
-        if (m_PhotoData.HasRects() && m_PhotoData.GetRectCount() > m_iIncThreshold)
+        // Sync paths clear right before they refill. Meshes are already capped per
+        // command by the API and are a fraction of the rect count, so they draw sync.
+        if (!m_PhotoData.HasTris() && m_PhotoData.HasRects() && m_PhotoData.GetRectCount() > m_iIncThreshold)
         {
             BeginIncrementalDraw();
             return;
@@ -611,7 +721,11 @@ class AG0_TDLPhotoRenderer
         m_iCommandCount = 0;
         m_iVertexCount = 0;
 
-        if (m_PhotoData.HasRects())
+        if (m_PhotoData.HasTris())
+        {
+            DrawTris();
+        }
+        else if (m_PhotoData.HasRects())
         {
             DrawRects();
         }
@@ -874,6 +988,70 @@ class AG0_TDLPhotoRenderer
         }
     }
 
+    //! Engine cap is exclusive at 2400 indices per primitive; 798 triangles = 2394, the same
+    //! headroom the rect path keeps with 399 quads.
+    protected static const int MAX_TRIS_PER_COMMAND = 798;
+
+    //------------------------------------------------------------------------------------------------
+    //! Mesh path: TriMeshDrawCommands per wire mesh, vertices scaled from pixel space
+    //! with the same fit transform the rects use, so the two encodings line up exactly.
+    protected void DrawTris()
+    {
+        array<int> data = m_PhotoData.m_aTris;
+        int paletteSize = m_PhotoData.m_aPalette.Count();
+        int n = data.Count();
+        int off = 0;
+        while (off + 3 <= n)
+        {
+            int c  = data[off];
+            int nV = data[off + 1];
+            int nT = data[off + 2];
+            off += 3;
+            if (off + nV * 2 + nT * 3 > n)
+                break;
+
+            int vertsAt = off;
+            off += nV * 2;
+            int idxAt = off;
+            off += nT * 3;
+            if (c < 0 || c >= paletteSize || nV < 3 || nT <= 0)
+                continue;
+
+            // The engine rejects a primitive at 2400 indices, so a mesh goes out in runs of
+            // at most MAX_TRIS_PER_COMMAND triangles, each with its own re-indexed vertices.
+            int t0 = 0;
+            while (t0 < nT)
+            {
+                int tCount = nT - t0;
+                if (tCount > MAX_TRIS_PER_COMMAND)
+                    tCount = MAX_TRIS_PER_COMMAND;
+                array<float> verts = new array<float>();
+                array<int> idxs = new array<int>();
+                array<int> remap = new array<int>();
+                remap.Resize(nV);
+                for (int r = 0; r < nV; r++)
+                    remap[r] = -1;
+                for (int i = 0; i < tCount * 3; i++)
+                {
+                    int src = data[idxAt + (t0 * 3) + i];
+                    if (src < 0 || src >= nV)
+                        src = 0;
+                    int dst = remap[src];
+                    if (dst < 0)
+                    {
+                        dst = verts.Count() / 2;
+                        remap[src] = dst;
+                        verts.Insert(m_fOffsetX + data[vertsAt + src * 2] * m_fPixelSizeX);
+                        verts.Insert(m_fOffsetY + data[vertsAt + src * 2 + 1] * m_fPixelSizeY);
+                    }
+                    idxs.Insert(dst);
+                }
+                EmitTriMeshCommand(m_PhotoData.m_aPalette[c], verts, idxs);
+                t0 += tCount;
+            }
+        }
+    }
+
     //------------------------------------------------------------------------------------------------
     //! Pixel path with inline horizontal RLE. One pass over pixels, merges
     //! adjacent same-color pixels in each row into a single wide quad before
@@ -1049,6 +1227,11 @@ class AG0_TDLPhotoRenderer
         m_iVertexCount += verts.Count() / 2;
     }
     
+    //------------------------------------------------------------------------------------------------
+    //! The command list this renderer last built. Held by reference by the canvas, so a
+    //! caller that swaps between several renderers' lists must keep each renderer alive.
+    array<ref CanvasWidgetCommand> GetDrawCommands() { return m_aDrawCommands; }
+
     //------------------------------------------------------------------------------------------------
     int GetCommandCount() { return m_iCommandCount; }
     int GetVertexCount() { return m_iVertexCount; }

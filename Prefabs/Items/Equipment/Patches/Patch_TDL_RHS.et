@@ -1,0 +1,180 @@
+GameEntity {
+ ID "5DB09136945FC6DB"
+ components {
+  Persistence "{6A7409B85CF3ECBC}" {
+  }
+  SignalsManagerComponent "{6A7409B855EFF064}" {
+  }
+  SoundComponent "{6A7409B84E947DB8}" {
+   Filenames {
+    "{12A94705DF2BFD25}Sounds/Items/_SharedData/PickUp/Items_PickUp_Generic.acp" "{0737072109E39224}Sounds/Items/_SharedData/Drop/Items_Drop_Helmet.acp"
+   }
+   DistanceManagement 0
+  }
+  InventoryItemComponent "{5DB09136B1C985CE}" {
+   Attributes SCR_ItemAttributeCollection "{5DB09136B1C985C1}" {
+    ItemDisplayName SCR_ItemHintUIInfo "{5DB09136B1C985EB}" {
+     Name "TDL Patch - RHS"
+     Description "TDL Patch - RHS"
+     m_aItemHints {
+      SCR_InventoryItemHintUIInfo "{6A741C1FE7F73AE5}" {
+       Name "#RHS-UI_InventoryHint_CanBeattachedToVelcro"
+       Icon "{72869FB002B6ABC2}UI/Textures/InventoryIcons/Inspection-gizmo-patch-slot-M-alt-UI.edds"
+      }
+     }
+    }
+    ItemPhysAttributes ItemPhysicalAttributes "{6A741C1FD948CC54}" {
+     Weight 0.02
+     SizeSetupStrategy Size
+     ItemDimensions 1 1 1
+     RestingUP Forward
+     ActivePhysicalSimulation None
+    }
+    CustomAttributes {
+     PreviewRenderAttributes "{5DB09136B1C985C3}" {
+      CameraDistanceToItem 0.6
+      ItemRenderRotation 20 0 20
+      FOV 10
+     }
+     RHS_CustomAttributes "{6A741C1FAEAE45F6}" : "{29F1EFAA1B1C6CBA}Prefabs/Items/Equipment/Accessories/Core/RHS_CustomAttributes_VelcroMedium.conf" {
+     }
+    }
+    CommonItemType "RHS_PATCH"
+    m_Size SLOT_1x1
+    m_SlotType SLOT_GADGETS_STORAGE
+    m_bStackable 0
+   }
+  }
+  MeshObject "{5DB09136B1C985B5}" {
+   Object "{C7101DBA0092F0D6}Assets/TDL/Patch/TDL_Patch.xob"
+  }
+  RHS_SGC_RadialMenuComponent "{6A7409B835AE2183}" {
+  }
+  TDL_MarkingComponent "{6A742D14D9B6F3BF}" {
+   m_sDefaultText ""
+   m_eMode PROCEDURAL
+   m_Background 0 0 0 0
+   m_Thread 0.82 0.81 0.771 1
+  }
+  BaseLoadoutClothComponent "{5DB09136B1C9859A}" {
+   AreaType RHS_LoadoutMediumVelcroSlotArea "{6A741C1F1B2552B7}" {
+   }
+   Animate 1
+   WornModel "{C7101DBA0092F0D6}Assets/TDL/Patch/TDL_Patch.xob"
+   ItemModel "{C7101DBA0092F0D6}Assets/TDL/Patch/TDL_Patch.xob"
+  }
+  ActionsManagerComponent "{6A7409B82F3FADC7}" {
+   ActionContexts {
+    UserActionContext "{6A7409B82CE87113}" {
+     ContextName "default"
+     Position PointInfo "{6A7409B81F51B34F}" {
+     }
+    }
+   }
+   additionalActions {
+    SCR_PickUpItemAction "{6A7409B812D32A33}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo SCR_ActionUIInfo "{6A7409B8E0BE2828}" {
+      Name "#AR-Inventory_PickUp"
+      m_sIconName "pick-up"
+     }
+     "Sort Priority" 1
+    }
+    RHS_AttachToClothAction "{6A7409B80C262F2C}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo UIInfo "{6A7409B8A642AEED}" {
+      Name "#RHS-Action_Attach_To"
+     }
+     "Inventory action" 1
+     m_ClothFromArea LoadoutJacketArea "{6A7409B8BFA58CB6}" {
+     }
+    }
+    RHS_DetachFromClothAction "{6A7409B8916CD44E}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo UIInfo "{6A7409B97F9D212D}" {
+      Name "#RHS-Action_Detach_From"
+     }
+     "Sort Priority" 2
+     m_bIgnoreInRadial 0
+     m_sRadialLabelOverride "#RHS-Action_Detach_From"
+     m_ClothFromArea LoadoutHeadCoverArea "{6A7409B9723EC3D1}" {
+     }
+    }
+    RHS_ReplaceClothAction "{6A7409B9578FE426}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo UIInfo "{6A7409B94FF54833}" {
+      Name "#RHS-Action_Replace_With"
+     }
+     "Sort Priority" 1
+     "Inventory action" 1
+     m_sRadialLabelOverride "#RHS-Action_Replace_With"
+     m_ClothFromArea LoadoutAreaType "{6A7409B93DFE6071}" {
+     }
+    }
+    RHS_AttachToClothAction "{6A7409B92E8E3E59}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo UIInfo "{6A7409B92E8E59EB}" {
+      Name "#RHS-Action_Attach_To"
+     }
+     "Inventory action" 1
+     m_ClothFromArea LoadoutHeadCoverArea "{6A7409B9ECD088B8}" {
+     }
+    }
+    RHS_DetachFromClothAction "{6A7409B92244C751}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo UIInfo "{6A7409B92244C736}" {
+      Name "#RHS-Action_Detach_From"
+     }
+     "Sort Priority" 2
+     m_bIgnoreInRadial 0
+     m_sRadialLabelOverride "#RHS-Action_Detach_From"
+     m_ClothFromArea LoadoutHeadCoverArea "{6A7409B9E78597C1}" {
+     }
+    }
+    RHS_ReplaceClothAction "{6A7409B91D75422D}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo UIInfo "{6A7409B91D7541B4}" {
+      Name "#RHS-Action_Replace_With"
+     }
+     "Sort Priority" 1
+     "Inventory action" 1
+     m_sRadialLabelOverride "#RHS-Action_Replace_With"
+     m_ClothFromArea LoadoutHeadCoverArea "{6A7409B9E26F7F5C}" {
+     }
+    }
+    TDL_SetMarkingAction "{6A746254F71EF223}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo SCR_ActionUIInfo "{6A746254F2D8DA81}" {
+      Name "Set Patch Text"
+     }
+    }
+   }
+  }
+  BaseItemAnimationComponent "{6A7409B9D5AC9590}" {
+   AnimGraph "{6A8EE4A914596E5F}anims/workspaces/animals/Columba_livia_domestica/Columba_livia_domestica.agr"
+   AnimInstance "{8D91E38B00B5505F}anims/workspaces/animals/Columba_livia_domestica/pigeon.asi"
+  }
+  RplComponent "{6A7409414BBC4A59}" {
+   "Rpl State Override" Runtime
+   "Parent Node From Parent Entity" 0
+  }
+  Hierarchy "{6A7409B9C1159E0A}" {
+  }
+ }
+}

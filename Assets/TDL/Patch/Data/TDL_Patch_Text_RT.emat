@@ -1,0 +1,9 @@
+MatPBRBasic {
+ Cull none
+ Sort decal
+ AlphaTest 0.304
+ AlphaMul 0.809
+ BlendMode Additive
+ BCRMap "$rendertarget"
+ NMOMap "{38B89E4EA20EEA32}Assets/TDL/Patch/TDL_Patch_Face_NMO.edds"
+}

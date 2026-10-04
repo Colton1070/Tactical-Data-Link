@@ -98,4 +98,15 @@ class AG0_ATAKPluginBase
     // visibility; the plugin owns the panel contents.
     void OnPanelShown(Widget panelRoot) {}
     void OnPanelHidden() {}
+
+    //! Gamepad focus has moved into the side panel while this plugin owns
+    //! it: put focus on the control the player should start from.
+    void FocusPanel() {}
+
+    //! True while this plugin's panel is placing something at the map
+    //! crosshair. The controller keeps the crosshair drawn for as long as
+    //! the plugin owning the side panel says so; otherwise a mouse user,
+    //! who never moves the reticle, would be placing at a point they
+    //! cannot see.
+    bool WantsMapCrosshair() { return false; }
 }

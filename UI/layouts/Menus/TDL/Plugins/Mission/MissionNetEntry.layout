@@ -1,0 +1,25 @@
+HorizontalLayoutWidgetClass {
+ Name "InfoEntry"
+ {
+  TextWidgetClass "{4010826C5C1C1A08}" {
+   Name "InfoLabel"
+   Slot LayoutSlot "{5DEEB2F48F1061B6}" {
+    Padding 0 10 12 4
+    SizeMode Fill
+   }
+   Color 0.6 0.6 0.6 1
+   Text "HEADING"
+   "Font Size" 14
+  }
+  TextWidgetClass "{84479C4D432EA33C}" {
+   Name "InfoValue"
+   Slot LayoutSlot "{C93DACBE45FB2529}" {
+    Padding 0 10 0 4
+   }
+   Color 0.2 0.8 0.8 1
+   Text ""
+   "Font Size" 14
+   "Horizontal Alignment" Right
+  }
+ }
+}

@@ -410,6 +410,36 @@ class AG0_TDLSystem : WorldSystem
 	protected const float API_SHAPES_POLL_INTERVAL = 5.0;
     protected float m_fTimeSinceShapesPoll = 0;
 
+	// Mission briefs. A change on the web arrives as a mission_sync command
+	// within one queue poll; this slow poll is only the net under that, for
+	// a command that expired or was lost. Starts due so the first poll goes
+	// out as soon as the API key validates.
+	protected const float API_MISSIONS_POLL_INTERVAL = 30.0;
+	protected float m_fTimeSinceMissionsPoll = 30.0;
+	// How soon a poll that could not be sent is tried again. Not every
+	// tick: each refusal by the request gate counts as a dropped call in
+	// its saturation log, and one poll retrying per frame would swamp it.
+	protected const float API_MISSIONS_POLL_RETRY = 2.0;
+	// A player sees the missions on their networks, so joining or leaving
+	// a network changes what they should hold. Rather than hook every
+	// membership path, each player's set is re-derived on this interval
+	// and sent only when it differs from what they were last sent.
+	protected const float MISSIONS_CLIENT_SYNC_INTERVAL = 5.0;
+	protected float m_fTimeSinceMissionsClientSync = 0;
+	// playerId → key of the mission set last sent. Absent = was sent nothing,
+	// or was last told there is nothing for them.
+	protected ref map<int, string> m_mMissionPushKeys = new map<int, string>();
+	// Makes the key of a forced re-send differ from the one the client
+	// already applied, which it would otherwise drop as a repeat.
+	protected int m_iMissionResendSeq;
+	// Same per-string RPC limit as the terrain datasets — see TERRAIN_STRUCTURES_CHUNK_BYTES.
+	protected static const int MISSIONS_CHUNK_BYTES = 6000;
+	// Push key of a player whose networks carry no mission yet.
+	protected static const string MISSIONS_OPEN_PUSH_KEY = "open:";
+	// Longest arguments string a mission edit may carry. The largest real
+	// one is a step with its name and key call, a few hundred bytes.
+	protected static const int MISSION_EDIT_ARGS_MAX = 1024;
+
 	// ============================================
 	// WEB MIRROR — per-player snapshot store + tick
 	//
@@ -431,6 +461,8 @@ class AG0_TDLSystem : WorldSystem
 	// windows can't keep up with 3 Hz snapshot rate; the higher rate was
 	// triggering more visible drift/fight events on the web mirror than the
 	// extra responsiveness was worth. 2 Hz is the comfortable middle.
+	// SubmitMirrorData coalesces: a slow origin never has more than one of
+	// these POSTs outstanding, so the tick cannot fill the hot REST gate.
 	protected const float MIRROR_TICK_INTERVAL = 0.5;
 	protected float m_fTimeSinceMirrorTick = 0;
 
@@ -917,6 +949,10 @@ class AG0_TDLSystem : WorldSystem
         if (!m_bPlayerAuditHandlerRegistered)
             EnsurePlayerAuditHandlerRegistered();
 
+        TDL_MarkingRegistry markings = TDL_MarkingRegistry.GetInstance();
+        if (markings)
+            markings.EnsureSpawnHook();
+
         m_fTimeSinceLastUpdate += timeSlice;
         
         if (m_fTimeSinceLastUpdate >= m_fUpdateInterval)
@@ -953,6 +989,24 @@ class AG0_TDLSystem : WorldSystem
 			// Drain the shape-submit retry queue. Self-throttles on its own
 			// interval so the only cost here is the timeSlice push-through.
 			m_ApiManager.OnSubmitRetryTick(timeSlice);
+
+			// A poll refused before the API key validates is tried again
+			// shortly, not a whole interval later.
+			m_fTimeSinceMissionsPoll += timeSlice;
+			if (m_fTimeSinceMissionsPoll >= API_MISSIONS_POLL_INTERVAL)
+			{
+				if (m_ApiManager.PollMissions())
+					m_fTimeSinceMissionsPoll = 0;
+				else
+					m_fTimeSinceMissionsPoll = API_MISSIONS_POLL_INTERVAL - API_MISSIONS_POLL_RETRY;
+			}
+
+			m_fTimeSinceMissionsClientSync += timeSlice;
+			if (m_fTimeSinceMissionsClientSync >= MISSIONS_CLIENT_SYNC_INTERVAL)
+			{
+				SyncMissionsToClients();
+				m_fTimeSinceMissionsClientSync = 0;
+			}
 
 			// Mirror tick — no-op when nothing is mirrored (ApiSyncMirrorSnapshots
 			// short-circuits on empty m_aMirroredIdentities).
@@ -2662,6 +2716,216 @@ class AG0_TDLSystem : WorldSystem
 	}
 
 	//------------------------------------------------------------------------------------------------
+	//! Every network the player has a device on.
+	//! @return false when the player has no character to carry a device,
+	//! which says nothing about their networks either way.
+	protected bool CollectPlayerNetworkIds(int playerId, set<int> networkIds)
+	{
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr)
+			return false;
+
+		IEntity playerEntity = playerMgr.GetPlayerControlledEntity(playerId);
+		if (!playerEntity)
+			return false;
+
+		array<AG0_TDLDeviceComponent> playerDevices = GetPlayerAllTDLDevices(playerEntity);
+		foreach (AG0_TDLDeviceComponent device : playerDevices)
+		{
+			foreach (AG0_TDLNetwork network : m_aNetworks)
+			{
+				if (network.GetNetworkDevices().Contains(device))
+					networkIds.Insert(network.GetNetworkID());
+			}
+		}
+		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Send a player the missions on their networks, unless they already
+	//! hold exactly that set. A player on a network that carries none is
+	//! still sent an (empty) set while the web API is reachable: that is
+	//! what tells their ATAK it can start one. A player on no network, or
+	//! on a server without the API, gets one empty chunk, which clears
+	//! what they held.
+	//! @param force Send even if the set is unchanged.
+	protected void PushPlayerMissions(SCR_PlayerController controller, int playerId, AG0_TDLMissionManager missionMgr, bool force = false)
+	{
+		// A dead or respawning player keeps what they hold. Clearing it
+		// would only have it sent again a few seconds after they respawn.
+		set<int> networkIds = new set<int>();
+		if (!CollectPlayerNetworkIds(playerId, networkIds))
+			return;
+
+		string pushKey = missionMgr.GetPushKeyForNetworks(networkIds);
+		if (pushKey.IsEmpty() && !networkIds.IsEmpty() && m_ApiManager.CanCommunicate())
+			pushKey = MISSIONS_OPEN_PUSH_KEY + missionMgr.GetLastSyncHash();
+
+		string sentKey;
+		bool holdsMissions = m_mMissionPushKeys.Find(playerId, sentKey);
+
+		if (pushKey.IsEmpty())
+		{
+			if (!holdsMissions)
+				return;
+			m_mMissionPushKeys.Remove(playerId);
+			controller.ReceiveTDLMissionsChunk(string.Empty, System.GetUnixTime(), 1, 0, string.Empty);
+			return;
+		}
+
+		if (holdsMissions && sentKey == pushKey && !force)
+			return;
+		m_mMissionPushKeys.Set(playerId, pushKey);
+
+		if (force)
+		{
+			m_iMissionResendSeq = m_iMissionResendSeq + 1;
+			pushKey = string.Format("%1#%2", pushKey, m_iMissionResendSeq);
+		}
+
+		string packed = missionMgr.GetPackedMissionsForPlayer(networkIds, GetPlayerIdentityId(playerId));
+		int totalLen = packed.Length();
+		int totalChunks = (totalLen + MISSIONS_CHUNK_BYTES - 1) / MISSIONS_CHUNK_BYTES;
+		int serverTime = System.GetUnixTime();
+
+		for (int i = 0; i < totalChunks; i++)
+		{
+			int start = i * MISSIONS_CHUNK_BYTES;
+			int len = Math.Min(MISSIONS_CHUNK_BYTES, totalLen - start);
+			controller.ReceiveTDLMissionsChunk(pushKey, serverTime, totalChunks, i, packed.Substring(start, len));
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Bring every player's missions up to date. Costs nothing on a
+	//! server without the web API and nobody holding any.
+	void SyncMissionsToClients()
+	{
+		if (!Replication.IsServer() || !m_ApiManager)
+			return;
+
+		AG0_TDLMissionManager missionMgr = m_ApiManager.GetMissionManager();
+		if (!missionMgr)
+			return;
+		if (m_mMissionPushKeys.Count() == 0 && !m_ApiManager.CanCommunicate())
+			return;
+
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!playerMgr)
+			return;
+
+		array<int> playerIds = {};
+		playerMgr.GetPlayers(playerIds);
+
+		// Forget players who have left. A playerId can be handed to the
+		// next player to join, who must not inherit the leaver's key and
+		// be skipped as already up to date.
+		array<int> departed = {};
+		for (int i = 0; i < m_mMissionPushKeys.Count(); i++)
+		{
+			int heldBy = m_mMissionPushKeys.GetKey(i);
+			if (!playerIds.Contains(heldBy))
+				departed.Insert(heldBy);
+		}
+		foreach (int departedId : departed)
+		{
+			m_mMissionPushKeys.Remove(departedId);
+		}
+
+		foreach (int playerId : playerIds)
+		{
+			if (playerId <= 0)
+				continue;
+
+			SCR_PlayerController controller = SCR_PlayerController.Cast(playerMgr.GetPlayerController(playerId));
+			if (!controller)
+				continue;
+
+			PushPlayerMissions(controller, playerId, missionMgr);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Send a player their missions again even though the set is unchanged.
+	//! Their screen shows a change the API refused; this puts the real
+	//! state back.
+	void ResendMissionsToPlayer(int playerId)
+	{
+		if (!Replication.IsServer() || !m_ApiManager || playerId <= 0)
+			return;
+
+		AG0_TDLMissionManager missionMgr = m_ApiManager.GetMissionManager();
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (!missionMgr || !playerMgr)
+			return;
+
+		SCR_PlayerController controller = SCR_PlayerController.Cast(playerMgr.GetPlayerController(playerId));
+		if (!controller)
+			return;
+
+		PushPlayerMissions(controller, playerId, missionMgr, true);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! A player changed a mission from their ATAK: called a step, edited
+	//! the plan, placed a point, joined a group, or started a new mission.
+	//! Anyone on the mission's network may: holding that network's crypto
+	//! is what puts a player on the mission. What the operation means is
+	//! the API's business; this only establishes who is asking and that
+	//! they are on the network.
+	//! @param missionId Empty for the "create" operation.
+	//! @param argsJson The operation's arguments as a JSON object string.
+	void SubmitMissionEdit(int playerId, string missionId, string op, string argsJson)
+	{
+		if (!Replication.IsServer() || !m_ApiManager || playerId <= 0)
+			return;
+		if (op.IsEmpty() || argsJson.Length() > MISSION_EDIT_ARGS_MAX)
+			return;
+
+		AG0_TDLMissionManager missionMgr = m_ApiManager.GetMissionManager();
+		if (!missionMgr)
+			return;
+
+		set<int> networkIds = new set<int>();
+		CollectPlayerNetworkIds(playerId, networkIds);
+
+		int networkId = -1;
+		if (op == "create")
+		{
+			// A new mission goes to the network the player is on. With a
+			// device on several, the lowest id is as good a rule as any
+			// and gives the same answer every time.
+			for (int i = 0; i < networkIds.Count(); i++)
+			{
+				int id = networkIds.Get(i);
+				if (networkId < 0 || id < networkId)
+					networkId = id;
+			}
+			if (networkId < 0)
+				return;
+			missionId = string.Empty;
+		}
+		else
+		{
+			AG0_TDLMissionBrief brief = missionMgr.FindMission(missionId);
+			if (!brief || !networkIds.Contains(brief.m_iNetworkId))
+			{
+				ResendMissionsToPlayer(playerId);
+				return;
+			}
+			networkId = brief.m_iNetworkId;
+		}
+
+		string playerName;
+		PlayerManager playerMgr = GetGame().GetPlayerManager();
+		if (playerMgr)
+			playerName = playerMgr.GetPlayerName(playerId);
+
+		if (!m_ApiManager.SubmitMissionEdit(playerId, missionId, op, argsJson, networkId, playerName, GetPlayerIdentityId(playerId)))
+			ResendMissionsToPlayer(playerId);
+	}
+
+	//------------------------------------------------------------------------------------------------
 	//! Per-chunk wire-data budget for terrain structure delivery.
 	//!
 	//! Two distinct Reforger RPC constraints to respect:
@@ -2962,6 +3226,10 @@ class AG0_TDLSystem : WorldSystem
 		PushPlayerTerrainRoads(controller, playerId);
 		PushPlayerTerrainHeightmap(controller, playerId);
 		PushPlayerSatelliteResourceName(controller, playerId);
+
+		// A joining player holds no missions, whatever an earlier holder of
+		// this playerId was sent. The next client sync delivers theirs.
+		m_mMissionPushKeys.Remove(playerId);
 	}
 	
     //------------------------------------------------------------------------------------------------
@@ -3798,6 +4066,49 @@ class AG0_TDLSystem : WorldSystem
 	    m_ApiManager.SubmitData(json.SaveToString());
 	}
 	
+	//! Every connected player, so the API can answer "is X on this server" without X
+	//! having joined a network. Device / network flags come from the registered device
+	//! list so a player holding a device outside any network is still marked hasDevice.
+	protected array<ref AG0_TDLPlayerState> BuildPlayerStates()
+	{
+	    array<ref AG0_TDLPlayerState> states = {};
+	    PlayerManager playerMgr = GetGame().GetPlayerManager();
+	    if (!playerMgr)
+	        return states;
+
+	    set<int> playersWithDevice = new set<int>();
+	    set<int> playersInNetwork = new set<int>();
+	    foreach (AG0_TDLDeviceComponent device : m_aRegisteredNetworkDevices)
+	    {
+	        if (!device)
+	            continue;
+	        IEntity holder = GetPlayerFromDevice(device);
+	        if (!holder)
+	            continue;
+	        int holderId = playerMgr.GetPlayerIdFromControlledEntity(holder);
+	        if (holderId <= 0)
+	            continue;
+	        playersWithDevice.Insert(holderId);
+	        if (device.IsInNetwork())
+	            playersInNetwork.Insert(holderId);
+	    }
+
+	    array<int> playerIds = {};
+	    playerMgr.GetPlayers(playerIds);
+	    foreach (int playerId : playerIds)
+	    {
+	        AG0_TDLPlayerState st = new AG0_TDLPlayerState();
+	        st.playerId = playerId;
+	        st.playerName = playerMgr.GetPlayerName(playerId);
+	        st.playerIdentityId = GetPlayerIdentityId(playerId);
+	        st.playerPlatform = GetPlayerPlatform(playerId);
+	        st.hasDevice = playersWithDevice.Contains(playerId);
+	        st.inNetwork = playersInNetwork.Contains(playerId);
+	        states.Insert(st);
+	    }
+	    return states;
+	}
+
 	protected void ApiSyncFullState()
 	{
 	    if (!m_ApiManager || !m_ApiManager.CanCommunicate())
@@ -3883,6 +4194,7 @@ class AG0_TDLSystem : WorldSystem
 	    
 	    json.WriteValue("networks", networkStates);
 	    json.WriteValue("totalDevices", m_aRegisteredNetworkDevices.Count());
+	    json.WriteValue("players", BuildPlayerStates());
 	    
 		array<ref AG0_TDLMapMarkerState> markerStates = {};
 	    
@@ -4554,7 +4866,7 @@ class AG0_TDLSystem : WorldSystem
 		json.WriteValue("timestamp", System.GetUnixTime());
 		json.WriteValue("snapshots", entries);
 
-		m_ApiManager.SubmitData(json.SaveToString());
+		m_ApiManager.SubmitMirrorData(json.SaveToString());
 	}
 
 	// ApplyMirrorSnapshotDefaults was removed: shipping "fresh ATAK" defaults

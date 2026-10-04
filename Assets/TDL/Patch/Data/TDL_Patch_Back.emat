@@ -1,0 +1,4 @@
+MatPBRBasic {
+ BCRMap "{01DD9849119DD2DC}Assets/TDL/Patch/TDL_Patch_Back_BCR.edds"
+ NMOMap "{390523DBC8EA8042}Assets/TDL/Patch/TDL_Patch_Back_NMO.edds"
+}

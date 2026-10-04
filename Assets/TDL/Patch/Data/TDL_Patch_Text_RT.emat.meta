@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{AF25CA10915FF7DF}Assets/TDL/Patch/Data/TDL_Patch_Text_RT.emat"
+ Configurations {
+  EMATResourceClass PC {
+  }
+  EMATResourceClass XBOX_ONE : PC {
+  }
+  EMATResourceClass XBOX_SERIES : PC {
+  }
+  EMATResourceClass PS4 : PC {
+  }
+  EMATResourceClass PS5 : PC {
+  }
+  EMATResourceClass HEADLESS : PC {
+  }
+ }
+}

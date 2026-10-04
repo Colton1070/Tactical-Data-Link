@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{1E4C5BF1121F0FF6}Assets/TDL/Patch/Data/TDL_Patch_Back.emat"
+ Configurations {
+  EMATResourceClass PC {
+  }
+  EMATResourceClass XBOX_ONE : PC {
+  }
+  EMATResourceClass XBOX_SERIES : PC {
+  }
+  EMATResourceClass PS4 : PC {
+  }
+  EMATResourceClass PS5 : PC {
+  }
+  EMATResourceClass HEADLESS : PC {
+  }
+ }
+}

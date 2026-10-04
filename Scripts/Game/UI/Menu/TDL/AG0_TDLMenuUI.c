@@ -770,6 +770,14 @@ class AG0_TDLMenuUI : ChimeraMenuBase
                     GetGame().GetWorkspace().SetFocusedWidget(m_wMarkerToolBackButton);
                 break;
 
+            case ETDLPanelContent.PLUGIN_TOOL:
+            {
+                AG0_ATAKPluginBase panelPlugin = m_MenuController.GetActivePanelPlugin();
+                if (panelPlugin)
+                    panelPlugin.FocusPanel();
+                break;
+            }
+
             case ETDLPanelContent.NONE:
                 if (m_wNetworkButton)
                     GetGame().GetWorkspace().SetFocusedWidget(m_wNetworkButton);
@@ -800,6 +808,12 @@ class AG0_TDLMenuUI : ChimeraMenuBase
     protected void HandleInput()
     {
         if (!m_InputManager)
+            return;
+
+        // A dialog opened over this menu (a plugin asking for a name) owns Back while it is
+        // up. Without this the press that cancels the dialog also walks this menu out a level.
+        MenuManager menuManager = GetGame().GetMenuManager();
+        if (menuManager && menuManager.GetTopMenu() != this)
             return;
         
         if (m_InputManager.GetActionTriggered("MenuBack"))

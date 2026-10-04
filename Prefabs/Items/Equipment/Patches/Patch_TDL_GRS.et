@@ -1,0 +1,103 @@
+GameEntity {
+ ID "6A742D0C5C429C4C"
+ components {
+  Persistence "{6A742D0C5C42871E}" {
+  }
+  SignalsManagerComponent "{6A742D0C5C428A69}" {
+  }
+  SoundComponent "{6A742D0C5C428A6F}" {
+   Filenames {
+    "{12A94705DF2BFD25}Sounds/Items/_SharedData/PickUp/Items_PickUp_Generic.acp" "{0737072109E39224}Sounds/Items/_SharedData/Drop/Items_Drop_Helmet.acp"
+   }
+   DistanceManagement 0
+  }
+  InventoryItemComponent "{6A742D0C5C428A73}" {
+   Attributes SCR_ItemAttributeCollection "{6A742D0C5C428A7B}" {
+    ItemDisplayName SCR_ItemHintUIInfo "{6A742D0C5C428A7F}" {
+     Name "TDL Patch - GRS"
+     Description "TDL Patch - GRS"
+     m_aItemHints {
+      SCR_InventoryItemHintUIInfo "{6A742D0C5C428A05}" {
+       Name "#RHS-UI_InventoryHint_CanBeattachedToVelcro"
+       Icon "{72869FB002B6ABC2}UI/Textures/InventoryIcons/Inspection-gizmo-patch-slot-M-alt-UI.edds"
+      }
+     }
+    }
+    ItemPhysAttributes ItemPhysicalAttributes "{6A742D0C5C428A09}" {
+     Weight 0.02
+     SizeSetupStrategy Size
+     ItemDimensions 1 1 1
+     RestingUP Forward
+     ActivePhysicalSimulation None
+    }
+    CustomAttributes {
+     PreviewRenderAttributes "{6A742D0C5C428A0E}" {
+      CameraDistanceToItem 0.6
+      ItemRenderRotation 20 0 20
+      FOV 10
+     }
+    }
+    CommonItemType "GRS_PATCH"
+    m_Size SLOT_1x1
+    m_SlotType SLOT_GADGETS_STORAGE
+    m_bStackable 0
+   }
+  }
+  MeshObject "{6A742D0C5C428A15}" {
+   Object "{C7101DBA0092F0D6}Assets/TDL/Patch/TDL_Patch.xob"
+  }
+  RHS_SGC_RadialMenuComponent "{6A742D0C5C428A19}" {
+  }
+  TDL_MarkingComponent "{6A742D0C5C428A1D}" {
+   m_sDefaultText ""
+   m_Background 0 0 0 1
+   m_Thread 1 1 1 1
+  }
+  BaseLoadoutClothComponent "{6A742D0C5C428A20}" {
+   AreaType RHS_LoadoutMediumVelcroSlotArea "{6A742D0C5C428D4B}" {
+   }
+   Animate 1
+   WornModel "{C7101DBA0092F0D6}Assets/TDL/Patch/TDL_Patch.xob"
+   ItemModel "{C7101DBA0092F0D6}Assets/TDL/Patch/TDL_Patch.xob"
+  }
+  ActionsManagerComponent "{6A742D0C5C428D50}" {
+   ActionContexts {
+    UserActionContext "{6A742D0C5C428D55}" {
+     ContextName "default"
+     Position PointInfo "{6A742D0C5C428D58}" {
+     }
+    }
+   }
+   additionalActions {
+    SCR_PickUpItemAction "{6A742D0C5C428D5B}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo SCR_ActionUIInfo "{6A742D0C5C428D5E}" {
+      Name "#AR-Inventory_PickUp"
+      m_sIconName "pick-up"
+     }
+     "Sort Priority" 1
+    }
+    TDL_SetMarkingAction "{6A746254D4118218}" {
+     ParentContextList {
+      "default"
+     }
+     UIInfo SCR_ActionUIInfo "{6A746254D01C5B29}" {
+      Name "Set Patch Text"
+     }
+    }
+   }
+  }
+  BaseItemAnimationComponent "{6A742D0C5C428D09}" {
+   AnimGraph "{6A8EE4A914596E5F}anims/workspaces/animals/Columba_livia_domestica/Columba_livia_domestica.agr"
+   AnimInstance "{8D91E38B00B5505F}anims/workspaces/animals/Columba_livia_domestica/pigeon.asi"
+  }
+  RplComponent "{6A742D0C5C428D0E}" {
+   "Rpl State Override" Runtime
+   "Parent Node From Parent Entity" 0
+  }
+  Hierarchy "{6A742D0C5C428D11}" {
+  }
+ }
+}

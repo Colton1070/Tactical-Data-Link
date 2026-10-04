@@ -1,0 +1,355 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ Slot OverlayWidgetSlot "{EAA50BC7F66FBA44}" {
+  HorizontalAlign 3
+  VerticalAlign 3
+  Padding 8 8 8 8
+ }
+ {
+  FrameWidgetClass "{35215C790A51F870}" {
+   Name "FrameWidget"
+   Slot FrameWidgetSlot "{F5AF0BFD780B7DAC}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX 0
+    OffsetRight 0
+    SizeY 0
+    OffsetBottom 0
+   }
+   {
+    VerticalLayoutWidgetClass "{0B0B634386241C36}" {
+     Name "VerticalLayout0"
+     Slot FrameWidgetSlot "{89DC471B2D61AE64}" {
+      Anchor 0 0 1 1
+      PositionX 0
+      OffsetLeft 8
+      PositionY 0
+      OffsetTop 8
+      SizeX 0
+      OffsetRight 8
+      SizeY 0
+      OffsetBottom 8
+     }
+     {
+      HorizontalLayoutWidgetClass "{78C88F9219CE4EE1}" {
+       Name "Header"
+       Slot LayoutSlot "{4626BDAEA9669CB3}" {
+        Padding 4 4 4 2
+       }
+       {
+        TextWidgetClass "{290CE063E6CC3D6C}" {
+         Name "MissionName"
+         Slot LayoutSlot "{88B7BB74FEDA677E}" {
+          SizeMode Fill
+         }
+         Text "Mission"
+         "Font Size" 24
+        }
+        TextWidgetClass "{E8BFF3FCCE30C81B}" {
+         Name "MissionClock"
+         Slot LayoutSlot "{A206E359216A9EDB}" {
+          Padding 12 0 0 0
+         }
+         Color 0.2 0.8 0.8 1
+         Text "H-0:00:00"
+         "Font Size" 24
+         "Horizontal Alignment" Right
+        }
+       }
+      }
+      HorizontalLayoutWidgetClass "{53B4B60D1EFB5FE6}" {
+       Name "SubHeader"
+       Slot LayoutSlot "{C1219064C1942B74}" {
+        Padding 4 0 4 8
+       }
+       {
+        TextWidgetClass "{0B87677AB0573369}" {
+         Name "HHourText"
+         Slot LayoutSlot "{310818E278D20ED1}" {
+          VerticalAlign 1
+          SizeMode Fill
+         }
+         Color 0.6 0.6 0.6 1
+         Text "H-HOUR ON CALL"
+         "Font Size" 16
+        }
+        ButtonWidgetClass "{7C13FB4CE79FCA7C}" {
+         Name "SwitchButton"
+         Slot LayoutSlot "{0C56CDDDF3C75DD5}" {
+          VerticalAlign 1
+         }
+         components {
+          SCR_ModularButtonComponent "{B874236299BC95D8}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{3731E256B16DA6F9}" {
+             m_eEvents 6149
+             m_sWidgetName "SwitchText"
+             m_fAnimationTime 0.08
+             m_cDefault 0.75 0.75 0.75 1
+             m_cHovered 0.2 0.8 0.8 1
+             m_cActivated 0.2 0.8 0.8 1
+             m_cActivatedHovered 0.3 1 1 1
+             m_cClicked 0.3 1 1 1
+             m_cFocusGained 0.2 0.8 0.8 1
+             m_cFocusLost 0.75 0.75 0.75 1
+            }
+           }
+           m_bFocusOnMouseEnter 1
+          }
+         }
+         style blank
+         {
+          TextWidgetClass "{02FC31473AC162E9}" {
+           Name "SwitchText"
+           Slot ButtonWidgetSlot "{805A9665E3FA915D}" {
+           }
+           Text "1 / 1"
+           "Font Size" 18
+           "Horizontal Alignment" Center
+          }
+         }
+        }
+       }
+      }
+      HorizontalLayoutWidgetClass "{02871E957C644882}" {
+       Name "TabBar"
+       Slot LayoutSlot "{3C4D57A680B29F0C}" {
+        Padding 4 0 4 4
+       }
+       {
+        ButtonWidgetClass "{B9A90EAAD41DE58F}" {
+         Name "TabRun"
+         Slot LayoutSlot "{CF3A0CF576170C60}" {
+          Padding 0 0 0 0
+          SizeMode Fill
+         }
+         components {
+          SCR_ModularButtonComponent "{65278C6FF1DC5D00}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{BBCE7D93585EFD35}" {
+             m_eEvents 6149
+             m_sWidgetName "TabRunText"
+             m_fAnimationTime 0.08
+             m_cDefault 0.75 0.75 0.75 1
+             m_cHovered 0.2 0.8 0.8 1
+             m_cActivated 0.2 0.8 0.8 1
+             m_cActivatedHovered 0.3 1 1 1
+             m_cClicked 0.3 1 1 1
+             m_cFocusGained 0.2 0.8 0.8 1
+             m_cFocusLost 0.75 0.75 0.75 1
+            }
+           }
+           m_bFocusOnMouseEnter 1
+          }
+         }
+         style blank
+         {
+          TextWidgetClass "{B8BA161075A1E24D}" {
+           Name "TabRunText"
+           Slot ButtonWidgetSlot "{B4E88353B960DF5D}" {
+            Padding 0 6 0 6
+           }
+           Text "RUN"
+           "Font Size" 16
+           "Horizontal Alignment" Center
+          }
+         }
+        }
+        ButtonWidgetClass "{F76EA89BC7F6CA3A}" {
+         Name "TabPlan"
+         Slot LayoutSlot "{752D42B19B2EAE3F}" {
+          Padding 0 0 0 0
+          SizeMode Fill
+         }
+         components {
+          SCR_ModularButtonComponent "{9A38FC16653B0B1F}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{8FFFFAFA6E269545}" {
+             m_eEvents 6149
+             m_sWidgetName "TabPlanText"
+             m_fAnimationTime 0.08
+             m_cDefault 0.75 0.75 0.75 1
+             m_cHovered 0.2 0.8 0.8 1
+             m_cActivated 0.2 0.8 0.8 1
+             m_cActivatedHovered 0.3 1 1 1
+             m_cClicked 0.3 1 1 1
+             m_cFocusGained 0.2 0.8 0.8 1
+             m_cFocusLost 0.75 0.75 0.75 1
+            }
+           }
+           m_bFocusOnMouseEnter 1
+          }
+         }
+         style blank
+         {
+          TextWidgetClass "{BD88EAE06E242CF4}" {
+           Name "TabPlanText"
+           Slot ButtonWidgetSlot "{8D6DA09B812BDBDE}" {
+            Padding 0 6 0 6
+           }
+           Text "PLAN"
+           "Font Size" 16
+           "Horizontal Alignment" Center
+          }
+         }
+        }
+        ButtonWidgetClass "{4FB563B0EF4CD7B2}" {
+         Name "TabPoints"
+         Slot LayoutSlot "{B3D7FE36E155E71C}" {
+          Padding 0 0 0 0
+          SizeMode Fill
+         }
+         components {
+          SCR_ModularButtonComponent "{A96518075171C2CF}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{3710C59443C9993D}" {
+             m_eEvents 6149
+             m_sWidgetName "TabPointsText"
+             m_fAnimationTime 0.08
+             m_cDefault 0.75 0.75 0.75 1
+             m_cHovered 0.2 0.8 0.8 1
+             m_cActivated 0.2 0.8 0.8 1
+             m_cActivatedHovered 0.3 1 1 1
+             m_cClicked 0.3 1 1 1
+             m_cFocusGained 0.2 0.8 0.8 1
+             m_cFocusLost 0.75 0.75 0.75 1
+            }
+           }
+           m_bFocusOnMouseEnter 1
+          }
+         }
+         style blank
+         {
+          TextWidgetClass "{CFFE8EDFEC320F5D}" {
+           Name "TabPointsText"
+           Slot ButtonWidgetSlot "{4785849E79A59F3E}" {
+            Padding 0 6 0 6
+           }
+           Text "POINTS"
+           "Font Size" 16
+           "Horizontal Alignment" Center
+          }
+         }
+        }
+        ButtonWidgetClass "{71977A4D792711E5}" {
+         Name "TabTeam"
+         Slot LayoutSlot "{F20670E1C1CA09D1}" {
+          Padding 0 0 0 0
+          SizeMode Fill
+         }
+         components {
+          SCR_ModularButtonComponent "{5C25DDEDEBED2A12}" {
+           m_aEffects {
+            SCR_ButtonEffectColor "{2FCF0E72E710CA95}" {
+             m_eEvents 6149
+             m_sWidgetName "TabTeamText"
+             m_fAnimationTime 0.08
+             m_cDefault 0.75 0.75 0.75 1
+             m_cHovered 0.2 0.8 0.8 1
+             m_cActivated 0.2 0.8 0.8 1
+             m_cActivatedHovered 0.3 1 1 1
+             m_cClicked 0.3 1 1 1
+             m_cFocusGained 0.2 0.8 0.8 1
+             m_cFocusLost 0.75 0.75 0.75 1
+            }
+           }
+           m_bFocusOnMouseEnter 1
+          }
+         }
+         style blank
+         {
+          TextWidgetClass "{DBA3F21C115FD017}" {
+           Name "TabTeamText"
+           Slot ButtonWidgetSlot "{F5455452748F41D5}" {
+            Padding 0 6 0 6
+           }
+           Text "TEAM"
+           "Font Size" 16
+           "Horizontal Alignment" Center
+          }
+         }
+        }
+       }
+      }
+      ScrollLayoutWidgetClass "{924E17E43CB28440}" {
+       Name "ScrollLayout"
+       Slot LayoutSlot "{E39C0A2270891CF9}" {
+        Padding 4 4 4 4
+        SizeMode Fill
+       }
+       components {
+        SCR_GamepadScrollComponent "{A55927D0440CEB03}" {
+        }
+       }
+       {
+        VerticalLayoutWidgetClass "{1488776FA36D4D91}" {
+         Name "ScrollContent"
+         Slot AlignableSlot "{B1BE046FEAAC0237}" {
+          HorizontalAlign 3
+          VerticalAlign 0
+         }
+         {
+          RichTextWidgetClass "{E7FF6E7941E8F402}" {
+           Name "StatementText"
+           Slot LayoutSlot "{7C22E90DC551BD51}" {
+            Padding 0 0 0 8
+           }
+           Color 0.85 0.85 0.85 1
+           Text "Mission statement"
+           "Font Size" 16
+           Wrap 1
+          }
+          VerticalLayoutWidgetClass "{F5DE1A02EFDD8E3C}" {
+           Name "RowList"
+           Slot LayoutSlot "{C015A48DFB154BE5}" {
+           }
+          }
+         }
+        }
+       }
+      }
+      ButtonWidgetClass "{8E22FDAC3B3B34EE}" {
+       Name "CloseButton"
+       Slot LayoutSlot "{1A981EBC622423BA}" {
+        Padding 4 8 4 4
+       }
+       components {
+        SCR_ModularButtonComponent "{5B763254F3C0A134}" {
+         m_aEffects {
+          SCR_ButtonEffectColor "{26DFCD3ABC272885}" {
+           m_eEvents 6149
+           m_sWidgetName "Close"
+           m_fAnimationTime 0.08
+           m_cDefault 0.75 0.75 0.75 1
+           m_cHovered 0.2 0.8 0.8 1
+           m_cActivated 0.2 0.8 0.8 1
+           m_cActivatedHovered 0.3 1 1 1
+           m_cClicked 0.3 1 1 1
+           m_cFocusGained 0.2 0.8 0.8 1
+           m_cFocusLost 0.75 0.75 0.75 1
+          }
+         }
+         m_bFocusOnMouseEnter 1
+        }
+       }
+       style blank
+       {
+        TextWidgetClass "{D3C187C1173F7A87}" {
+         Name "Close"
+         Slot ButtonWidgetSlot "{4BEE31FC98C24C38}" {
+         }
+         Text "Close"
+         "Font Size" 22
+         "Horizontal Alignment" Center
+        }
+       }
+      }
+     }
+    }
+   }
+  }
+ }
+}

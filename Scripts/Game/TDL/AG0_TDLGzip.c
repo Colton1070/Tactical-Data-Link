@@ -70,6 +70,17 @@ class AG0_TDLGzip
     protected int m_iOutPos;             // write head into m_Output
     protected bool m_bError;
 
+    // --- resumable state (Begin/Step API) ---
+    // A block's tables live here while its symbols are being decoded, so a Step can
+    // return mid-block and the next one carries on from the same bit position.
+    protected ref AG0_TDLHuffman m_StepLen;
+    protected ref AG0_TDLHuffman m_StepDist;
+    protected bool m_bStepInBlock;       // tables built, symbols still streaming
+    protected bool m_bStepFinalBlock;    // the block in progress carries BFINAL
+    protected bool m_bStepDone;
+    protected int  m_iStepBudgetMs;      // 0 = unlimited (the one-shot Gunzip path)
+    protected int  m_iStepStart;
+
     //------------------------------------------------------------------------------------------------
     //! Write one byte to the output buffer at m_iOutPos. Pre-Resize from
     //! ISIZE means almost all writes hit existing storage; the grow path
@@ -103,6 +114,79 @@ class AG0_TDLGzip
         // Trim any over-allocation from the ISIZE-based pre-Resize.
         d.m_Output.Resize(d.m_iOutPos);
         return d.m_Output;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Resumable gunzip. Begin() parses the header; Step(ms) inflates until the budget is
+    //! spent and returns true while more remains; Failed() / TakeOutput() afterwards.
+    //! Used by the photo manager so a large payload never blocks a frame.
+    bool BeginGunzip(array<int> gzipBytes)
+    {
+        m_bStepDone = false;
+        m_bStepInBlock = false;
+        m_bStepFinalBlock = false;
+        if (!SkipGzipHeader(gzipBytes))
+        {
+            Print("[TDLGzip] bad gzip header", LogLevel.ERROR);
+            m_bError = true;
+            return false;
+        }
+        return true;
+    }
+
+    bool Step(int budgetMs)
+    {
+        if (m_bError || m_bStepDone)
+            return false;
+        m_iStepBudgetMs = budgetMs;
+        m_iStepStart = System.GetTickCount();
+
+        while (!m_bError)
+        {
+            if (!m_bStepInBlock)
+            {
+                int bfinal = ReadBits(1); if (m_bError) break;
+                int btype  = ReadBits(2); if (m_bError) break;
+                m_bStepFinalBlock = (bfinal == 1);
+
+                if (btype == 0)
+                {
+                    // Stored blocks are a memcpy; no need to resume inside one.
+                    if (!DecodeStored()) { m_bError = true; break; }
+                    if (m_bStepFinalBlock) { m_bStepDone = true; break; }
+                    continue;
+                }
+                // Build this block's tables, then stream its symbols under the budget. The
+                // table builders call DecodeSymbols themselves (one-shot path), so here they
+                // are asked to build only: the budget is set to a sentinel that makes the
+                // first symbol check pause immediately, and we pick up in m_bStepInBlock.
+                bool ok;
+                m_iStepBudgetMs = -1;   // see DecodeSymbolsBudgeted: negative = build tables, decode nothing
+                if (btype == 1) ok = DecodeFixed();
+                else if (btype == 2) ok = DecodeDynamic();
+                else ok = false;
+                m_iStepBudgetMs = budgetMs;
+                if (!ok && m_bError) break;
+                m_bStepInBlock = true;
+            }
+
+            int r = DecodeSymbolsBudgeted(m_StepLen, m_StepDist);
+            if (r < 0) { m_bError = true; break; }
+            if (r == 0) return true;          // budget spent, more to do
+            m_bStepInBlock = false;
+            if (m_bStepFinalBlock) { m_bStepDone = true; break; }
+        }
+        m_iStepBudgetMs = 0;
+        return false;
+    }
+
+    bool Failed() { return m_bError; }
+    bool Done() { return m_bStepDone && !m_bError; }
+
+    array<int> TakeOutput()
+    {
+        m_Output.Resize(m_iOutPos);
+        return m_Output;
     }
 
     //------------------------------------------------------------------------------------------------
@@ -320,6 +404,8 @@ class AG0_TDLGzip
         if (!ConstructHuffman(distcode, dlens, MAXDCODES))
             return false;
 
+        m_StepLen = lencode;
+        m_StepDist = distcode;
         return DecodeSymbols(lencode, distcode);
     }
 
@@ -423,6 +509,8 @@ class AG0_TDLGzip
         if (!ConstructHuffman(lencode, llens, hlit))   return false;
         if (!ConstructHuffman(distcode, dlens, hdist)) return false;
 
+        m_StepLen = lencode;
+        m_StepDist = distcode;
         return DecodeSymbols(lencode, distcode);
     }
 
@@ -433,6 +521,18 @@ class AG0_TDLGzip
     //! distance is decoded via distcode + distance table + `extra` bits.
     protected bool DecodeSymbols(AG0_TDLHuffman lencode, AG0_TDLHuffman distcode)
     {
+        return DecodeSymbolsBudgeted(lencode, distcode) == 1;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! As DecodeSymbols, but stops once m_iStepBudgetMs has elapsed (checked every 256
+    //! symbols). Returns 1 = block finished, 0 = paused with more to do, -1 = error. The
+    //! bit reader and output head are members, so a paused call resumes exactly.
+    protected int DecodeSymbolsBudgeted(AG0_TDLHuffman lencode, AG0_TDLHuffman distcode)
+    {
+        if (m_iStepBudgetMs < 0)
+            return 0;   // table-build only (resumable Step builds tables through DecodeFixed/Dynamic)
+        int sinceCheck = 0;
         // Length base & extra bits for codes 257..285 (RFC 1951 §3.2.5).
         const int lens[] = {
               3,   4,   5,   6,   7,   8,   9,  10,  11,  13,  15,  17,  19,  23,  27,
@@ -453,8 +553,19 @@ class AG0_TDLGzip
 
         while (true)
         {
+            if (m_iStepBudgetMs > 0)
+            {
+                sinceCheck++;
+                if (sinceCheck >= 256)
+                {
+                    sinceCheck = 0;
+                    if (System.GetTickCount() - m_iStepStart >= m_iStepBudgetMs)
+                        return 0;
+                }
+            }
+
             int sym = DecodeSymbol(lencode);
-            if (sym < 0) return false;
+            if (sym < 0) return -1;
 
             if (sym < 256)
             {
@@ -462,26 +573,26 @@ class AG0_TDLGzip
             }
             else if (sym == 256)
             {
-                return true;
+                return 1;
             }
             else
             {
                 int li = sym - 257;
-                if (li < 0 || li >= 29) return false;
+                if (li < 0 || li >= 29) return -1;
 
                 int length = lens[li] + ReadBits(lext[li]);
-                if (m_bError) return false;
+                if (m_bError) return -1;
 
                 int dsym = DecodeSymbol(distcode);
-                if (dsym < 0 || dsym >= 30) return false;
+                if (dsym < 0 || dsym >= 30) return -1;
 
                 int dist = dists[dsym] + ReadBits(dext[dsym]);
-                if (m_bError) return false;
+                if (m_bError) return -1;
 
                 // m_iOutPos is the logical end of decoded data; m_Output
                 // may extend further (pre-Resized to ISIZE) but those bytes
                 // are uninitialised. Use m_iOutPos for distance bounds.
-                if (dist > m_iOutPos) return false;
+                if (dist > m_iOutPos) return -1;
 
                 // LZ77 copy. Overlapping copies (dist < length) are legal and
                 // idiomatic in deflate — the classic "run-length" compression
@@ -493,7 +604,7 @@ class AG0_TDLGzip
                 }
             }
         }
-        return true;
+        return 1;
     }
 
     //------------------------------------------------------------------------------------------------

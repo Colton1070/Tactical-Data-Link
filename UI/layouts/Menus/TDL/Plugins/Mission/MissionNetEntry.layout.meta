@@ -1,0 +1,17 @@
+MetaFileClass {
+ Name "{E0C494F96EA88A3F}UI/layouts/Menus/TDL/Plugins/Mission/MissionNetEntry.layout"
+ Configurations {
+  LayoutResourceClass PC {
+  }
+  LayoutResourceClass XBOX_ONE : PC {
+  }
+  LayoutResourceClass XBOX_SERIES : PC {
+  }
+  LayoutResourceClass PS4 : PC {
+  }
+  LayoutResourceClass PS5 : PC {
+  }
+  LayoutResourceClass HEADLESS : PC {
+  }
+ }
+}

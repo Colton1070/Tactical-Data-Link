@@ -1,0 +1,4 @@
+MatPBRBasic {
+ BCRMap "$rendertarget"
+ NMOMap "{38B89E4EA20EEA32}Assets/TDL/Patch/TDL_Patch_Face_NMO.edds"
+}

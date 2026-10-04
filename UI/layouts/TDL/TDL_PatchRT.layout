@@ -1,0 +1,103 @@
+FrameWidgetClass {
+ Name "rootFrame"
+ {
+  RTTextureWidgetClass "{ADCFF9EBA32B121C}" {
+   Name "RTTexture0"
+   Slot FrameWidgetSlot "{EDAF42195108409F}" {
+    OffsetLeft 0
+    OffsetTop 0
+    SizeX 448
+    OffsetRight -448
+    SizeY 256
+    OffsetBottom -256
+   }
+   noclear 0
+   format "HDR High"
+   allowAlpha 1
+   {
+    FrameWidgetClass "{62CFD01A0AE57876}" {
+     Name "PatchFrame"
+     Slot FrameWidgetSlot "{06CD9FB213E552D6}" {
+      OffsetLeft 0
+      OffsetTop 0
+      SizeX 448
+      OffsetRight -448
+      SizeY 256
+      OffsetBottom -256
+     }
+     {
+      ImageWidgetClass "{E3C0BE95A37697C5}" {
+       Name "Swatch"
+       Slot FrameWidgetSlot "{5BB9709D3688C43B}" {
+        OffsetLeft 0
+        OffsetTop 0
+        SizeX 448
+        OffsetRight -448
+        SizeY 256
+        OffsetBottom -256
+       }
+      }
+      CanvasWidgetClass "{5BB9709D3688C43E}" {
+       Name "Fill"
+       Slot FrameWidgetSlot "{5BB9709D3688C43F}" {
+        OffsetLeft 0
+        OffsetTop 0
+        SizeX 448
+        OffsetRight -448
+        SizeY 256
+        OffsetBottom -256
+       }
+       Clipping True
+      }
+      CanvasWidgetClass "{5BB9709D3688C43C}" {
+       Name "Image"
+       Slot FrameWidgetSlot "{5BB9709D3688C43D}" {
+        OffsetLeft 0
+        OffsetTop 0
+        SizeX 448
+        OffsetRight -448
+        SizeY 256
+        OffsetBottom -256
+       }
+       Clipping True
+      }
+      TextWidgetClass "{753754EC9F46AF3B}" {
+       Name "Line1"
+       Slot FrameWidgetSlot "{3CC3D0E1595CEC64}" {
+        OffsetLeft 24
+        OffsetTop 24
+        SizeX 400
+        OffsetRight -424
+        SizeY 104
+        OffsetBottom -128
+       }
+       Color 0.86 0.82 0.66 1
+       Text "AG0"
+       "Font Size" 170
+       "Min Font Size" 24
+       "Horizontal Alignment" Center
+       "Vertical Alignment" Center
+      }
+      TextWidgetClass "{753754EC9F46AF3C}" {
+       Name "Line2"
+       Slot FrameWidgetSlot "{3CC3D0E1595CEC65}" {
+        OffsetLeft 24
+        OffsetTop 128
+        SizeX 400
+        OffsetRight -424
+        SizeY 104
+        OffsetBottom -232
+       }
+       Color 0.86 0.82 0.66 1
+       Text "TDL"
+       "Font Size" 170
+       "Min Font Size" 24
+       "Horizontal Alignment" Center
+       "Vertical Alignment" Center
+      }
+     }
+    }
+   }
+  }
+ }
+}

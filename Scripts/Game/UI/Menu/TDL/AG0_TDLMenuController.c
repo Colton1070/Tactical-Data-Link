@@ -207,6 +207,9 @@ class AG0_TDLMenuController
     // the same plugin instances and toolbar buttons. Built from
     // m_ActiveDevice.GetAvailablePlugins() in RefreshPlugins().
     protected ref array<ref AG0_ATAKPluginBase> m_aActivePlugins = {};
+    // Missions come to a player through network membership rather than a
+    // held device, so no device lists this plugin. The controller owns it.
+    protected ref AG0_ATAKPlugin_Mission m_MissionPlugin;
     protected ref array<Widget> m_aPluginToolbarButtons = {};
     protected ref array<ref AG0_PluginButtonClickRelay> m_aPluginClickRelays = {};
 
@@ -1110,8 +1113,20 @@ class AG0_TDLMenuController
             return;
         }
 
-        m_ActivePanelPlugin = plugin;
+        SetPanelPluginOwner(plugin);
         SetPanelContent(ETDLPanelContent.PLUGIN_TOOL);
+    }
+
+    //! Hand the plugin panel slot to a plugin. SetPanelContent hides a
+    //! plugin's panel only when the slot stops being a plugin panel, so a
+    //! switch straight from one plugin to another has to hide the outgoing
+    //! one here or both end up drawn in the slot.
+    protected void SetPanelPluginOwner(AG0_ATAKPluginBase plugin)
+    {
+        if (m_ActivePanelPlugin && m_ActivePanelPlugin != plugin && m_eActivePanel == ETDLPanelContent.PLUGIN_TOOL)
+            m_ActivePanelPlugin.OnPanelHidden();
+
+        m_ActivePanelPlugin = plugin;
     }
 
     // ============================================
@@ -3425,6 +3440,11 @@ class AG0_TDLMenuController
             m_aActivePlugins.Insert(plugin);
         }
 
+        if (!m_MissionPlugin)
+            m_MissionPlugin = new AG0_ATAKPlugin_Mission();
+        m_MissionPlugin.Enable(m_ActiveDevice, null, this);
+        m_aActivePlugins.Insert(m_MissionPlugin);
+
         foreach (AG0_ATAKPluginBase plugin : m_aActivePlugins)
         {
             if (plugin)
@@ -4130,8 +4150,31 @@ class AG0_TDLMenuController
 
         // Shown for the marker tool as before, and additionally whenever the reticle is
         // being used as a cursor — otherwise a pad user would be aiming something invisible.
+        // A plugin panel that places at the crosshair asks for it the same way.
+        bool pluginWantsIt = false;
+        if (m_eActivePanel == ETDLPanelContent.PLUGIN_TOOL && m_ActivePanelPlugin)
+            pluginWantsIt = m_ActivePanelPlugin.WantsMapCrosshair();
+
         m_wMarkerCrosshair.SetVisible(IsToolPanelActive()
-            || m_bCrosshairActive);
+            || m_bCrosshairActive || pluginWantsIt);
+    }
+
+    //! A plugin rebuilt widgets in the side panel or the toolbar. New widgets spawn focusable
+    //! whatever region is live, so the fence has to be put back around those two regions or
+    //! the d-pad could walk into one from the other.
+    //!
+    //! Not ApplyZoneFocusContainment: that also clears focus when the map region is live,
+    //! which is right for a region change the player made and wrong here. A plugin rebuilds
+    //! when the server pushes — someone else called a step — and that must not take focus
+    //! away from whatever this player is doing, least of all in another menu while a
+    //! world-space device ticks this controller in the background.
+    void OnPluginPanelRebuilt()
+    {
+        if (!ZONE_NAV_ENABLED || !IsDirectionalNavActive())
+            return;
+
+        SetSubtreeFocusable(m_wZoneToolbar, m_eFocusZone == ETDLFocusZone.TOOLBAR);
+        SetSubtreeFocusable(m_wZonePanel, m_eFocusZone == ETDLFocusZone.PANEL);
     }
 
     //! Tap-to-recenter for the 3D view. Rides the same per-click dispatch as
@@ -4733,7 +4776,7 @@ class AG0_TDLMenuController
             {
                 if (plugin && plugin.GetPluginID() == pluginId)
                 {
-                    m_ActivePanelPlugin = plugin;
+                    SetPanelPluginOwner(plugin);
                     break;
                 }
             }

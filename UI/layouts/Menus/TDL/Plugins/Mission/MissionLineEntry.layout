@@ -1,0 +1,81 @@
+ButtonWidgetClass {
+ Name "LineButton"
+ components {
+  SCR_ModularButtonComponent "{F2E275A68A55CC22}" {
+   m_aEffects {
+    SCR_ButtonEffectColor "{93033B4E78BE5C62}" {
+     m_eEvents 6149
+     m_sWidgetName "LineText"
+     m_fAnimationTime 0.08
+     m_cDefault 0.75 0.75 0.75 1
+     m_cHovered 0.2 0.8 0.8 1
+     m_cActivated 0.2 0.8 0.8 1
+     m_cActivatedHovered 0.3 1 1 1
+     m_cClicked 0.3 1 1 1
+     m_cFocusGained 0.2 0.8 0.8 1
+     m_cFocusLost 0.75 0.75 0.75 1
+    }
+   }
+   m_bFocusOnMouseEnter 1
+  }
+ }
+ style blank
+ {
+  VerticalLayoutWidgetClass "{A6D9405EEC7A20AD}" {
+   Name "LineLayout"
+   Slot ButtonWidgetSlot "{44826A046261CA9C}" {
+    HorizontalAlign 3
+    VerticalAlign 3
+    Padding 0 6 0 6
+   }
+   {
+    HorizontalLayoutWidgetClass "{2A329A85EF05AAB9}" {
+     Name "LineTop"
+     Slot LayoutSlot "{A9F20FC3CD69FA63}" {
+     }
+     {
+      TextWidgetClass "{ECCE17163DBDB1A3}" {
+       Name "LineTime"
+       Slot LayoutSlot "{554FBF6316A900F4}" {
+        SizeMode Fill
+       }
+       Color 0.6 0.6 0.6 1
+       Text "01  H-0:20  1910Z"
+       "Font Size" 14
+      }
+      TextWidgetClass "{2487C43467FD797A}" {
+       Name "LineState"
+       Slot LayoutSlot "{CC57B43EA15478D0}" {
+        Padding 8 0 0 0
+       }
+       Color 0.2 0.8 0.8 1
+       Text "NEXT"
+       "Font Size" 14
+       "Horizontal Alignment" Right
+      }
+     }
+    }
+    RichTextWidgetClass "{4F47AAAE2B328D49}" {
+     Name "LineText"
+     Slot LayoutSlot "{A9618ACA2E5FD7E0}" {
+      Padding 0 2 0 0
+     }
+     Color 0.75 0.75 0.75 1
+     Text "Group - Step"
+     "Font Size" 18
+     Wrap 1
+    }
+    RichTextWidgetClass "{34A0446FA11E1B36}" {
+     Name "LineCode"
+     Slot LayoutSlot "{C0F01F7D08A24C52}" {
+      Padding 0 2 0 0
+     }
+     Color 1 1 1 1
+     Text "KEY CALL"
+     "Font Size" 16
+     Wrap 1
+    }
+   }
+  }
+ }
+}

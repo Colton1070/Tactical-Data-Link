@@ -293,6 +293,7 @@ class AG0_TDLMapView
     
     // Shape label styling
     protected static const float SHAPE_LABEL_SIZE = 10;          // Font size in pixels
+    protected static const float SHAPE_POINT_RADIUS = 4;         // Point shape dot, pixels
     protected static const float SHAPE_LABEL_CHAR_WIDTH = 6.5;   // Approx px per character at label size
     protected static const float SHAPE_LABEL_HEIGHT = 12;        // Approx line height at label size
     protected static const float SHAPE_LABEL_PAD = 3;            // Background padding
@@ -600,6 +601,22 @@ class AG0_TDLMapView
         m_vCenterWorld = worldPos;
     }
     
+    //------------------------------------------------------------------------------------------------
+    //! Put a world position under the middle of the view, in whichever of the 2D map and
+    //! the 3D pane is showing. SetCenter alone does nothing in 3D: Draw() rewrites the 2D
+    //! centre from the orbit focus every frame while the pane is up.
+    void CenterOnWorld(vector worldPos)
+    {
+        AG0_TDLMap3DView view = GetHostedMap3DView();
+        if (view)
+        {
+            view.FocusOnWorld(worldPos);
+            return;
+        }
+
+        m_vCenterWorld = worldPos;
+    }
+
     //------------------------------------------------------------------------------------------------
     void CenterOnPlayer()
     {
@@ -2648,7 +2665,31 @@ class AG0_TDLMapView
 			case AG0_ETDLShapeType.ROUTE:
 				DrawShapeRoute(shape, pixelsPerWorldUnit);
 				break;
+
+			case AG0_ETDLShapeType.POINT:
+				DrawShapePoint(shape, screenX, screenY);
+				break;
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// POINT
+	// -----------------------------------------------------------------------
+
+	//------------------------------------------------------------------------------------------------
+	//! A dot the same size at every zoom: a point marks a place, and a
+	//! radius in metres would shrink it out of sight when zoomed out.
+	protected void DrawShapePoint(AG0_TDLMapShape shape, float cx, float cy)
+	{
+		array<float> verts = {};
+		TessellateCircle(cx, cy, SHAPE_POINT_RADIUS, 8, verts);
+
+		PolygonDrawCommand fill = new PolygonDrawCommand();
+		fill.m_iColor = shape.m_iStrokeColor;
+		fill.m_Vertices = verts;
+		m_aDrawCommands.Insert(fill);
+
+		DrawShapeLabel(shape, cx, cy - SHAPE_POINT_RADIUS - SHAPE_LABEL_HEIGHT);
 	}
 	
 	// -----------------------------------------------------------------------

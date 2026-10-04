@@ -117,6 +117,8 @@ class AG0_TDLPhotoFetchRequest
     ref AG0_TDLBase64Decoder m_PendingB64;
     ref array<int>           m_aPendingBytes;         // base64 output → gunzip input
     int                      m_iPendingT0;
+    string                   m_sQueuedJson;      // held while waiting for the decode slot
+    ref AG0_TDLGzip          m_PendingGz;        // resumable inflate, stepped per frame
     int                      m_iPendingTBatch;
 
     void AG0_TDLPhotoFetchRequest(int requestId, string url, string deliveryId)
@@ -224,6 +226,14 @@ class AG0_TDLPhotoManager
     //! ms of wall-clock time the resumable base64 decoder may consume per frame.
     //! 8ms ≈ half a 60fps frame — safe default. 4 = buttery. 12 = fast-but-hitchy.
     protected int m_iB64MsPerFrame        = 8;
+    //! Decodes run one at a time: N concurrent decoders cost N × m_iB64MsPerFrame per frame,
+    //! and a 16-frame animation arriving at once would stall the game. Queued requests wait
+    //! here; their timeout clock starts when they reach the front.
+    protected ref array<int> m_aDecodeQueue = {};
+    protected int m_iActiveDecodeRid = -1;
+    //! Deliveries decoding or decoded, so a second copy of the same chunks (resent to a
+    //! late joiner) is dropped instead of decoded again.
+    protected ref set<string> m_DecodingDeliveryIds = new set<string>();
 
     //! Diagnostic flag — when true, periodic sweep prints inflight/cache counters.
     protected bool m_bDebugMemory         = false;
@@ -444,9 +454,37 @@ class AG0_TDLPhotoManager
         req.m_CompletionCb = completionCb;
         m_PendingFetches.Set(requestId, req);
 
-        Print(string.Format("[TDL_PHOTO] rid=%1 DecodePhotoFromJson len=%2", requestId, jsonData.Length()), LogLevel.NORMAL);
-        BeginDecode(requestId, jsonData);
+        Print(string.Format("[TDL_PHOTO] rid=%1 DecodePhotoFromJson len=%2 (queue %3)", requestId, jsonData.Length(), m_aDecodeQueue.Count()), LogLevel.NORMAL);
+        req.m_sQueuedJson = jsonData;
+        m_aDecodeQueue.Insert(requestId);
+        PumpDecodeQueue();
         return requestId;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Start the next queued decode when none is running. Called on enqueue and on settle.
+    protected void PumpDecodeQueue()
+    {
+        if (m_iActiveDecodeRid >= 0)
+        {
+            if (m_PendingFetches.Contains(m_iActiveDecodeRid))
+                return;
+            m_iActiveDecodeRid = -1;   // settled behind our back (timeout sweep)
+        }
+        while (!m_aDecodeQueue.IsEmpty())
+        {
+            int rid = m_aDecodeQueue[0];
+            m_aDecodeQueue.RemoveOrdered(0);
+            AG0_TDLPhotoFetchRequest req = GetActiveFetch(rid);
+            if (!req)
+                continue;
+            m_iActiveDecodeRid = rid;
+            req.m_iStartedAtMs = System.GetTickCount();   // the timeout counts decode time, not queue time
+            string json = req.m_sQueuedJson;
+            req.m_sQueuedJson = "";
+            BeginDecode(rid, json);
+            return;
+        }
     }
 
     //----------------------------------------------------------------
@@ -618,6 +656,12 @@ class AG0_TDLPhotoManager
     //! image-message with this deliveryId.
     void OnReassemblyComplete(string deliveryId, string jsonBody)
     {
+        if (m_DecodedPhotos.Contains(deliveryId) || m_DecodingDeliveryIds.Contains(deliveryId))
+        {
+            Print(string.Format("[TDL_PHOTO] reassembly of %1 ignored — already decoded/decoding", deliveryId), LogLevel.NORMAL);
+            return;
+        }
+        m_DecodingDeliveryIds.Insert(deliveryId);
         int networkId = FindLocalNetworkIdForDeliveryId(deliveryId);
 
         Print(string.Format("[TDL_PHOTO] reassembly complete (deliveryId=%1 networkId=%2) — decoding",
@@ -659,6 +703,7 @@ class AG0_TDLPhotoManager
     //! locally and fires the failure invoker.
     void OnDecodedPhotoFailed(string deliveryId, int networkId, string reason)
     {
+        m_DecodingDeliveryIds.RemoveItem(deliveryId);
         Print(string.Format("[TDL_PHOTO] decode failed (deliveryId=%1 networkId=%2): %3",
             deliveryId, networkId, reason), LogLevel.WARNING);
 
@@ -858,14 +903,23 @@ class AG0_TDLPhotoManager
             return;
         }
 
+        string tgzField = "";
         string rgzField = "";
         string rField   = "";
         string dField   = "";
+        bool hasTgz = json.ReadValue("tgz", tgzField) && tgzField.Length() > 0;
         bool hasRgz = json.ReadValue("rgz", rgzField) && rgzField.Length() > 0;
         bool hasR   = json.ReadValue("r",   rField)   && rField.Length()   > 0;
         bool hasD   = json.ReadValue("d",   dField)   && dField.Length()   > 0;
 
-        if (hasRgz)
+        // Meshes win when the API sent them: it only does so when they draw cheaper than
+        // the rects for the same picture.
+        if (hasTgz)
+        {
+            req.m_sPendingFieldKind = "tgz";
+            req.m_sPendingPayload   = tgzField;
+        }
+        else if (hasRgz)
         {
             req.m_sPendingFieldKind = "rgz";
             req.m_sPendingPayload   = rgzField;
@@ -950,24 +1004,19 @@ class AG0_TDLPhotoManager
         array<int> bytes = req.m_aPendingBytes;
         req.m_aPendingBytes = null;
 
-        if (req.m_sPendingFieldKind == "rgz")
+        if (req.m_sPendingFieldKind == "tgz" || req.m_sPendingFieldKind == "rgz")
         {
-            int tA = System.GetTickCount();
-            array<int> raw = AG0_TDLGzip.Gunzip(bytes);
-            int tB = System.GetTickCount();
-            Print(string.Format("[TDL_PHOTO] rid=%1 T+%2ms (+%3ms): gunzip produced %4 bytes",
-                requestId, tB - req.m_iPendingT0, tB - tA, raw.Count()), LogLevel.NORMAL);
-
-            if (raw.Count() == 0)
+            // Inflate is the other big synchronous step (~200 ms for an 80 KB payload), so it
+            // is stepped across frames like the base64 pass; the parse that follows is cheap.
+            req.m_PendingGz = new AG0_TDLGzip();
+            if (!req.m_PendingGz.BeginGunzip(bytes))
             {
                 SettleFailure(requestId, "gunzip_failed");
                 return;
             }
-
-            req.m_PendingPhoto.m_aRects = AG0_TDLPhotoData.DecodeRectsFromBytes(raw);
-            int tC = System.GetTickCount();
-            Print(string.Format("[TDL_PHOTO] rid=%1 T+%2ms (+%3ms): %4 rects parsed",
-                requestId, tC - req.m_iPendingT0, tC - tB, req.m_PendingPhoto.GetRectCount()), LogLevel.NORMAL);
+            req.m_iPendingTBatch = System.GetTickCount();
+            GetGame().GetCallqueue().CallLater(StepGunzip, 0, false, requestId);
+            return;
         }
         else if (req.m_sPendingFieldKind == "r")
         {
@@ -989,6 +1038,56 @@ class AG0_TDLPhotoManager
         SettleSuccess(requestId, ready);
     }
 
+    //! One frame of inflate. Re-schedules itself until done, then parses on its own frame.
+    protected void StepGunzip(int requestId)
+    {
+        AG0_TDLPhotoFetchRequest req = GetActiveFetch(requestId);
+        if (!req || !req.m_PendingPhoto || !req.m_PendingGz)
+            return;
+
+        if (req.m_PendingGz.Step(m_iB64MsPerFrame))
+        {
+            GetGame().GetCallqueue().CallLater(StepGunzip, 0, false, requestId);
+            return;
+        }
+        if (req.m_PendingGz.Failed() || !req.m_PendingGz.Done())
+        {
+            req.m_PendingGz = null;
+            SettleFailure(requestId, "gunzip_failed");
+            return;
+        }
+        array<int> raw = req.m_PendingGz.TakeOutput();
+        req.m_PendingGz = null;
+        int tB = System.GetTickCount();
+        if (raw.Count() == 0)
+        {
+            SettleFailure(requestId, "gunzip_failed");
+            return;
+        }
+
+        if (req.m_sPendingFieldKind == "tgz")
+        {
+            int triCount;
+            req.m_PendingPhoto.m_aTris = AG0_TDLPhotoData.DecodeTrisFromBytes(raw, triCount);
+            req.m_PendingPhoto.m_iTriCount = triCount;
+            int tC = System.GetTickCount();
+            Print(string.Format("[TDL_PHOTO] rid=%1 T+%2ms (gunzip %3ms spread, +%4ms parse): %5 triangles",
+                requestId, tC - req.m_iPendingT0, tB - req.m_iPendingTBatch, tC - tB, triCount), LogLevel.NORMAL);
+        }
+        else
+        {
+            req.m_PendingPhoto.m_aRects = AG0_TDLPhotoData.DecodeRectsFromBytes(raw);
+            int tC = System.GetTickCount();
+            Print(string.Format("[TDL_PHOTO] rid=%1 T+%2ms (gunzip %3ms spread, +%4ms parse): %5 rects",
+                requestId, tC - req.m_iPendingT0, tB - req.m_iPendingTBatch, tC - tB, req.m_PendingPhoto.GetRectCount()), LogLevel.NORMAL);
+        }
+        // Hold the photo in a local: SettleSuccess disposes the request (nulling its
+        // m_PendingPhoto) before invoking the callback, and a parameter alone does not keep
+        // the object alive — the sink would receive null and silently cache nothing.
+        AG0_TDLPhotoData ready = req.m_PendingPhoto;
+        SettleSuccess(requestId, ready);
+    }
+
     //----------------------------------------------------------------
     // INTERNAL: SETTLEMENT (idempotent — exactly one fires per request)
     //----------------------------------------------------------------
@@ -1002,9 +1101,12 @@ class AG0_TDLPhotoManager
         AG0_TDLPhotoFetchCallback cb = req.m_CompletionCb;
         req.Dispose();
         m_PendingFetches.Remove(requestId);
+        if (requestId == m_iActiveDecodeRid)
+            m_iActiveDecodeRid = -1;
 
         if (cb)
             cb.OnPhotoReady(requestId, photo);
+        PumpDecodeQueue();
     }
 
     protected void SettleFailure(int requestId, string reason)
@@ -1014,6 +1116,9 @@ class AG0_TDLPhotoManager
             return;
 
         Print(string.Format("[TDL_PHOTO] rid=%1 settle failure: %2", requestId, reason), LogLevel.WARNING);
+        if (requestId == m_iActiveDecodeRid)
+            m_iActiveDecodeRid = -1;
+        m_aDecodeQueue.RemoveItem(requestId);
 
         AG0_TDLPhotoFetchCallback cb = req.m_CompletionCb;
         req.Dispose();
@@ -1021,6 +1126,7 @@ class AG0_TDLPhotoManager
 
         if (cb)
             cb.OnPhotoFailed(requestId, reason);
+        PumpDecodeQueue();
     }
 
     //----------------------------------------------------------------

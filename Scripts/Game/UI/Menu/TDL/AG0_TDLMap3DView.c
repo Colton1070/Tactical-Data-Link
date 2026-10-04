@@ -600,6 +600,8 @@ class AG0_TDLMap3DView
     //! puts a 10 pt shape label at roughly 30 ground-metres of text height on a 4 km
     //! map — the runway-number aesthetic, legible from operating altitude.
     protected static const float DRAPE_SHAPE_LABEL_MUL = 3.0;
+    //! Point shape dot radius in texels at DRAPE_STROKE_REFERENCE_PX.
+    protected static const float DRAPE_SHAPE_POINT_RADIUS = 9.0;
 
     //! Pill/label geometry mirrored from the 2D map's shape-label consts so both
     //! surfaces render the same proportions.
@@ -2365,7 +2367,30 @@ class AG0_TDLMap3DView
                 PaintDrapeShapeRoute(commands, shape, drapePx,
                     stroke, strokeScale, labelScale);
                 break;
+
+            case AG0_ETDLShapeType.POINT:
+                PaintDrapeShapePoint(commands, shape, cx, cy, baseScale, labelScale);
+                break;
         }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! A dot of fixed drape size, like the 2D map's fixed screen size: a point has no
+    //! radius in metres to scale by.
+    protected void PaintDrapeShapePoint(array<ref CanvasWidgetCommand> commands,
+        AG0_TDLMapShape shape, float cx, float cy, float baseScale, float labelScale)
+    {
+        float radius = DRAPE_SHAPE_POINT_RADIUS * baseScale;
+
+        array<float> verts;
+        TessellateDrapeEllipse(cx, cy, radius, radius, 12, verts);
+
+        PolygonDrawCommand fill = new PolygonDrawCommand();
+        fill.m_iColor = shape.m_iStrokeColor;
+        fill.m_Vertices = verts;
+        commands.Insert(fill);
+
+        AddDrapeShapeLabel(commands, shape, cx, cy - radius * 2, labelScale);
     }
 
     //------------------------------------------------------------------------------------------------

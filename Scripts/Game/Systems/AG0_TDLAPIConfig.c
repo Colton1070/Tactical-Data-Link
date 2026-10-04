@@ -126,6 +126,50 @@ class AG0_TDLApiSubmitCallback : RestCallback
 }
 
 //------------------------------------------------------------------------------------------------
+// REST Callback for atak_mirror_sync. Dedicated so completions are not mixed
+// with heartbeat / state_sync / event submits — those share
+// AG0_TDLApiSubmitCallback and cannot tell us when a mirror POST finished.
+// One in-flight mirror POST is the whole point of this callback: the 2 Hz
+// tick must coalesce onto the outstanding request instead of stacking 24
+// hung curls against a sick origin (see 2026-09-16 saturation / CF 520).
+//------------------------------------------------------------------------------------------------
+class AG0_TDLApiMirrorCallback : RestCallback
+{
+    protected AG0_TDLApiManager m_Manager;
+
+    //------------------------------------------------------------------------------------------------
+    void AG0_TDLApiMirrorCallback(AG0_TDLApiManager manager)
+    {
+        m_Manager = manager;
+        SetOnSuccess(OnSuccessHandler);
+        SetOnError(OnErrorHandler);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void OnSuccessHandler(RestCallback cb)
+    {
+        string data = cb.GetData();
+        if (m_Manager)
+            m_Manager.OnMirrorSubmitSuccess(data);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    void OnErrorHandler(RestCallback cb)
+    {
+        if (cb.GetRestResult() == ERestResult.EREST_ERROR_TIMEOUT)
+        {
+            if (m_Manager)
+                m_Manager.OnMirrorSubmitTimeout();
+            return;
+        }
+
+        int errorCode = cb.GetHttpCode();
+        if (m_Manager)
+            m_Manager.OnMirrorSubmitError(errorCode);
+    }
+}
+
+//------------------------------------------------------------------------------------------------
 // REST Callback for API Queue polling endpoint
 //------------------------------------------------------------------------------------------------
 class AG0_TDLApiQueueCallback : RestCallback
@@ -773,8 +817,14 @@ class AG0_TDLApiManager
     
     // REST Callbacks (must be kept as references)
     protected ref AG0_TDLApiSubmitCallback m_SubmitCallback;
+    protected ref AG0_TDLApiMirrorCallback m_MirrorCallback;
     protected ref AG0_TDLApiQueueCallback m_QueueCallback;
     protected ref AG0_TDLApiValidateCallback m_ValidateCallback;
+
+    // atak_mirror_sync: at most one POST in flight. Later ticks overwrite
+    // m_sPendingMirrorPayload and flush it when the outstanding call returns.
+    protected bool m_bMirrorSubmitInFlight;
+    protected string m_sPendingMirrorPayload;
     
     // Polling state
     protected float m_fTimeSinceLastPoll = 0;
@@ -786,6 +836,14 @@ class AG0_TDLApiManager
     protected bool m_bShapesPollInProgress = false;
     protected int m_iSuccessfulShapePolls = 0;
     protected int m_iFailedShapePolls = 0;
+
+    // Mission briefs (published from the web planner, read from /api/mod/missions)
+    protected ref AG0_TDLApiMissionsCallback m_MissionsCallback;
+    protected ref AG0_TDLMissionManager m_MissionManager;
+    protected bool m_bMissionsPollInProgress = false;
+    // A poll asked for while one is in flight. The one in flight may have
+    // been answered before the change that prompted this one.
+    protected bool m_bMissionsPollQueued = false;
 
     // Terrain structures (building footprints, streamed from /api/mod/terrain/structures)
     // Populated once after key-validation and on terrain_structures_refresh queue commands.
@@ -882,10 +940,13 @@ class AG0_TDLApiManager
     void AG0_TDLApiManager()
     {
         m_SubmitCallback = new AG0_TDLApiSubmitCallback(this);
+        m_MirrorCallback = new AG0_TDLApiMirrorCallback(this);
         m_QueueCallback = new AG0_TDLApiQueueCallback(this);
         m_ValidateCallback = new AG0_TDLApiValidateCallback(this);
 		m_ShapesCallback = new AG0_TDLApiShapesCallback(this);
 		m_ShapeManager = new AG0_TDLMapShapeManager();
+		m_MissionsCallback = new AG0_TDLApiMissionsCallback(this);
+		m_MissionManager = new AG0_TDLMissionManager();
 		m_TerrainStructuresCallback = new AG0_TDLApiTerrainStructuresCallback(this);
 		m_TerrainStructureManager = new AG0_TDLTerrainStructureManager();
 		m_TerrainRoadsCallback = new AG0_TDLApiTerrainRoadsCallback(this);
@@ -1207,8 +1268,8 @@ class AG0_TDLApiManager
     //! Poll cadence when the web mirror has at least one active subscriber.
     //! 0.5 s gives ~250 ms average inbound latency for web commands without
     //! materially adding to REST traffic — one extra GET per mirrored server
-    //! per second vs the 1s baseline. Outbound mirror tick is 3 Hz so the
-    //! visible round trip lands around 500 ms total.
+    //! per second vs the 1s baseline. Outbound mirror tick is 2 Hz; SubmitMirrorData
+    //! coalesces so a slow origin never has more than one of those POSTs in flight.
     protected const float MIRROR_FAST_POLL_SECONDS = 0.5;
     
     //------------------------------------------------------------------------------------------------
@@ -1267,6 +1328,66 @@ class AG0_TDLApiManager
         ctx.POST(m_SubmitCallback, "/submit", jsonData);
 
         return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Submit an atak_mirror_sync payload. At most one of these is in flight;
+    //! later ticks keep only the newest JSON and flush it when the outstanding
+    //! POST returns. Without this the 2 Hz mirror tick fills the hot gate the
+    //! moment origin latency exceeds the tick interval.
+    bool SubmitMirrorData(string jsonData)
+    {
+        if (!CanCommunicate())
+            return false;
+
+        if (m_bMirrorSubmitInFlight)
+        {
+            m_sPendingMirrorPayload = jsonData;
+            return true;
+        }
+
+        return BeginMirrorSubmit(jsonData);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected bool BeginMirrorSubmit(string jsonData)
+    {
+        if (!CanCommunicate())
+            return false;
+        if (!m_BreakerSubmit.AllowSend())
+            return false;
+        if (!m_HotGate.TryAcquire())
+            return false;
+
+        RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+        if (!ctx)
+        {
+            m_HotGate.Release();
+            Print("[TDL_API] Failed to get REST context for mirror submit", LogLevel.DEBUG);
+            return false;
+        }
+
+        string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
+        ctx.SetHeaders(headers);
+
+        m_bMirrorSubmitInFlight = true;
+        m_sPendingMirrorPayload = string.Empty;
+        ctx.POST(m_MirrorCallback, "/submit", jsonData);
+        return true;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Outstanding mirror POST finished. If a newer snapshot arrived while it
+    //! was in flight, send that now — one extra request, not a pile.
+    protected void FinishMirrorSubmit()
+    {
+        m_bMirrorSubmitInFlight = false;
+        if (m_sPendingMirrorPayload.IsEmpty())
+            return;
+
+        string pending = m_sPendingMirrorPayload;
+        m_sPendingMirrorPayload = string.Empty;
+        BeginMirrorSubmit(pending);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1359,6 +1480,37 @@ class AG0_TDLApiManager
         m_HotGate.Release();
         m_BreakerSubmit.OnFailure();
         m_iFailedSubmits++;
+    }
+
+    void OnMirrorSubmitSuccess(string data)
+    {
+        m_HotGate.Release();
+        m_BreakerSubmit.OnSuccess();
+        m_iSuccessfulSubmits++;
+        FinishMirrorSubmit();
+    }
+
+    void OnMirrorSubmitError(int errorCode)
+    {
+        m_HotGate.Release();
+        m_BreakerSubmit.OnFailure();
+        m_iFailedSubmits++;
+
+        if (errorCode == 401)
+        {
+            Print("[TDL_API] Mirror submit returned 401 - API key may have been revoked", LogLevel.WARNING);
+            m_bApiKeyValid = false;
+        }
+
+        FinishMirrorSubmit();
+    }
+
+    void OnMirrorSubmitTimeout()
+    {
+        m_HotGate.Release();
+        m_BreakerSubmit.OnFailure();
+        m_iFailedSubmits++;
+        FinishMirrorSubmit();
     }
 
     void OnQueuePollSuccess(string data)
@@ -1495,6 +1647,10 @@ class AG0_TDLApiManager
                 HandleShapesRefreshCommand();
                 break;
 
+			case "mission_sync":
+                HandleMissionSyncCommand();
+                break;
+
 			case "terrain_structures_refresh":
                 HandleTerrainStructuresRefreshCommand();
                 break;
@@ -1521,6 +1677,10 @@ class AG0_TDLApiManager
 
             case "image_deliver":
                 HandleImageDeliverCommand(cmdJson);
+                break;
+
+            case "marking_set":
+                HandleMarkingSetCommand(cmdJson);
                 break;
 
             case "mirror_subscribe":
@@ -1558,6 +1718,55 @@ class AG0_TDLApiManager
     //!   { ..., "playerIdentityId": "<uuid>" }
     //! Accepting both names lets the API rename freely without bricking the
     //! mod every time the contract shifts during this iteration.
+    //! marking_set — merge a player's markings into the server registry and stamp them
+    //! onto whatever marking items that player holds. Payload (flattened by /queue):
+    //!   { "type": "marking_set", "subjectKind": "player", "subjectId": "<uuid>",
+    //!     "slotKeys": ["patch", ...], "slotTexts": ["AG0/TEST", ...] }   // "" = delete slot
+    //! Unknown subject kinds are dropped, not errored, so the API can ship network /
+    //! server subjects before the mod understands them.
+    protected void HandleMarkingSetCommand(JsonLoadContext cmdJson)
+    {
+        string kind;
+        cmdJson.ReadValue("subjectKind", kind);
+        if (kind != "player")
+        {
+            Print(string.Format("[TDL_Marking] marking_set for unsupported subject kind '%1' ignored", kind), LogLevel.DEBUG);
+            return;
+        }
+        string identityId;
+        if (!cmdJson.ReadValue("subjectId", identityId) || identityId.IsEmpty())
+        {
+            Print("[TDL_Marking] marking_set missing subjectId", LogLevel.WARNING);
+            return;
+        }
+        array<string> keys = {};
+        array<string> texts = {};
+        array<string> imageIds = {};
+        cmdJson.ReadValue("slotKeys", keys);
+        cmdJson.ReadValue("slotTexts", texts);
+        bool hasImages = cmdJson.ReadValue("slotImageIds", imageIds) && imageIds.Count() > 0;
+
+        TDL_MarkingRegistry reg = TDL_MarkingRegistry.GetInstance();
+        if (!reg)
+            return;
+        reg.EnsureSpawnHook();
+        array<string> bgs = {};
+        array<string> fgs = {};
+        bool hasStyles = cmdJson.ReadValue("slotBg", bgs) && cmdJson.ReadValue("slotFg", fgs) && bgs.Count() > 0;
+        reg.Merge(identityId, keys, texts, false);
+        if (hasImages)
+        {
+            array<string> frames = {};
+            array<string> frameMs = {};
+            cmdJson.ReadValue("slotImageFrames", frames);
+            cmdJson.ReadValue("slotFrameMs", frameMs);
+            reg.MergeImages(identityId, keys, imageIds, false, frames, frameMs);
+        }
+        if (hasStyles)
+            reg.MergeStyles(identityId, keys, bgs, fgs, false);
+        reg.Apply(identityId);
+    }
+
     protected void HandleMirrorSubscribeCommand(JsonLoadContext cmdJson)
     {
         string identityId = ReadIdentityIdField(cmdJson);
@@ -2564,10 +2773,12 @@ class AG0_TDLApiManager
 		// Build query path — include syncHash for server-side short-circuit.
 		// Use the raw API epoch (no local-mutation suffix) so the API can
 		// still 304-equivalent when nothing has changed on its side.
-		string path = "/shapes";
+		// caps tells the API which shape types this build draws. Without
+		// "point" it sends point shapes as small circles instead.
+		string path = "/shapes?caps=point";
 		string lastHash = m_ShapeManager.GetApiPollSyncHash();
 		if (!lastHash.IsEmpty())
-			path = string.Format("/shapes?since=%1", lastHash);
+			path = string.Format("/shapes?since=%1&caps=point", lastHash);
 
 		ctx.GET(m_ShapesCallback, path);
 	}
@@ -3572,6 +3783,191 @@ class AG0_TDLApiManager
 	{
 		return m_TerrainHeightmapManager;
 	}
+
+	//------------------------------------------------------------------------------------------------
+	// Mission briefs
+	//
+	// Shares the shapes breaker: a published mission's map layer arrives
+	// through /shapes, so the two fail together on a host-level outage.
+	//------------------------------------------------------------------------------------------------
+
+	//------------------------------------------------------------------------------------------------
+	AG0_TDLMissionManager GetMissionManager()
+	{
+		return m_MissionManager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! A mission published to this server changed: its map layer, its
+	//! brief, or both. The command does not say which.
+	protected void HandleMissionSyncCommand()
+	{
+		PollShapes();
+		PollMissions();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! @return true when a request went out or one is already in flight.
+	bool PollMissions()
+	{
+		if (!CanCommunicate())
+			return false;
+
+		if (m_bMissionsPollInProgress)
+		{
+			m_bMissionsPollQueued = true;
+			return true;
+		}
+
+		if (!m_BreakerShapes.AllowSend())
+			return false;
+		if (!m_HotGate.TryAcquire())
+			return false;
+
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+		{
+			m_HotGate.Release();
+			return false;
+		}
+
+		string headers = string.Format("Authorization,Bearer %1", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		m_bMissionsPollInProgress = true;
+		m_bMissionsPollQueued = false;
+
+		string path = "/missions";
+		string lastHash = m_MissionManager.GetLastSyncHash();
+		if (!lastHash.IsEmpty())
+			path = string.Format("/missions?since=%1", lastHash);
+
+		ctx.GET(m_MissionsCallback, path);
+		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void OnMissionsPollSuccess(string data)
+	{
+		m_HotGate.Release();
+		m_BreakerShapes.OnSuccess();
+		m_bMissionsPollInProgress = false;
+
+		if (!data.IsEmpty() && m_MissionManager.ParseMissionsResponse(data))
+		{
+			AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+			if (tdlSystem)
+				tdlSystem.SyncMissionsToClients();
+		}
+
+		if (m_bMissionsPollQueued)
+			PollMissions();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! @param errorCode HTTP status, or 0 for a timeout.
+	void OnMissionsPollFailed(int errorCode)
+	{
+		m_HotGate.Release();
+		m_bMissionsPollInProgress = false;
+		m_bMissionsPollQueued = false;
+
+		// 404 is an API that predates this endpoint. The round-trip itself
+		// was clean, so it must not count toward tripping the breaker that
+		// the shapes poll shares.
+		if (errorCode == 404)
+			m_BreakerShapes.OnSuccess();
+		else
+			m_BreakerShapes.OnFailure();
+
+		if (errorCode == 401)
+		{
+			Print("[TDL_API] Missions poll returned 401 - API key may have been revoked", LogLevel.WARNING);
+			m_bApiKeyValid = false;
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Send a player's change to a mission: a step called, the plan
+	//! edited, a point placed, a group joined, a mission started. The API
+	//! is the only store of missions, so nothing is changed here: the
+	//! poll that follows a successful POST brings the result back for
+	//! everyone on the mission's network.
+	//! @param argsJson The operation's arguments as a JSON object string.
+	//! @param networkId Only read by the "create" operation.
+	//! @return false when the request could not be sent.
+	bool SubmitMissionEdit(int playerId, string missionId, string op, string argsJson, int networkId, string playerName, string identityId)
+	{
+		if (!CanCommunicate())
+			return false;
+		if (!m_BreakerShapes.AllowSend())
+			return false;
+		if (!m_HotGate.TryAcquire())
+			return false;
+
+		RestContext ctx = GetGame().GetRestApi().GetContext(API_BASE_URL);
+		if (!ctx)
+		{
+			m_HotGate.Release();
+			return false;
+		}
+
+		string headers = string.Format("Authorization,Bearer %1,Content-Type,application/json", m_Config.apiKey);
+		ctx.SetHeaders(headers);
+
+		// args travels as a string inside the body: the client built it,
+		// and writing it as a value lets the JSON writer do the escaping.
+		JsonSaveContext json = new JsonSaveContext();
+		json.WriteValue("op", op);
+		json.WriteValue("missionId", missionId);
+		json.WriteValue("args", argsJson);
+		json.WriteValue("networkId", networkId);
+		json.WriteValue("playerName", playerName);
+		json.WriteValue("playerIdentityId", identityId);
+
+		AG0_TDLApiMissionEditCallback cb = new AG0_TDLApiMissionEditCallback(this, playerId);
+		ctx.POST(cb, "/missions/edit", json.SaveToString());
+		return true;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void OnMissionEditSubmitted(int playerId, bool success, int errorCode)
+	{
+		m_HotGate.Release();
+
+		if (success)
+		{
+			m_BreakerShapes.OnSuccess();
+			PollMissions();
+			return;
+		}
+
+		// 4xx is the API refusing this edit (mission retracted, plan
+		// locked, step removed by someone else), not the host failing.
+		if (errorCode >= 400 && errorCode < 500)
+			m_BreakerShapes.OnSuccess();
+		else
+			m_BreakerShapes.OnFailure();
+
+		Print(string.Format("[TDL_API] Mission edit rejected: HTTP %1", errorCode), LogLevel.WARNING);
+
+		AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+		if (tdlSystem)
+			tdlSystem.ResendMissionsToPlayer(playerId);
+	}
+}
+
+//! One entry per connected player in state_sync, whether or not they hold a device or
+//! sit in a network. The API used to infer presence from networks[].devices[], which
+//! hid anyone outside a network from the mirror and from marking delivery.
+class AG0_TDLPlayerState
+{
+    int playerId;
+    string playerName;
+    string playerIdentityId;
+    int playerPlatform;
+    bool hasDevice;
+    bool inNetwork;
 }
 
 class AG0_TDLDeviceState

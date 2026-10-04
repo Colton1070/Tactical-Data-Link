@@ -665,6 +665,45 @@ modded class SCR_PlayerController
     }
     
     //------------------------------------------------------------------------------------------------
+    void RequestSetMarking(RplId patchRplId, string text)
+    {
+        Rpc(RpcAsk_SetMarking, patchRplId, text);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    [RplRpc(RplChannel.Reliable, RplRcver.Server)]
+    protected void RpcAsk_SetMarking(RplId patchRplId, string text)
+    {
+        RplComponent rpl = RplComponent.Cast(Replication.FindItem(patchRplId));
+        if (!rpl || !rpl.GetEntity())
+        {
+            Print(string.Format("[TDL_Marking] RpcAsk_SetMarking: no entity for RplId=%1", patchRplId), LogLevel.WARNING);
+            return;
+        }
+
+        TDL_MarkingComponent patch = TDL_MarkingComponent.Cast(rpl.GetEntity().FindComponent(TDL_MarkingComponent));
+        if (!patch)
+        {
+            Print(string.Format("[TDL_Marking] RpcAsk_SetMarking: entity for RplId=%1 has no TDL_MarkingComponent", patchRplId), LogLevel.WARNING);
+            return;
+        }
+
+        patch.SetText(text);
+
+        // Keep the identity-keyed record in step so a respawn, another server, and the
+        // website all agree with what was just typed in game.
+        TDL_MarkingRegistry reg = TDL_MarkingRegistry.GetInstance();
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (reg && system)
+        {
+            int playerId = GetPlayerId();
+            string identityId = system.GetPlayerIdentityId(playerId);
+            if (!identityId.IsEmpty())
+                reg.OnLocalSet(identityId, patch.GetSlot(), patch.GetText());
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
     void RequestSetCameraBroadcasting(RplId deviceRplId, bool broadcasting)
     {
         Rpc(RpcAsk_SetCameraBroadcasting, deviceRplId, broadcasting);
@@ -1478,6 +1517,65 @@ modded class SCR_PlayerController
 		}
 
 		tdl.CreateLocalShape(playerId, draftJson);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Mission briefs
+	//------------------------------------------------------------------------------------------------
+	protected ref AG0_TDLMissionManager m_TDLMissionManager = new AG0_TDLMissionManager();
+
+	//------------------------------------------------------------------------------------------------
+	//! The missions published to this player's networks.
+	AG0_TDLMissionManager GetTDLMissionManager()
+	{
+		return m_TDLMissionManager;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Server → Client: one chunk of the player's mission briefs.
+	//! Called by AG0_TDLSystem.PushPlayerMissions, once per chunk.
+	void ReceiveTDLMissionsChunk(string pushKey, int serverTime, int totalChunks, int chunkIndex, string chunkData)
+	{
+		Rpc(RpcDo_ReceiveTDLMissionsChunk, pushKey, serverTime, totalChunks, chunkIndex, chunkData);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Owner)]
+	protected void RpcDo_ReceiveTDLMissionsChunk(string pushKey, int serverTime, int totalChunks, int chunkIndex, string chunkData)
+	{
+		if (!m_TDLMissionManager)
+			m_TDLMissionManager = new AG0_TDLMissionManager();
+
+		m_TDLMissionManager.ReceiveChunk(pushKey, serverTime, totalChunks, chunkIndex, chunkData);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Client → Server: change a mission — call a step, edit the plan,
+	//! place a point, join a group, or start a new mission.
+	//! @param missionId Empty for the "create" operation.
+	//! @param op Operation name, as POST /api/mod/missions/edit takes it.
+	//! @param argsJson The operation's arguments as a JSON object string.
+	void AskMissionEdit(string missionId, string op, string argsJson)
+	{
+		Rpc(RpcAsk_MissionEdit, missionId, op, argsJson);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_MissionEdit(string missionId, string op, string argsJson)
+	{
+		if (op.IsEmpty())
+			return;
+
+		AG0_TDLSystem tdl = AG0_TDLSystem.GetInstance();
+		if (!tdl)
+			return;
+
+		int playerId = GetPlayerId();
+		if (playerId <= 0)
+			return;
+
+		tdl.SubmitMissionEdit(playerId, missionId, op, argsJson);
 	}
 
 	//------------------------------------------------------------------------------------------------
