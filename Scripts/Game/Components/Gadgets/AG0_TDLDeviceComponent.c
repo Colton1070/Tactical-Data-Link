@@ -1503,11 +1503,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		if (!ChimeraCharacter.Cast(carrier))
 			return;
 
-		AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-		if (!system)
-			return;
-
-		array<AG0_TDLDeviceComponent> devices = system.GetPlayerAllTDLDevices(carrier);
+		array<AG0_TDLDeviceComponent> devices = AG0_TDLSystem.CollectCarriedDevices(carrier);
 		foreach (AG0_TDLDeviceComponent device : devices)
 		{
 			if (device == this || !device.IsPowered())

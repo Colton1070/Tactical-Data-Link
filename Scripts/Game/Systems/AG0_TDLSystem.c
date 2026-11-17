@@ -1066,6 +1066,14 @@ class AG0_TDLSystem : WorldSystem
 	
 	array<AG0_TDLDeviceComponent> GetPlayerAllTDLDevices(IEntity playerEntity)
 	{
+	    return CollectCarriedDevices(playerEntity);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Every TDL device a character carries. Static because the system itself exists only on
+	//! the server, while clients need the same walk to work out what powers what.
+	static array<AG0_TDLDeviceComponent> CollectCarriedDevices(IEntity playerEntity)
+	{
 	    array<AG0_TDLDeviceComponent> allDevices = {};
 	    if (!playerEntity) return allDevices;
 	    
