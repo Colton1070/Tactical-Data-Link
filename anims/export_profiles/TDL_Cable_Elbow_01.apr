@@ -1,0 +1,33 @@
+$animExportProfile {
+ $tracks {
+   "Scene_Root"              ""                        "TRA"
+   "TDL_CableElbow_Armature" "Scene_Root"              "RA"
+   "plug_a_jack"             "TDL_CableElbow_Armature" "RA"
+   "plug_a"                  "TDL_CableElbow_Armature" "RA"
+   "cable_23"                "TDL_CableElbow_Armature" "RA"
+   "cable_22"                "TDL_CableElbow_Armature" "RA"
+   "cable_21"                "TDL_CableElbow_Armature" "RA"
+   "cable_20"                "TDL_CableElbow_Armature" "RA"
+   "cable_19"                "TDL_CableElbow_Armature" "RA"
+   "cable_18"                "TDL_CableElbow_Armature" "RA"
+   "cable_17"                "TDL_CableElbow_Armature" "RA"
+   "cable_16"                "TDL_CableElbow_Armature" "RA"
+   "cable_15"                "TDL_CableElbow_Armature" "RA"
+   "cable_14"                "TDL_CableElbow_Armature" "RA"
+   "cable_13"                "TDL_CableElbow_Armature" "RA"
+   "cable_12"                "TDL_CableElbow_Armature" "RA"
+   "cable_11"                "TDL_CableElbow_Armature" "RA"
+   "cable_10"                "TDL_CableElbow_Armature" "RA"
+   "cable_09"                "TDL_CableElbow_Armature" "RA"
+   "cable_08"                "TDL_CableElbow_Armature" "RA"
+   "cable_07"                "TDL_CableElbow_Armature" "RA"
+   "cable_06"                "TDL_CableElbow_Armature" "RA"
+   "cable_05"                "TDL_CableElbow_Armature" "RA"
+   "cable_04"                "TDL_CableElbow_Armature" "RA"
+   "cable_03"                "TDL_CableElbow_Armature" "RA"
+   "cable_02"                "TDL_CableElbow_Armature" "RA"
+   "cable_01"                "TDL_CableElbow_Armature" "RA"
+   "cable_00"                "TDL_CableElbow_Armature" "RA"
+  
+ }
+}

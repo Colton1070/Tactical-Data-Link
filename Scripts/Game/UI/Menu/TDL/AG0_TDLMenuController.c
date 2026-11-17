@@ -1144,7 +1144,12 @@ class AG0_TDLMenuController
             m_wDetailPlayerName.SetText(m_SelectedMember.GetPlayerName());
 
         if (m_wDetailSignalStrength)
-            m_wDetailSignalStrength.SetTextFormat("%1 dBm", m_SelectedMember.GetSignalStrength().ToString());
+        {
+            if (m_SelectedMember.IsStale())
+                m_wDetailSignalStrength.SetTextFormat("NO LINK - last heard %1 ago", m_SelectedMember.GetStaleAgeText());
+            else
+                m_wDetailSignalStrength.SetTextFormat("%1 dBm", m_SelectedMember.GetSignalStrength().ToString());
+        }
 
         if (m_wDetailNetworkIP)
             m_wDetailNetworkIP.SetText("192.168.0." + m_SelectedMember.GetNetworkIP().ToString());

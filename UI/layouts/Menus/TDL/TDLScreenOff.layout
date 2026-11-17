@@ -1,0 +1,33 @@
+FrameWidgetClass {
+ Name "ScreenOff"
+ Slot FrameWidgetSlot "{6B0E21A4D1D10001}" {
+  Anchor 0 0 1 1
+  PositionX 0
+  OffsetLeft 0
+  PositionY 0
+  OffsetTop 0
+  SizeX 0
+  OffsetRight 0
+  SizeY 0
+  OffsetBottom 0
+ }
+ "Ignore Cursor" 1
+ {
+  ImageWidgetClass "{6B0E21A4D1D10003}" {
+   Name "Black"
+   Slot FrameWidgetSlot "{6B0E21A4D1D10005}" {
+    Anchor 0 0 1 1
+    PositionX 0
+    OffsetLeft 0
+    PositionY 0
+    OffsetTop 0
+    SizeX 0
+    OffsetRight 0
+    SizeY 0
+    OffsetBottom 0
+   }
+   "Ignore Cursor" 1
+   Color 0 0 0 1
+  }
+ }
+}

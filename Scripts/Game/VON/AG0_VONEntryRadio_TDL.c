@@ -134,4 +134,25 @@ modded class SCR_VONEntryRadio : SCR_VONEntry
             entryComp.SetFrequencyColor(Color.FromInt(encryptionColor.PackToInt()));
         }
     }
+
+    //------------------------------------------------------------------------------------------------
+    //! A radio with no working antennas stays muted; the player's own setting comes back with
+    //! the antennas, so the toggle is refused rather than half-applied.
+    override bool ToggleMuteEntry()
+    {
+        if (m_RadioTransceiver)
+        {
+            BaseRadioComponent radio = m_RadioTransceiver.GetRadio();
+            if (radio)
+            {
+                AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(radio.GetOwner().FindComponent(AG0_TDLDeviceComponent));
+                if (device && device.IsReceiveBlocked())
+                {
+                    SCR_UISoundEntity.SoundEvent(SCR_SoundEvent.SOUND_RADIO_CHANGEFREQUENCY_ERROR);
+                    return true;
+                }
+            }
+        }
+        return super.ToggleMuteEntry();
+    }
 }

@@ -113,6 +113,9 @@ class AG0_TDLDisplayController
     protected const ResourceName SELF_MARKER_LAYOUT = "{A242BD2B06D27E00}UI/layouts/Menus/TDL/TDLMenuSelfMarker.layout";
     protected const ResourceName MEMBER_MARKER_LAYOUT = "{23872C52B88FDB59}UI/layouts/Menus/TDL/TDLMenuBuddyMarker.layout";
     protected const ResourceName MEMBER_CARD_LAYOUT = "{7C025C99261C96C5}UI/layouts/Menus/TDL/TDLMemberCardUI.layout";
+    //! A contact out of touch is drawn at its last position, faded rather than recoloured: the
+    //! marker's colour already carries affiliation.
+    protected const float STALE_MARKER_OPACITY = 0.4;
     
     //------------------------------------------------------------------------------------------------
     // PUBLIC API
@@ -901,8 +904,18 @@ class AG0_TDLDisplayController
         
         if (m_wNetworkStatus)
         {
-            if (memberData && memberData.Count() > 0)
-                m_wNetworkStatus.SetTextFormat("CONNECTED (%1 nodes)", memberData.Count());
+            int liveCount = 0;
+            if (memberData)
+            {
+                for (int i = 0; i < memberData.Count(); i++)
+                {
+                    AG0_TDLNetworkMember counted = memberData.Get(i);
+                    if (counted && !counted.IsStale())
+                        liveCount++;
+                }
+            }
+            if (liveCount > 0)
+                m_wNetworkStatus.SetTextFormat("CONNECTED (%1 nodes)", liveCount);
             else
                 m_wNetworkStatus.SetText("NO NETWORK");
         }
@@ -968,7 +981,7 @@ class AG0_TDLDisplayController
             bool isVisible = (layoutX >= -margin && layoutX <= layoutCanvasW + margin &&
                               layoutY >= -margin && layoutY <= layoutCanvasH + margin);
             
-            if (!isVisible)
+            if (!isVisible || member.IsPositionExpired())
             {
                 if (m_mMemberMarkers.Contains(memberId))
                 {
@@ -996,10 +1009,19 @@ class AG0_TDLDisplayController
             
             FrameSlot.SetPos(marker, layoutX, layoutY);
             marker.SetVisible(true);
-            
             TextWidget label = TextWidget.Cast(marker.FindAnyWidget("DeviceIdentifier"));
-            if (label)
-                label.SetText(member.GetPlayerName());
+            if (member.IsPositionStale())
+            {
+                marker.SetOpacity(STALE_MARKER_OPACITY);
+                if (label)
+                    label.SetText(member.GetPlayerName() + " " + member.GetPositionAgeText());
+            }
+            else
+            {
+                marker.SetOpacity(1);
+                if (label)
+                    label.SetText(member.GetPlayerName());
+            }
         }
         
         // Cleanup orphaned
@@ -1431,7 +1453,12 @@ class AG0_TDLDisplayController
         
         TextWidget nameText = TextWidget.Cast(card.FindAnyWidget("PlayerName"));
         if (nameText)
-            nameText.SetText(member.GetPlayerName());
+        {
+            if (member.IsPositionStale())
+                nameText.SetText(member.GetPlayerName() + "  LAST " + member.GetPositionAgeText());
+            else
+                nameText.SetText(member.GetPlayerName());
+        }
         
         TextWidget ipText = TextWidget.Cast(card.FindAnyWidget("NetworkIP"));
         if (ipText)
@@ -1441,7 +1468,9 @@ class AG0_TDLDisplayController
         if (statusDot)
         {
             float signal = member.GetSignalStrength();
-            if (signal >= 60)
+            if (member.IsStale())
+                statusDot.SetColor(Color.FromRGBA(110, 110, 110, 255));
+            else if (signal >= 60)
                 statusDot.SetColor(Color.FromRGBA(0, 200, 0, 255));
             else if (signal >= 30)
                 statusDot.SetColor(Color.FromRGBA(200, 200, 0, 255));
@@ -1479,7 +1508,7 @@ class AG0_TDLDisplayController
         array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
         foreach (AG0_TDLDeviceComponent device : devices)
         {
-            if (device && device.HasCapability(AG0_ETDLDeviceCapability.GPS_PROVIDER))
+            if (device && (device.GetActiveCapabilities() & AG0_ETDLDeviceCapability.GPS_PROVIDER) != 0)
                 return true;
         }
         return false;

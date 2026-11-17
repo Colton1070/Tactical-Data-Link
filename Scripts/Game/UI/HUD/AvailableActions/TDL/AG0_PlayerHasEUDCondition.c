@@ -9,17 +9,6 @@ class AG0_PlayerHasEUDCondition : SCR_AvailableActionCondition
         if (!controller)
             return GetReturnResult(false);
         
-        array<AG0_TDLDeviceComponent> devices = controller.GetHeldDevicesCached();
-        
-        foreach (AG0_TDLDeviceComponent device : devices)
-        {
-            TDL_EUDBoneComponent boneComp = TDL_EUDBoneComponent.Cast(
-                device.GetOwner().FindComponent(TDL_EUDBoneComponent)
-            );
-            if (boneComp)
-                return GetReturnResult(true);
-        }
-        
-        return GetReturnResult(false);
+        return GetReturnResult(controller.HasEUDHinge());
     }
 }

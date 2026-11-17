@@ -1,10 +1,10 @@
 class AG0_TDLNetworkMember
 {
     static const int MAX_PLAYER_NAME_LENGTH = 32;  // Fixed size for player name
-    static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1 + 4 + 4 + 1 + 4;
+    static const int DATA_SIZE = 4 + MAX_PLAYER_NAME_LENGTH + 12 + 4 + 4 + 4 + 1 + 1 + 4 + 4 + 1 + 4 + 1;
 	// RplId(4) + PlayerName(32) + Position(12) + Signal(4) + NetworkIP(4) + Capabilities(4) +
 	// IsPowered(1) + GPSActive(1) + OwnerPlayerId(4) + VideoSourceRplId(4) +
-	// IsBridged(1) + SourceNetworkId(4) = 75 bytes
+	// IsBridged(1) + SourceNetworkId(4) + FixLost(1) = 76 bytes
 
     protected RplId m_RplId;
     protected string m_sPlayerName;
@@ -23,6 +23,15 @@ class AG0_TDLNetworkMember
 	protected bool m_bIsBridged = false;
 	protected int m_iSourceNetworkId = -1;
 
+	// The device is linked but has no GPS antenna, so the position it sends is its last fix.
+	protected bool m_bFixLost;
+
+	// Client-side only, never serialized. A member the latest update left out keeps its last
+	// reported position and is drawn as stale, the way a TAK contact that stops reporting is.
+	protected float m_fLastHeardS;
+	protected bool m_bStale;
+	protected float m_fLastFixS;
+
     // Getters
     RplId GetRplId() { return m_RplId; }
     string GetPlayerName() { return m_sPlayerName; }
@@ -38,6 +47,108 @@ class AG0_TDLNetworkMember
 	RplId GetVideoSourceRplId() { return m_VideoSourceRplId; }
 	bool IsBridged() { return m_bIsBridged; }
 	int GetSourceNetworkId() { return m_iSourceNetworkId; }
+	bool IsPowered() { return m_bIsPowered; }
+	bool IsStale() { return m_bStale; }
+	float GetLastHeardS() { return m_fLastHeardS; }
+	bool IsFixLost() { return m_bFixLost; }
+	float GetLastFixS() { return m_fLastFixS; }
+
+	//------------------------------------------------------------------------------------------------
+	//! The drawn position is old: either the link is gone or the device lost its GPS fix.
+	//! Link-state UI (signal, NO LINK) reads IsStale instead, because a member without a fix
+	//! is still reachable.
+	bool IsPositionStale() { return m_bStale || m_bFixLost; }
+
+	//------------------------------------------------------------------------------------------------
+	//! Seconds since the drawn position was current; 0 while it is.
+	float GetPositionAgeS()
+	{
+		// Members that never went through MergeLive have no fix time; show them as just stale.
+		if (!IsPositionStale() || m_fLastFixS <= 0)
+			return 0;
+		return Now() - m_fLastFixS;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	string GetPositionAgeText()
+	{
+		return FormatAge(GetPositionAgeS());
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Seconds since this member was last in a live update; 0 while it is live.
+	float GetStaleAgeS()
+	{
+		if (!m_bStale)
+			return 0;
+		return Now() - m_fLastHeardS;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! "45s" under a minute, "12m" after, for list rows and map labels.
+	string GetStaleAgeText()
+	{
+		return FormatAge(GetStaleAgeS());
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! "45s" under a minute, "12m" after.
+	static string FormatAge(float seconds)
+	{
+		int age = seconds;
+		if (age < 60)
+			return string.Format("%1s", age);
+		return string.Format("%1m", age / 60);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	static float Now()
+	{
+		BaseWorld world = GetGame().GetWorld();
+		if (!world)
+			return 0;
+		return world.GetWorldTime() / 1000.0;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	void MarkHeard(float now)
+	{
+		m_bStale = false;
+		m_fLastHeardS = now;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Carries the fix time across updates: it only advances while the device has a fix, so
+	//! a member without one ages from the moment it lost it, not from its latest update.
+	void TrackFix(AG0_TDLNetworkMember previous, float now)
+	{
+		if (!m_bFixLost)
+		{
+			m_fLastFixS = now;
+			return;
+		}
+		if (previous && previous.m_bFixLost)
+			m_fLastFixS = previous.m_fLastFixS;
+		else
+			m_fLastFixS = now;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! A member without a fix for as long as an out-of-contact one is kept loses its map icon
+	//! the same way. It stays in the member list because it is still reachable.
+	bool IsPositionExpired()
+	{
+		return m_bFixLost && GetPositionAgeS() > AG0_TDLNetworkMembers.STALE_EXPIRE_S;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! What was live about the member goes with the link: no signal, no feed to open.
+	void MarkStale()
+	{
+		m_bStale = true;
+		m_fSignalStrength = 0;
+		m_VideoSourceRplId = RplId.Invalid();
+	}
 
     // Setters
     void SetRplId(RplId rplId) { m_RplId = rplId; }
@@ -50,6 +161,9 @@ class AG0_TDLNetworkMember
 	void SetVideoSourceRplId(RplId rplId) { m_VideoSourceRplId = rplId; }
 	void SetIsBridged(bool bridged) { m_bIsBridged = bridged; }
 	void SetSourceNetworkId(int networkId) { m_iSourceNetworkId = networkId; }
+	void SetIsPowered(bool powered) { m_bIsPowered = powered; }
+	void SetGPSActive(bool active) { m_bGPSActive = active; }
+	void SetFixLost(bool lost) { m_bFixLost = lost; }
 
     static bool Extract(AG0_TDLNetworkMember instance, ScriptCtx ctx, SSnapSerializerBase snapshot)
     {
@@ -105,6 +219,9 @@ class AG0_TDLNetworkMember
 
 		// SourceNetworkId - 4 bytes
 		snapshot.SerializeBytes(instance.m_iSourceNetworkId, 4);
+
+		// FixLost - 1 byte
+		snapshot.SerializeBytes(instance.m_bFixLost, 1);
 
         return true;
     }
@@ -166,6 +283,9 @@ class AG0_TDLNetworkMember
 		// SourceNetworkId - 4 bytes
 		snapshot.SerializeBytes(instance.m_iSourceNetworkId, 4);
 
+		// FixLost - 1 byte
+		snapshot.SerializeBytes(instance.m_bFixLost, 1);
+
         return true;
     }
 
@@ -195,6 +315,9 @@ class AG0_TDLNetworkMember
 // AG0_TDLNetworkMembers - container for array of members
 class AG0_TDLNetworkMembers
 {
+    //! How long a member out of contact is kept at its last position before it is dropped.
+    static const float STALE_EXPIRE_S = 300;
+
     [Attribute("")]
     ref array<ref AG0_TDLNetworkMember> m_aMembers;
 
@@ -256,6 +379,48 @@ class AG0_TDLNetworkMembers
             result.Add(member);
         }
 
+        return result;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Client: the member set after a live update. A member the update leaves out but the
+    //! network still lists is kept, stale, until STALE_EXPIRE_S; one the network no longer lists
+    //! goes at once, so a device that left, died or was deleted never lingers as a stale icon.
+    static AG0_TDLNetworkMembers MergeLive(AG0_TDLNetworkMembers previous, array<ref AG0_TDLNetworkMember> live, array<RplId> roster)
+    {
+        float now = AG0_TDLNetworkMember.Now();
+        AG0_TDLNetworkMembers result = new AG0_TDLNetworkMembers();
+        set<RplId> liveIds = new set<RplId>();
+        foreach (AG0_TDLNetworkMember member : live)
+        {
+            if (!member)
+                continue;
+            member.MarkHeard(now);
+
+            AG0_TDLNetworkMember before;
+            if (previous)
+                before = previous.GetByRplId(member.GetRplId());
+            member.TrackFix(before, now);
+
+            liveIds.Insert(member.GetRplId());
+            result.Add(member);
+        }
+        if (!previous || !roster)
+            return result;
+
+        set<RplId> rosterIds = new set<RplId>();
+        foreach (RplId id : roster)
+            rosterIds.Insert(id);
+        foreach (AG0_TDLNetworkMember old : previous.m_aMembers)
+        {
+            if (!old || liveIds.Contains(old.GetRplId()) || !rosterIds.Contains(old.GetRplId()))
+                continue;
+            if (!old.IsStale())
+                old.MarkStale();
+            if (now - old.GetLastHeardS() > STALE_EXPIRE_S)
+                continue;
+            result.Add(old);
+        }
         return result;
     }
 

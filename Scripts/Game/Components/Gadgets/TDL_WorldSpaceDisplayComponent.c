@@ -37,6 +37,20 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     // Display controller - handles all the ATAK logic
     protected ref AG0_TDLDisplayController m_DisplayController;
 
+    // The screen follows the device's active capabilities: a display with no power provider
+    // on its carrier, or one lying on the ground, has nothing to show. Polled rather than
+    // per frame because the capability check walks the carrier's inventory.
+    protected static const float POWER_POLL_INTERVAL_S = 0.25;
+    protected AG0_TDLDeviceComponent m_Device;
+    protected float m_fSincePowerPoll = POWER_POLL_INTERVAL_S;
+    protected bool m_bScreenPowered = true;
+
+    // Drawn over the ATAK layout while unpowered. Hiding the layout instead leaves the screen
+    // material sampling an empty target, which shows white rather than an off panel.
+    [Attribute("{991AC1B2E77C6746}UI/layouts/Menus/TDL/TDLScreenOff.layout", UIWidgets.ResourceNamePicker, "Layout shown over the screen while the device has no power", "layout")]
+    protected ResourceName m_ScreenOffLayout;
+    protected Widget m_wScreenOff;
+
     // Shared menu controller — drives panel state machine, plugin lifecycle,
     // chat, callsign save, camera broadcast toggle, and marker tool panel.
     //
@@ -91,6 +105,9 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     // AG0_TDLDeviceComponent.m_CameraAttachment's setup.
     [Attribute("", UIWidgets.Auto, "Focus camera pivot — bone/slot on this device the focus camera parents to", category: "Focus Mode")]
     ref PointInfo m_FocusCameraPivot;
+
+    [Attribute("0", UIWidgets.Slider, "Focus camera vertical field of view in degrees. Narrower fills more of the display with the screen without pushing the camera into it. 0 keeps the camera prefab's own", "0 120 1", category: "Focus Mode")]
+    protected float m_fFocusFOV;
 
     [Attribute("0.3", UIWidgets.Slider, "Focus enter/exit tween duration in seconds", "0.05 1.0 0.01", category: "Focus Mode")]
     protected float m_fFocusTweenDuration;
@@ -240,6 +257,12 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         SCR_PlayerController pc = SCR_PlayerController.Cast(GetGame().GetPlayerController());
         bool isHeld = pc && pc.IsHeldDevice(owner);
 
+        UpdateScreenPower(owner, timeSlice);
+        // An unpowered screen takes no input either; treating it as unheld tears the
+        // controller down and drops focus through the same path as putting it away.
+        if (!m_bScreenPowered)
+            isHeld = false;
+
         // Held-state transition: spin the menu controller up when the local
         // player picks this device up, tear it down when they drop it. There
         // should be at most one active controller per local player — and
@@ -272,6 +295,15 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
                 SetLookingAtScreen(false);
             m_bNearScreen = false;
             return;
+        }
+
+        // Held covers everything the player carries, a backpack included. Focus needs the
+        // screen in the hand or docked on worn gear; stowed anywhere else it is dropped.
+        if (m_eFocusState != TDL_EFocusState.IDLE)
+        {
+            IEntity carrier = pc.GetControlledEntity();
+            if (carrier && !TDL_CableManager.IsOnShow(owner, carrier))
+                ExitFocus(true);
         }
 
         // Focus state machine tick — runs every frame the device is held, regardless
@@ -480,6 +512,44 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
     // ============================================
     
     //------------------------------------------------------------------------------------------------
+    protected void UpdateScreenPower(IEntity owner, float timeSlice)
+    {
+        m_fSincePowerPoll += timeSlice;
+        if (m_fSincePowerPoll < POWER_POLL_INTERVAL_S)
+            return;
+        m_fSincePowerPoll = 0;
+
+        if (!m_Device)
+            m_Device = AG0_TDLDeviceComponent.Cast(owner.FindComponent(AG0_TDLDeviceComponent));
+
+        // A display with no TDL device behind it has no power model; leave it on.
+        bool powered = !m_Device || m_Device.GetActiveCapabilities() != 0;
+        if (powered == m_bScreenPowered)
+            return;
+
+        m_bScreenPowered = powered;
+        ApplyScreenPower();
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void ApplyScreenPower()
+    {
+        if (!m_RTWidget)
+            return;
+
+        if (!m_wScreenOff && m_ScreenOffLayout)
+        {
+            // Parented to the RT widget after the ATAK layout so it draws on top of it.
+            m_wScreenOff = GetGame().GetWorkspace().CreateWidgets(m_ScreenOffLayout, m_RTWidget);
+            if (m_wScreenOff)
+                m_wScreenOff.SetZOrder(10000);
+        }
+
+        if (m_wScreenOff)
+            m_wScreenOff.SetVisible(!m_bScreenPowered);
+    }
+
+    //------------------------------------------------------------------------------------------------
     protected void SetupRenderTarget(IEntity owner)
     {
         // Find the screen entity from slot
@@ -588,6 +658,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         
         // Bind to the screen mesh
         m_RTWidget.SetRenderTarget(m_ScreenEntity);
+        ApplyScreenPower();
         
         Print("[TDL_WorldSpaceDisplay] Render target bound, initializing display controller...", LogLevel.DEBUG);
         
@@ -1885,6 +1956,8 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         // visually identical in both position AND FOV — the tween eases purely in the
         // ENTERING state from that frame forward.
         m_fFocusNativeFOV = focusCam.GetVerticalFOV();
+        if (m_fFocusFOV > 0)
+            m_fFocusNativeFOV = m_fFocusFOV;
         m_fEntryPlayerFOV = m_OriginalCamera.GetVerticalFOV();
         focusCam.SetVerticalFOV(m_fEntryPlayerFOV);
 
@@ -2668,6 +2741,7 @@ class TDL_WorldSpaceDisplayComponent : ScriptGameComponent
         {
             m_wRTContainer.RemoveFromHierarchy();
             m_wRTContainer = null;
+            m_wScreenOff = null;
         }
         
         m_RTWidget = null;

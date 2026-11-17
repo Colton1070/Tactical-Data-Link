@@ -5,6 +5,12 @@ class TDL_MarkingRestCallback : RestCallback
     protected string m_sIdentityId;
     protected bool m_bIsFetch;
     protected bool m_bIsImage;
+    //! Text write-back only: what to restore if the API refuses the new text. The item is a
+    //! plain pointer on purpose, so it reads null if the item is deleted before the answer.
+    protected string m_sSlot;
+    protected string m_sPrevText;
+    protected TDL_MarkingComponent m_Item;
+    protected string m_sItemPrevText;
 
     void TDL_MarkingRestCallback(string identityId, bool isFetch, bool isImage = false)
     {
@@ -13,6 +19,14 @@ class TDL_MarkingRestCallback : RestCallback
         m_bIsImage = isImage;
         SetOnSuccess(OnSuccessHandler);
         SetOnError(OnErrorHandler);
+    }
+
+    void SetRevert(string slot, string prevText, TDL_MarkingComponent item, string itemPrevText)
+    {
+        m_sSlot = slot;
+        m_sPrevText = prevText;
+        m_Item = item;
+        m_sItemPrevText = itemPrevText;
     }
 
     void OnSuccessHandler(RestCallback cb)
@@ -35,6 +49,8 @@ class TDL_MarkingRestCallback : RestCallback
             reg.OnImageFetchFailure(m_sIdentityId, cb.GetHttpCode());
         else if (m_bIsFetch)
             reg.OnFetchFailure(m_sIdentityId, cb.GetHttpCode());
+        else if (cb.GetHttpCode() == 422 && !m_sSlot.IsEmpty())
+            reg.OnWriteRejected(m_sIdentityId, m_sSlot, m_sPrevText, m_Item, m_sItemPrevText);
         else
             Print(string.Format("[TDL_Marking] write-back for %1 failed http=%2", m_sIdentityId, cb.GetHttpCode()), LogLevel.WARNING);
     }
@@ -83,6 +99,12 @@ class TDL_MarkingRegistry
     protected ref set<string> m_FetchInFlight = new set<string>();
     protected ref map<string, ref TDL_MarkingRestCallback> m_Callbacks = new map<string, ref TDL_MarkingRestCallback>();
     protected bool m_bSpawnHookRegistered;
+    //! playerId -> identity as last resolved. The backend has stopped answering for a player
+    //! by the time their disconnect fires, so the leave path reads it from here.
+    protected ref map<int, string> m_PlayerIdentities = new map<int, string>();
+    //! Identities an admin has locked. Kept across a disconnect so rejoining does not lift it;
+    //! gone on server restart.
+    protected ref set<string> m_Locked = new set<string>();
 
     //------------------------------------------------------------------------------------------------
     static TDL_MarkingRegistry GetInstance()
@@ -113,6 +135,9 @@ class TDL_MarkingRegistry
         ScriptInvokerBase<SCR_BaseGameMode_PlayerId> audit = gameMode.GetOnPlayerAuditSuccess();
         if (audit)
             audit.Insert(OnPlayerAudited);
+        ScriptInvokerBase<SCR_BaseGameMode_OnPlayerDisconnected> left = gameMode.GetOnPlayerDisconnected();
+        if (left)
+            left.Insert(OnPlayerDisconnected);
         m_bSpawnHookRegistered = true;
 
         // Anyone already in the session (the host, players who joined before the registry
@@ -143,6 +168,25 @@ class TDL_MarkingRegistry
         if (identityId.IsEmpty())
             return;
         GetGame().GetCallqueue().CallLater(ResolveAndApply, 750, false, identityId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! A linked player is pulled from the API again when they return and an unlinked one was
+    //! only ever promised "until you leave", so nothing is lost by dropping the record here.
+    protected void OnPlayerDisconnected(int playerId, KickCauseCode cause, int timeout)
+    {
+        foreach (string imageId, set<int> sentTo : m_ImageSentTo)
+            sentTo.RemoveItem(playerId);
+        string identityId;
+        if (!m_PlayerIdentities.Find(playerId, identityId))
+            return;
+        m_PlayerIdentities.Remove(playerId);
+        m_Records.Remove(identityId);
+        m_Images.Remove(identityId);
+        m_ImageFrames.Remove(identityId);
+        m_FrameMs.Remove(identityId);
+        m_Styles.Remove(identityId);
+        m_Fetched.RemoveItem(identityId);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -177,6 +221,11 @@ class TDL_MarkingRegistry
         string identityId = IdentityForPlayer(playerId);
         if (identityId.IsEmpty() || !item)
             return;
+        if (m_Locked.Contains(identityId))
+        {
+            Blank(item);
+            return;
+        }
         map<string, string> rec = m_Records.Get(identityId);
         map<string, string> images = m_Images.Get(identityId);
         if (rec)
@@ -191,7 +240,10 @@ class TDL_MarkingRegistry
             string frameList;
             int frameMs;
             if (ImageReadyFor(identityId, item.GetSlot(), imageId, frameList, frameMs))
+            {
+                EnsureDelivered(imageId, frameList);
                 item.SetImage(imageId, frameList, frameMs);
+            }
         }
         map<string, ref TDL_MarkingStyle> styles = m_Styles.Get(identityId);
         if (styles)
@@ -430,16 +482,147 @@ class TDL_MarkingRegistry
     //------------------------------------------------------------------------------------------------
     //! In-game dialog path: keep the registry current and tell the API, so the site shows
     //! the value and other servers pull it on spawn.
-    void OnLocalSet(string identityId, string slot, string text, bool applyNow = true)
+    void OnLocalSet(string identityId, string slot, string text, bool applyNow = true,
+                    TDL_MarkingComponent item = null, string itemPrevText = "")
     {
         if (identityId.IsEmpty() || slot.IsEmpty())
             return;
+        string prevText = "";
+        map<string, string> rec = m_Records.Get(identityId);
+        if (rec)
+            rec.Find(slot, prevText);
         array<string> keys = {};
         array<string> texts = {};
         keys.Insert(slot);
         texts.Insert(text);
         Merge(identityId, keys, texts, applyNow);
-        WriteBack(identityId, slot, text);
+        WriteBack(identityId, slot, text, prevText, item, itemPrevText);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! The API refused text that was already stamped (its word list is not mirrored here, and
+    //! waiting on the answer before stamping would leave servers without the API unable to
+    //! set anything). Put the record back, then the item itself: an item set on the ground
+    //! is in nobody's inventory, so Apply alone would never reach it.
+    void OnWriteRejected(string identityId, string slot, string prevText, TDL_MarkingComponent item, string itemPrevText)
+    {
+        Print(string.Format("[TDL_Marking] API rejected %1 text for %2; previous text restored", slot, identityId), LogLevel.WARNING);
+        array<string> keys = {};
+        array<string> texts = {};
+        keys.Insert(slot);
+        texts.Insert(prevText);
+        Merge(identityId, keys, texts, true);
+        if (item)
+            item.SetText(itemPrevText);
+    }
+
+    // ============================================
+    // Admin
+    // ============================================
+
+    //------------------------------------------------------------------------------------------------
+    bool IsLocked(string identityId)
+    {
+        return m_Locked.Contains(identityId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Locked: every marking item the player holds shows its prefab default and every write
+    //! path refuses them. The record itself is left alone, so unlocking brings it back.
+    void SetLocked(string identityId, bool locked)
+    {
+        if (identityId.IsEmpty())
+            return;
+        if (locked)
+        {
+            m_Locked.Insert(identityId);
+            BlankHeld(identityId);
+            return;
+        }
+        m_Locked.RemoveItem(identityId);
+        Apply(identityId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! One-off wipe for this session. Nothing is written back: one server's admin does not get
+    //! to edit the player's account, and the player can set a marking again unless locked.
+    void AdminClear(string identityId)
+    {
+        if (identityId.IsEmpty())
+            return;
+        array<string> slots;
+        GetSlotsInUse(identityId, slots);
+        map<string, string> rec = m_Records.Get(identityId);
+        map<string, string> images = m_Images.Get(identityId);
+        map<string, string> frames = m_ImageFrames.Get(identityId);
+        map<string, int> holds = m_FrameMs.Get(identityId);
+        map<string, ref TDL_MarkingStyle> styles = m_Styles.Get(identityId);
+        foreach (string slot : slots)
+        {
+            if (rec)
+                rec.Set(slot, "");
+            if (images)
+                images.Set(slot, "");
+            if (frames)
+                frames.Set(slot, "");
+            if (holds)
+                holds.Set(slot, 0);
+            if (styles)
+                styles.Set(slot, new TDL_MarkingStyle());
+        }
+        BlankHeld(identityId);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void Blank(TDL_MarkingComponent marking)
+    {
+        marking.SetText("");
+        marking.SetImage("", "", 0);
+        marking.SetStyle("", "");
+    }
+
+    //------------------------------------------------------------------------------------------------
+    protected void BlankHeld(string identityId)
+    {
+        array<TDL_MarkingComponent> held;
+        int playerId;
+        HeldMarkings(identityId, held, playerId);
+        foreach (TDL_MarkingComponent marking : held)
+            Blank(marking);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Every marking item the identity's character holds or wears; empty while they have no
+    //! character. playerId comes back for the caller's log line.
+    protected void HeldMarkings(string identityId, out array<TDL_MarkingComponent> held, out int playerId)
+    {
+        held = {};
+        playerId = -1;
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        if (!system)
+            return;
+        playerId = system.GetPlayerIdFromIdentityId(identityId);
+        if (playerId <= 0)
+            return;
+        PlayerManager playerMgr = GetGame().GetPlayerManager();
+        if (!playerMgr)
+            return;
+        IEntity character = playerMgr.GetPlayerControlledEntity(playerId);
+        if (!character)
+            return;
+        SCR_InventoryStorageManagerComponent inventory = SCR_InventoryStorageManagerComponent.Cast(character.FindComponent(SCR_InventoryStorageManagerComponent));
+        if (!inventory)
+            return;
+        array<IEntity> items = {};
+        inventory.GetItems(items);
+        foreach (IEntity item : items)
+        {
+            if (!item)
+                continue;
+            TDL_MarkingComponent marking = TDL_MarkingComponent.Cast(item.FindComponent(TDL_MarkingComponent));
+            if (marking)
+                held.Insert(marking);
+        }
     }
 
     //------------------------------------------------------------------------------------------------
@@ -529,39 +712,27 @@ class TDL_MarkingRegistry
     //------------------------------------------------------------------------------------------------
     void Apply(string identityId)
     {
+        if (m_Locked.Contains(identityId))
+        {
+            BlankHeld(identityId);
+            return;
+        }
+
         map<string, string> rec = m_Records.Get(identityId);
         map<string, string> images = m_Images.Get(identityId);
         map<string, ref TDL_MarkingStyle> styles = m_Styles.Get(identityId);
         if ((!rec || rec.IsEmpty()) && (!images || images.IsEmpty()) && (!styles || styles.IsEmpty()))
             return;
 
-        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-        if (!system)
+        array<TDL_MarkingComponent> held;
+        int playerId;
+        HeldMarkings(identityId, held, playerId);
+        if (held.IsEmpty())
             return;
-        int playerId = system.GetPlayerIdFromIdentityId(identityId);
-        if (playerId <= 0)
-            return;
-        PlayerManager playerMgr = GetGame().GetPlayerManager();
-        if (!playerMgr)
-            return;
-        IEntity character = playerMgr.GetPlayerControlledEntity(playerId);
-        if (!character)
-            return;
-
-        SCR_InventoryStorageManagerComponent inventory = SCR_InventoryStorageManagerComponent.Cast(character.FindComponent(SCR_InventoryStorageManagerComponent));
-        if (!inventory)
-            return;
-        array<IEntity> items = {};
-        inventory.GetItems(items);
 
         int stamped = 0;
-        foreach (IEntity item : items)
+        foreach (TDL_MarkingComponent marking : held)
         {
-            if (!item)
-                continue;
-            TDL_MarkingComponent marking = TDL_MarkingComponent.Cast(item.FindComponent(TDL_MarkingComponent));
-            if (!marking)
-                continue;
             string text;
             if (rec && rec.Find(marking.GetSlot(), text))
             {
@@ -583,6 +754,7 @@ class TDL_MarkingRegistry
                 int frameMs;
                 if (ImageReadyFor(identityId, marking.GetSlot(), imageId, frameList, frameMs))
                 {
+                    EnsureDelivered(imageId, frameList);
                     marking.SetImage(imageId, frameList, frameMs);
                     stamped++;
                 }
@@ -757,10 +929,13 @@ class TDL_MarkingRegistry
     }
 
     //------------------------------------------------------------------------------------------------
-    //! One transfer per known image to a single (late-joining) player.
+    //! A late joiner gets the images on marking items that exist right now, not every image
+    //! the session has seen. Anything stamped after this goes out through EnsureDelivered.
     protected void SendAllImagesTo(int playerId)
     {
-        if (m_ImagesReady.IsEmpty())
+        set<string> live = new set<string>();
+        TDL_MarkingComponent.CollectLiveImageIds(live);
+        if (live.IsEmpty())
             return;
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system)
@@ -770,8 +945,39 @@ class TDL_MarkingRegistry
             return;
         array<int> one = {};
         one.Insert(playerId);
-        foreach (string imageId : m_ImagesReady)
-            SendImageTo(photos, imageId, one);
+        foreach (string imageId : live)
+        {
+            if (m_ImagesReady.Contains(imageId))
+                SendImageTo(photos, imageId, one);
+        }
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Called right before an item is stamped with an image: everyone present must hold the
+    //! pixels by then, including players who joined while no item carried it.
+    protected void EnsureDelivered(string imageId, string frameList)
+    {
+        if (imageId.IsEmpty())
+            return;
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        PlayerManager playerMgr = GetGame().GetPlayerManager();
+        if (!system || !playerMgr)
+            return;
+        AG0_TDLPhotoManager photos = system.GetPhotoManager();
+        if (!photos)
+            return;
+        array<string> ids = {};
+        if (!frameList.IsEmpty())
+            frameList.Split(",", ids, true);
+        if (ids.IsEmpty())
+            ids.Insert(imageId);
+        array<int> playerIds = {};
+        playerMgr.GetPlayers(playerIds);
+        foreach (string id : ids)
+        {
+            if (m_ImagesReady.Contains(id))
+                SendImageTo(photos, id, playerIds);
+        }
     }
 
     //------------------------------------------------------------------------------------------------
@@ -824,7 +1030,7 @@ class TDL_MarkingRegistry
     }
 
     //------------------------------------------------------------------------------------------------
-    protected void WriteBack(string identityId, string slot, string text)
+    protected void WriteBack(string identityId, string slot, string text, string prevText, TDL_MarkingComponent item, string itemPrevText)
     {
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system)
@@ -854,6 +1060,7 @@ class TDL_MarkingRegistry
         json.EndObject();
 
         TDL_MarkingRestCallback cb = new TDL_MarkingRestCallback(identityId, false);
+        cb.SetRevert(slot, prevText, item, itemPrevText);
         m_Callbacks.Set("put:" + identityId + ":" + slot, cb);
         ctx.PUT(cb, string.Format("/markings/player/%1", identityId), json.SaveToString());
     }
@@ -893,6 +1100,9 @@ class TDL_MarkingRegistry
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system || playerId <= 0)
             return "";
-        return system.GetPlayerIdentityId(playerId);
+        string identityId = system.GetPlayerIdentityId(playerId);
+        if (!identityId.IsEmpty())
+            m_PlayerIdentities.Set(playerId, identityId);
+        return identityId;
     }
 }

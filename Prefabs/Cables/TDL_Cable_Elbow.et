@@ -1,0 +1,8 @@
+TDL_CableEntity {
+ ID "7C4E1A99E1B00011"
+ components {
+  MeshObject "{7C4E1A99E1B00012}" {
+   Object "{7C4E1A99E1B00001}Assets/Cables/TDL_Cable_Elbow_01.xob"
+  }
+ }
+}

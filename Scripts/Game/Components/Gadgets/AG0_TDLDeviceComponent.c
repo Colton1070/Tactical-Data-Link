@@ -170,6 +170,20 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	[Attribute("250.0", UIWidgets.EditBox, category: "Network Config")]
 	protected float m_fNetworkRange;
 
+	[Attribute(desc: "RF front end, for devices whose antenna set is a swappable accessory. The authored range is the range with the stock set fitted. Leave empty and the range stays as authored", category: "Network Config")]
+	protected ref TDL_RFProfile m_RFProfile;
+
+	[Attribute(desc: "What the device draws from its battery. Leave empty and a fitted battery never drains", category: "Network Config")]
+	protected ref TDL_PowerProfile m_PowerProfile;
+
+	protected static const int BATTERY_DRAIN_INTERVAL_MS = 2000;
+
+	protected static const float POWER_PROVIDER_CHECK_INTERVAL_MS = 1000;
+	protected float m_fPowerProviderCheckedAtMs = -1;
+	protected AG0_TDLDeviceComponent m_CarrierPowerProvider;
+	protected bool m_bCarrierDataLink;
+	protected float m_fLastDrainTimeMs = -1;
+
 	[Attribute("", UIWidgets.ResourceNamePicker,
 		"Marker imageset for this device on the dynamic map. Leave empty to fall back to the default TDL imageset.",
 		"imageset", category: "TDL Device Config")]
@@ -231,6 +245,27 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	protected VehicleControllerComponent m_PowerSrcVehicleController;
 	protected BaseRadioComponent m_PowerSrcRadio;
 
+	// Accessory ports register themselves; null on every device without swappable
+	// antennas, GPS or battery, which keeps their behaviour exactly as authored.
+	protected TDL_AccessoryPortsComponent m_AccessoryPorts;
+
+	// Last position the device had a GPS fix at. Reported in place of the live position
+	// while the GPS antenna is off, so the member freezes the way a TAK contact does.
+	protected vector m_vLastFix;
+	protected bool m_bHasLastFix;
+	protected bool m_bFixWasLost;
+
+	// Transmit range of each of the owner radio's transceivers before antennas scaled it. The
+	// TDL radio reads its network range from transceiver 0, so once scaling starts the
+	// baseline has to come from here or the antenna factor would apply twice.
+	protected ref array<float> m_aAuthoredTxRanges;
+
+	// The engine gates receive on the sender's range only, so a radio with no antennas would
+	// still hear everyone; muting its transceivers is the one receive gate available. The
+	// player's own mute choice is kept aside and put back when a working set is refitted.
+	protected bool m_bReceiveBlocked;
+	protected ref array<bool> m_aMuteBeforeBlock;
+
 	override protected bool OnTicksOnRemoteProxy() { return true; } //This is DUMB
 	
 	override void OnPostInit(IEntity owner)
@@ -245,6 +280,8 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	{
 	    super.EOnInit(owner);
 	    rplComp = RplComponent.Cast(owner.FindComponent(RplComponent));
+		if (HasModelledAntennas())
+			CaptureAuthoredTxRanges(GetOwnRadio());
 
 	    // Register with TDL system if we can access network
 	    if (CanAccessNetwork() && Replication.IsServer()) {
@@ -257,6 +294,9 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 		// would otherwise stay on the network indefinitely.
 		if (Replication.IsServer())
 			WireOwnerPowerSource(owner);
+
+		if (Replication.IsServer() && m_PowerProfile)
+			GetGame().GetCallqueue().CallLater(DrainBattery, BATTERY_DRAIN_INTERVAL_MS, true);
 
 		if (HasCapability(AG0_ETDLDeviceCapability.VIDEO_SOURCE) && m_CameraAttachment)
 		{
@@ -292,6 +332,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 			if (rc.m_OnPowerChanged)
 				rc.m_OnPowerChanged.Insert(OnOwnerRadioPowerChanged);
 			SetPowered(rc.IsPowered());
+			EnforcePowerSupply();
 		}
 	}
 
@@ -310,12 +351,143 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	//------------------------------------------------------------------------------------------------
 	protected void OnOwnerRadioPowerChanged(bool powered)
 	{
+		// Turning the knob with no battery fitted does nothing on the real set. Switching the
+		// radio back off re-enters here with false, which records the device as unpowered.
+		if (powered && !HasPowerSupply())
+		{
+			m_PowerSrcRadio.SetPower(false);
+			return;
+		}
 		SetPowered(powered);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected BaseRadioComponent GetOwnRadio()
+	{
+		if (!GetOwner())
+			return null;
+		return BaseRadioComponent.Cast(GetOwner().FindComponent(BaseRadioComponent));
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected void CaptureAuthoredTxRanges(BaseRadioComponent radio)
+	{
+		if (m_aAuthoredTxRanges || !radio)
+			return;
+
+		m_aAuthoredTxRanges = new array<float>();
+		for (int i = 0, count = radio.TransceiversCount(); i < count; i++)
+		{
+			BaseTransceiver transceiver = radio.GetTransceiver(i);
+			float range;
+			if (transceiver)
+				range = transceiver.GetRange();
+			m_aAuthoredTxRanges.Insert(range);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Voice goes out on the transceivers, not the TDL link, so the antenna set has to scale
+	// their range too; with no set or the wrong band nobody hears the radio. SetRange
+	// replicates, so only the server writes it.
+	protected void EnforceRadioRange()
+	{
+		if (!Replication.IsServer() || !HasModelledAntennas())
+			return;
+
+		BaseRadioComponent radio = GetOwnRadio();
+		if (!radio)
+			return;
+
+		CaptureAuthoredTxRanges(radio);
+		float factor = GetAntennaRangeFactor();
+		int count = Math.Min(radio.TransceiversCount(), m_aAuthoredTxRanges.Count());
+		for (int i = 0; i < count; i++)
+		{
+			BaseTransceiver transceiver = radio.GetTransceiver(i);
+			if (transceiver)
+				transceiver.SetRange(m_aAuthoredTxRanges[i] * factor);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! True while the radio has modelled antennas and none that work fitted.
+	bool IsReceiveBlocked() { return m_bReceiveBlocked; }
+
+	//------------------------------------------------------------------------------------------------
+	// Runs on every machine: mute is local to whoever is listening.
+	protected void UpdateReceiveBlock()
+	{
+		bool blocked = HasModelledAntennas() && GetAntennaRangeFactor() <= 0;
+		if (blocked == m_bReceiveBlocked)
+			return;
+		m_bReceiveBlocked = blocked;
+
+		BaseRadioComponent radio = GetOwnRadio();
+		if (!radio)
+			return;
+
+		if (blocked)
+		{
+			m_aMuteBeforeBlock = new array<bool>();
+			for (int i = 0, count = radio.TransceiversCount(); i < count; i++)
+			{
+				BaseTransceiver transceiver = radio.GetTransceiver(i);
+				bool muted;
+				if (transceiver)
+					muted = transceiver.IsMuted();
+				m_aMuteBeforeBlock.Insert(muted);
+			}
+			MaintainReceiveBlock();
+			return;
+		}
+
+		for (int j = 0, total = radio.TransceiversCount(); j < total; j++)
+		{
+			BaseTransceiver restoreTarget = radio.GetTransceiver(j);
+			if (!restoreTarget)
+				continue;
+			bool restoreMuted;
+			if (m_aMuteBeforeBlock && j < m_aMuteBeforeBlock.Count())
+				restoreMuted = m_aMuteBeforeBlock[j];
+			restoreTarget.SetMuteState(restoreMuted);
+		}
+		m_aMuteBeforeBlock = null;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Re-asserted every frame while blocked, so a radio picked up by someone else, or a mute
+	// cleared by any path other than the VON entry, cannot slip back into receiving.
+	protected void MaintainReceiveBlock()
+	{
+		BaseRadioComponent radio = GetOwnRadio();
+		if (!radio)
+			return;
+
+		for (int i = 0, count = radio.TransceiversCount(); i < count; i++)
+		{
+			BaseTransceiver transceiver = radio.GetTransceiver(i);
+			if (transceiver && !transceiver.IsMuted())
+				transceiver.SetMuteState(true);
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Voice runs on the radio's own power switch, not on IsPowered, so a pulled battery has to
+	// switch the radio itself off or it keeps transmitting.
+	protected void EnforcePowerSupply()
+	{
+		if (!Replication.IsServer() || HasPowerSupply() || !m_PowerSrcRadio || !m_PowerSrcRadio.IsPowered())
+			return;
+		m_PowerSrcRadio.SetPower(false);
 	}
 	
 	override void EOnPostFrame(IEntity owner, float timeSlice)
 	{
 	    super.EOnPostFrame(owner, timeSlice);
+
+	    if (m_bReceiveBlocked)
+	        MaintainReceiveBlock();
 
 	    SCR_PlayerController controller = SCR_PlayerController.Cast(
 	        GetGame().GetPlayerController()
@@ -332,6 +504,7 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	
 	override void OnDelete(IEntity owner)
 	{
+		GetGame().GetCallqueue().Remove(DrainBattery);
 
 		// Unregister from PC if broadcasting
         if (!System.IsConsoleApp() && m_bCameraBroadcasting)
@@ -885,20 +1058,10 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	}
 
 	[RplRpc(RplChannel.Reliable, RplRcver.Broadcast)]
-	protected void RpcDo_SetLocalNetworkMembers(int networkID, array<ref AG0_TDLNetworkMember> members)
+	protected void RpcDo_SetLocalNetworkMembers(int networkID, array<ref AG0_TDLNetworkMember> members, array<RplId> roster)
 	{
-		AG0_TDLNetworkMembers buffer = m_mLocalNetworkMembersByNetwork.Get(networkID);
-		if (!buffer)
-		{
-			buffer = new AG0_TDLNetworkMembers();
-			m_mLocalNetworkMembersByNetwork.Set(networkID, buffer);
-		}
-
-		buffer.Clear();
-		foreach (AG0_TDLNetworkMember member : members)
-		{
-			buffer.Add(member);
-		}
+		AG0_TDLNetworkMembers previous = m_mLocalNetworkMembersByNetwork.Get(networkID);
+		m_mLocalNetworkMembersByNetwork.Set(networkID, AG0_TDLNetworkMembers.MergeLive(previous, members, roster));
 
 		Print(string.Format("TDL_DEVICE_INFO: Received %1 network members for network %2 on device %3",
 			members.Count(), networkID, GetOwner()), LogLevel.DEBUG);
@@ -999,14 +1162,14 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	// Server-side: Receive network members from system and broadcast to all clients.
 	// Called by AG0_TDLSystem for devices with INFORMATION capability, per-network.
 	//------------------------------------------------------------------------------------------------
-	void SetLocalNetworkMembers(int networkID, array<ref AG0_TDLNetworkMember> members)
+	void SetLocalNetworkMembers(int networkID, array<ref AG0_TDLNetworkMember> members, array<RplId> roster)
 	{
 		if (!Replication.IsServer()) return;
 
 		Print(string.Format("TDL_DEVICE_INFO: Server sending %1 members for network %2 to device %3",
 			members.Count(), networkID, GetOwner()), LogLevel.DEBUG);
 
-		Rpc(RpcDo_SetLocalNetworkMembers, networkID, members);
+		Rpc(RpcDo_SetLocalNetworkMembers, networkID, members, roster);
 	}
 
 	void OnNetworkConnectivityUpdated(int networkID, array<RplId> members)
@@ -1061,18 +1224,176 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    return (m_eWaveform & other.GetWaveform()) != 0;
 	}
 	
-	float GetEffectiveNetworkRange()
+	//! Range the device was authored with, before accessories.
+	float GetBaselineNetworkRange()
     {
         if (m_bUseTDLRadio) {
             AG0_TDLRadioComponent radio = FindRadioInInventory();
             if(!radio)
 				return 0;
+			if (m_aAuthoredTxRanges && m_aAuthoredTxRanges.Count() > 0 && radio.GetOwner() == GetOwner())
+				return m_aAuthoredTxRanges[0];
 			return radio.GetNetworkRange();
         }
         return m_fNetworkRange;
     }
-    
-    bool CanAccessNetwork() { return GetEffectiveNetworkRange() > 0; }
+
+	//------------------------------------------------------------------------------------------------
+	//! True when range follows a fitted antenna set rather than staying as authored.
+	protected bool HasModelledAntennas()
+	{
+		return m_RFProfile && m_AccessoryPorts && m_AccessoryPorts.HasPort(TDL_EAccessoryKind.RF_ANTENNA);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Multiplier the fitted antenna set puts on authored range; 1 where antennas are not modelled.
+	float GetAntennaRangeFactor()
+	{
+		if (!HasModelledAntennas())
+			return 1;
+
+		TDL_RFAntennaSpec antenna;
+		TDL_AccessoryComponent fitted = m_AccessoryPorts.GetFitted(TDL_EAccessoryKind.RF_ANTENNA);
+		if (fitted)
+			antenna = TDL_RFAntennaSpec.Cast(fitted.GetSpec());
+
+		return m_RFProfile.GetRangeFactor(antenna);
+	}
+
+	//! Range right now: the baseline scaled by the fitted antenna set, 0 with none fitted.
+	float GetEffectiveNetworkRange()
+	{
+		return GetBaselineNetworkRange() * GetAntennaRangeFactor();
+	}
+
+	// Structural, not momentary: a radio with its antennas off is still a network device
+	// that stays joined and keeps its keys, it just cannot reach anyone until refitted.
+    bool CanAccessNetwork() { return GetBaselineNetworkRange() > 0; }
+
+	//------------------------------------------------------------------------------------------------
+	void SetAccessoryPorts(TDL_AccessoryPortsComponent ports)
+	{
+		m_AccessoryPorts = ports;
+	}
+
+	TDL_AccessoryPortsComponent GetAccessoryPorts() { return m_AccessoryPorts; }
+
+	//------------------------------------------------------------------------------------------------
+	//! Called by the ports on every fit and removal, on every machine.
+	void OnAccessoriesChanged()
+	{
+		bool fixLost = IsFixLost();
+		if (fixLost && !m_bFixWasLost && GetOwner())
+		{
+			m_vLastFix = GetOwner().GetOrigin();
+			m_bHasLastFix = true;
+		}
+		m_bFixWasLost = fixLost;
+		EnforcePowerSupply();
+		EnforceRadioRange();
+		UpdateReceiveBlock();
+
+		#ifdef WORKBENCH
+		Print(string.Format("[TDL_ACCESSORY] %1: range %2 of %3 m, fix lost %4, powered %5",
+			GetOwner(), GetEffectiveNetworkRange(), GetBaselineNetworkRange(), IsFixLost(), IsPowered()), LogLevel.NORMAL);
+		#endif
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! True when the device has a GPS antenna port and nothing in it.
+	bool IsFixLost()
+	{
+		if (!m_AccessoryPorts || !m_AccessoryPorts.HasPort(TDL_EAccessoryKind.GPS_ANTENNA))
+			return false;
+		return m_AccessoryPorts.GetFitted(TDL_EAccessoryKind.GPS_ANTENNA) == null;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Position the device reports to its network: live with a fix, the last fix without.
+	vector GetReportedPosition()
+	{
+		IEntity owner = GetOwner();
+		if (!owner)
+			return vector.Zero;
+
+		if (!IsFixLost() || !m_bHasLastFix)
+		{
+			m_vLastFix = owner.GetOrigin();
+			m_bHasLastFix = true;
+		}
+		return m_vLastFix;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! False when the device takes a battery and has none fitted, or a flat one.
+	protected bool HasPowerSupply()
+	{
+		if (!m_AccessoryPorts || !m_AccessoryPorts.HasPort(TDL_EAccessoryKind.BATTERY))
+			return true;
+		TDL_AccessoryComponent battery = m_AccessoryPorts.GetFitted(TDL_EAccessoryKind.BATTERY);
+		return battery && !battery.IsDepleted();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Fitted battery's charge, 0-100, or -1 when the device has no battery port or it is empty.
+	int GetBatteryPercent()
+	{
+		if (!m_AccessoryPorts || !m_AccessoryPorts.HasPort(TDL_EAccessoryKind.BATTERY))
+			return -1;
+		TDL_AccessoryComponent battery = m_AccessoryPorts.GetFitted(TDL_EAccessoryKind.BATTERY);
+		if (!battery)
+			return -1;
+		return battery.GetChargePercent();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Drained by elapsed world time rather than per call, so a hitch or a paused world neither
+	// steals nor gifts charge.
+	protected void DrainBattery()
+	{
+		float nowMs = GetGame().GetWorld().GetWorldTime();
+		float elapsedS = 0;
+		if (m_fLastDrainTimeMs >= 0)
+			elapsedS = (nowMs - m_fLastDrainTimeMs) / 1000;
+		m_fLastDrainTimeMs = nowMs;
+
+		if (elapsedS <= 0 || !IsPowered())
+			return;
+
+		float wh = m_PowerProfile.GetDrawW(m_bCameraBroadcasting) * elapsedS / 3600;
+		if (HasCapability(AG0_ETDLDeviceCapability.POWER_PROVIDER))
+		{
+			DrawFromBattery(wh);
+			return;
+		}
+
+		// A device that cannot power itself runs off its carrier's provider, so its draw comes
+		// out of that provider's battery. Only while it is actually doing something.
+		AG0_TDLDeviceComponent provider = GetCarrierPowerProvider();
+		if (provider && GetActiveCapabilities() != 0)
+			provider.DrawFromBattery(wh);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Server only. Takes energy from the fitted battery and powers the device down when that
+	//! empties it. Devices running off this one draw through here as well.
+	void DrawFromBattery(float wh)
+	{
+		if (!Replication.IsServer() || wh <= 0 || !m_AccessoryPorts)
+			return;
+
+		TDL_AccessoryComponent battery = m_AccessoryPorts.GetFitted(TDL_EAccessoryKind.BATTERY);
+		if (!battery)
+			return;
+
+		battery.DrainWh(wh);
+
+		if (battery.IsDepleted())
+		{
+			EnforcePowerSupply();
+			SetPowered(false);
+		}
+	}
 	
 	
 	AG0_TDLRadioComponent FindRadioInInventory()
@@ -1139,6 +1460,83 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    return false;
 	}
 	
+	//------------------------------------------------------------------------------------------------
+	//! Another powered device on the same character that provides power, or null. Reads the
+	//! other device's flag and power state, not its active capabilities, so two unpowered
+	//! displays cannot recurse into each other. A powered provider is all that is asked for;
+	//! which one when the carrier has two is whichever the inventory walk meets first.
+	//! A device with cable ports only counts a provider its cables reach.
+	AG0_TDLDeviceComponent GetCarrierPowerProvider()
+	{
+		RefreshCarrierLinks();
+		return m_CarrierPowerProvider;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! False only for a device with cable ports and no network access of its own whose cables
+	//! reach no powered radio. Devices without ports are linked to everything they are
+	//! carried with, so this is always true for them.
+	bool CarrierHasDataLink()
+	{
+		RefreshCarrierLinks();
+		return m_bCarrierDataLink;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// One inventory walk answers both questions, since both ask what else the carrier has.
+	protected void RefreshCarrierLinks()
+	{
+		// Capabilities are read every frame by the displays; the inventory walk is not cheap.
+		World world = GetGame().GetWorld();
+		if (!world)
+			return;
+		float nowMs = world.GetWorldTime();
+		if (m_fPowerProviderCheckedAtMs >= 0 && nowMs - m_fPowerProviderCheckedAtMs < POWER_PROVIDER_CHECK_INTERVAL_MS)
+			return;
+		m_fPowerProviderCheckedAtMs = nowMs;
+		m_CarrierPowerProvider = null;
+
+		bool needsDataLink = TDL_CablePortsComponent.Of(GetOwner()) != null && !HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS);
+		m_bCarrierDataLink = !needsDataLink;
+
+		IEntity carrier = GetOwner().GetRootParent();
+		if (!ChimeraCharacter.Cast(carrier))
+			return;
+
+		AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+		if (!system)
+			return;
+
+		array<AG0_TDLDeviceComponent> devices = system.GetPlayerAllTDLDevices(carrier);
+		foreach (AG0_TDLDeviceComponent device : devices)
+		{
+			if (device == this || !device.IsPowered())
+				continue;
+
+			if (!m_CarrierPowerProvider && device.HasCapability(AG0_ETDLDeviceCapability.POWER_PROVIDER) && IsCabledTo(device, carrier, TDL_ECableCarry.POWER))
+				m_CarrierPowerProvider = device;
+
+			if (!m_bCarrierDataLink && device.HasCapability(AG0_ETDLDeviceCapability.NETWORK_ACCESS) && IsCabledTo(device, carrier, TDL_ECableCarry.DATA))
+				m_bCarrierDataLink = true;
+		}
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Cables only decide between two devices that both have ports. A device without ports
+	// keeps the old rule and is linked to everything on the same character.
+	protected bool IsCabledTo(AG0_TDLDeviceComponent other, IEntity carrier, TDL_ECableCarry carry)
+	{
+		if (!TDL_CablePortsComponent.Of(GetOwner()) || !TDL_CablePortsComponent.Of(other.GetOwner()))
+			return true;
+		return TDL_CableManager.AreWired(carrier, GetOwner(), other.GetOwner(), carry);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	bool CarrierHasPowerProvider()
+	{
+		return GetCarrierPowerProvider() != null;
+	}
+
 	// Updated capability logic
 	int GetActiveCapabilities()
 	{
@@ -1147,11 +1545,23 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	    // Server/client agnostic check
 	    if (!IsHeldByAnyPlayer() && !HasCapability(AG0_ETDLDeviceCapability.POWER_PROVIDER)) 
 	        return 0;
-	        
-	    return m_eCapabilities;
+
+		// A device that cannot power itself, like an EUD on a cable, does nothing until its
+		// carrier also has something that can.
+		if (!HasCapability(AG0_ETDLDeviceCapability.POWER_PROVIDER) && !CarrierHasPowerProvider())
+			return 0;
+
+		// A display whose cables reach no radio has nothing to show.
+		if (!CarrierHasDataLink())
+			return 0;
+
+		int capabilities = m_eCapabilities;
+		if (IsFixLost())
+			capabilities = capabilities & ~AG0_ETDLDeviceCapability.GPS_PROVIDER;
+	    return capabilities;
 	}
     
-    bool IsPowered() { return m_bIsPowered; }
+    bool IsPowered() { return m_bIsPowered && HasPowerSupply(); }
     
     void SetPowered(bool powered)
     {
@@ -1728,12 +2138,38 @@ class AG0_TDLDeviceComponent : ScriptGameComponent
 	        return;
 	    }
 
-	    // Validate callsign (optional - add your own rules)
-	    string cleanCallsign = callsign.Trim();
+	    // A callsign is drawn on every member's map and list rows, so a line break or tab in
+	    // one breaks their layout rather than the sender's.
+	    string cleanCallsign = callsign;
+	    cleanCallsign.Replace("\n", " ");
+	    cleanCallsign.Replace("\r", " ");
+	    cleanCallsign.Replace("\t", " ");
+	    cleanCallsign = cleanCallsign.Trim();
 	    if (cleanCallsign.Length() > 16) {
 	        cleanCallsign = cleanCallsign.Substring(0, 16); // Max 16 chars
 	    }
 
+	    if (m_sCustomCallsign == cleanCallsign)
+	        return;
+
+	    string previous = m_sCustomCallsign;
+	    ApplyCallsign(cleanCallsign);
+	    // Applied first and checked after: a server with no API still has to be able to set a
+	    // callsign, so the word list can only ever take one back.
+	    AG0_TDLCallsignCheck.Submit(this, cleanCallsign, previous);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! Server: puts back the callsign the API check displaced, without asking again.
+	void RestoreCallsign(string callsign)
+	{
+	    if (Replication.IsServer())
+	        ApplyCallsign(callsign);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected void ApplyCallsign(string cleanCallsign)
+	{
 	    if (m_sCustomCallsign != cleanCallsign) {
 	        m_sCustomCallsign = cleanCallsign;
 	        Replication.BumpMe();

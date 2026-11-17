@@ -1,0 +1,28 @@
+GenericEntity : "{C95E11C60810F432}Prefabs/Items/Core/Item_Base.et" {
+ ID "508AB2013EEE1E00"
+ components {
+  InventoryItemComponent "{5222EB4D0C73006B}" {
+   Attributes SCR_ItemAttributeCollection "{5222EB4D0A2B466B}" {
+    ItemDisplayName SCR_InventoryUIInfo "{5222EB4D07D865FA}" {
+     Name "TDL Accessory"
+     m_aItemHints {
+      TDL_AccessoryItemHintUIInfo "{F8F56C3C2472F6C8}" {
+      }
+     }
+    }
+    ItemPhysAttributes ItemPhysicalAttributes PhysicalAttributes {
+     Weight 0.1
+     SizeSetupStrategy Volume
+     ItemVolume 150
+    }
+   }
+  }
+  MeshObject "{05B653C617DE5038}" {
+  }
+  RigidBody "{6CC875E9DFF735BD}" {
+   ModelGeometry 1
+  }
+  TDL_AccessoryComponent "{D2DE153F8FF1402C}" {
+  }
+ }
+}

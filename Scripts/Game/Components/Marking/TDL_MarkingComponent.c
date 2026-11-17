@@ -96,6 +96,9 @@ class TDL_MarkingComponent : ScriptComponent
     protected static RTTextureWidget s_wSharedRT;
     protected static int s_iSharedUsers;
     protected static int s_iLiveWidgets;
+    //! Server: every marking item alive in the world. What a late joiner is sent is read off
+    //! this, so they get the images they can actually come across and nothing else.
+    protected static ref array<TDL_MarkingComponent> s_aServerLive = {};
 
     //------------------------------------------------------------------------------------------------
     override void OnPostInit(IEntity owner)
@@ -111,6 +114,7 @@ class TDL_MarkingComponent : ScriptComponent
             m_sText = Sanitize(m_sDefaultText, m_eSlot);
             // Loadout items are spawned already attached; give the hierarchy a moment, then
             // ask the registry who holds us so a spawn-time patch says the right thing.
+            s_aServerLive.Insert(this);
             GetGame().GetCallqueue().CallLater(ResolveHolder, 1000, false);
         }
 
@@ -236,6 +240,21 @@ class TDL_MarkingComponent : ScriptComponent
     void SetImageId(string imageId)
     {
         SetImage(imageId, "", 0);
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Server: adds every image id (stills and animation frames) a live marking item carries.
+    static void CollectLiveImageIds(notnull set<string> ids)
+    {
+        foreach (TDL_MarkingComponent live : s_aServerLive)
+        {
+            if (!live)
+                continue;
+            array<string> frameIds;
+            live.FrameIds(frameIds);
+            foreach (string id : frameIds)
+                ids.Insert(id);
+        }
     }
 
     //------------------------------------------------------------------------------------------------
@@ -817,6 +836,7 @@ class TDL_MarkingComponent : ScriptComponent
     //------------------------------------------------------------------------------------------------
     override void OnDelete(IEntity owner)
     {
+        s_aServerLive.RemoveItem(this);
         Unbind(false);
         super.OnDelete(owner);
     }

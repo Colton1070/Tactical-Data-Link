@@ -403,7 +403,12 @@ class AG0_ATAKPlugin_MPU5 : AG0_ATAKPluginBase
 
         TextWidget signalText = TextWidget.Cast(nodeEntry.FindAnyWidget("NodeSignal"));
         if (signalText)
-            signalText.SetText(string.Format("%1%%", member.GetSignalStrength()));
+        {
+            if (member.IsStale())
+                signalText.SetText("LOST " + member.GetStaleAgeText());
+            else
+                signalText.SetText(string.Format("%1%%", member.GetSignalStrength()));
+        }
 
         TextWidget capsText = TextWidget.Cast(nodeEntry.FindAnyWidget("NodeCaps"));
         if (capsText)

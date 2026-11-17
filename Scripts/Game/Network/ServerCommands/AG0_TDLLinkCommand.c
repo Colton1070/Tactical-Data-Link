@@ -14,7 +14,8 @@ enum AG0_ETDLSubcommandArg
 	ETSA_MARKING,
 	ETSA_MARKINGS,
 	ETSA_MARKING_IMAGE,
-	ETSA_MARKING_COLOR
+	ETSA_MARKING_COLOR,
+	ETSA_MARKING_ADMIN
 }
 
 // TDL Link Args
@@ -160,6 +161,8 @@ class AG0_TDLLinkCommand : ScrServerCommand
 				m_eSubcommandArg = AG0_ETDLSubcommandArg.ETSA_MARKING_IMAGE;
 			else if (sub == "mcolor" || sub == "mcolour")
 				m_eSubcommandArg = AG0_ETDLSubcommandArg.ETSA_MARKING_COLOR;
+			else if (sub == "mclear" || sub == "mlock" || sub == "munlock")
+				m_eSubcommandArg = AG0_ETDLSubcommandArg.ETSA_MARKING_ADMIN;
 			else if (sub == "help")
 				m_eSubcommandArg = AG0_ETDLSubcommandArg.ETSA_HELP;
 		}
@@ -170,7 +173,7 @@ class AG0_TDLLinkCommand : ScrServerCommand
 		switch (m_eSubcommandArg)
 		{
 			case AG0_ETDLSubcommandArg.ETSA_HELP:
-				return ScrServerCmdResult("TDL Commands:\n#tdl link <code> - Link account\n#tdl status - API status\n#tdl identity - Show your ID\n#tdl patch <text> - Set your patch (AG0 or AG0/TEST)\n#tdl marking <slot> <text|clear> - Set any marking slot\n#tdl markings - Show your markings\n#tdl mimage <slot> <test|clear> - Image marking test / clear\n#tdl mcolor <slot> <bg|text> <#RRGGBB|clear> - Marking colours", EServerCmdResultType.OK);
+				return ScrServerCmdResult("TDL Commands:\n#tdl link <code> - Link account\n#tdl status - API status\n#tdl identity - Show your ID\n#tdl patch <text> - Set your patch (AG0 or AG0/TEST)\n#tdl marking <slot> <text|clear> - Set any marking slot\n#tdl markings - Show your markings\n#tdl mimage <slot> <test|clear> - Image marking test / clear\n#tdl mcolor <slot> <bg|text> <#RRGGBB|clear> - Marking colours\nAdmin: #tdl mclear|mlock|munlock <playerId>", EServerCmdResultType.OK);
 			
 			case AG0_ETDLSubcommandArg.ETSA_LINK:
 				return HandleLink(argv, playerId);
@@ -192,6 +195,9 @@ class AG0_TDLLinkCommand : ScrServerCommand
 
 			case AG0_ETDLSubcommandArg.ETSA_MARKING_COLOR:
 				return HandleMarkingColor(argv, playerId);
+
+			case AG0_ETDLSubcommandArg.ETSA_MARKING_ADMIN:
+				return HandleMarkingAdmin(argv, playerId);
 		}
 		
 		return ScrServerCmdResult(string.Empty, EServerCmdResultType.ERR);
@@ -374,6 +380,8 @@ class AG0_TDLLinkCommand : ScrServerCommand
 		if (identityId.IsEmpty())
 			return ScrServerCmdResult("Could not retrieve identity", EServerCmdResultType.ERR);
 
+		if (reg.IsLocked(identityId))
+			return ScrServerCmdResult("Your markings are locked by an admin", EServerCmdResultType.ERR);
 		reg.EnsureSpawnHook();
 		reg.OnLocalSet(identityId, TDL_MarkingSlots.ToKey(slot), text, true);
 
@@ -414,6 +422,8 @@ class AG0_TDLLinkCommand : ScrServerCommand
 		if (identityId.IsEmpty())
 			return ScrServerCmdResult("Could not retrieve identity", EServerCmdResultType.ERR);
 
+		if (reg.IsLocked(identityId))
+			return ScrServerCmdResult("Your markings are locked by an admin", EServerCmdResultType.ERR);
 		reg.EnsureSpawnHook();
 		reg.OnLocalSetImage(identityId, TDL_MarkingSlots.ToKey(slot), imageId);
 		if (imageId.IsEmpty())
@@ -466,11 +476,51 @@ class AG0_TDLLinkCommand : ScrServerCommand
 		if (identityId.IsEmpty())
 			return ScrServerCmdResult("Could not retrieve identity", EServerCmdResultType.ERR);
 
+		if (reg.IsLocked(identityId))
+			return ScrServerCmdResult("Your markings are locked by an admin", EServerCmdResultType.ERR);
 		reg.EnsureSpawnHook();
 		reg.OnLocalSetStyle(identityId, TDL_MarkingSlots.ToKey(slot), key, value);
 		if (value.IsEmpty())
 			return ScrServerCmdResult(string.Format("%1 %2 colour reset", slotKey, key), EServerCmdResultType.OK);
 		return ScrServerCmdResult(string.Format("%1 %2 colour set to %3", slotKey, key, value), EServerCmdResultType.OK);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! #tdl mclear|mlock|munlock <playerId>. Session-scoped and never written to the API: a
+	//! server admin moderates what shows on their server, not the player's account.
+	protected ScrServerCmdResult HandleMarkingAdmin(array<string> argv, int playerId)
+	{
+		if (!SCR_Global.IsAdmin(playerId))
+			return ScrServerCmdResult("Admins only", EServerCmdResultType.ERR);
+		string sub = argv[1];
+		sub.ToLower();
+		if (argv.Count() < 3)
+			return ScrServerCmdResult(string.Format("Usage: #tdl %1 <playerId>", sub), EServerCmdResultType.PARAMETERS);
+
+		AG0_TDLSystem tdlSystem = AG0_TDLSystem.GetInstance();
+		TDL_MarkingRegistry reg = TDL_MarkingRegistry.GetInstance();
+		if (!tdlSystem || !reg)
+			return ScrServerCmdResult("TDL system unavailable", EServerCmdResultType.ERR);
+		int targetId = argv[2].ToInt();
+		string identityId = "";
+		if (targetId > 0)
+			identityId = tdlSystem.GetPlayerIdentityId(targetId);
+		if (identityId.IsEmpty())
+			return ScrServerCmdResult("No player with that id", EServerCmdResultType.ERR);
+
+		Print(string.Format("[TDL_Marking] admin %1: %2 on player %3", playerId, sub, targetId), LogLevel.NORMAL);
+		if (sub == "mclear")
+		{
+			reg.AdminClear(identityId);
+			return ScrServerCmdResult(string.Format("Markings cleared for player %1", targetId), EServerCmdResultType.OK);
+		}
+		if (sub == "mlock")
+		{
+			reg.SetLocked(identityId, true);
+			return ScrServerCmdResult(string.Format("Markings locked for player %1 until unlocked or server restart", targetId), EServerCmdResultType.OK);
+		}
+		reg.SetLocked(identityId, false);
+		return ScrServerCmdResult(string.Format("Markings unlocked for player %1", targetId), EServerCmdResultType.OK);
 	}
 
 	//------------------------------------------------------------------------------------------------

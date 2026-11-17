@@ -76,6 +76,8 @@ modded class SCR_PlayerController
 	// ============================================
 	
 	protected TDL_EUDBoneComponent m_CachedEUDBoneComp;
+	protected bool m_bDockedFocus;
+	protected TDL_EUDBoneComponent m_FocusHinge;
 	protected const float EUD_ADJUST_STEP = 0.1;
 	
 	// Message storage per network
@@ -177,6 +179,10 @@ modded class SCR_PlayerController
             UpdateTDLNetworkState(timeSlice);
             UpdateHeldDeviceCache(timeSlice);
             UpdateMapPeripheral(timeSlice);
+            bool dockedFocus = IsDockedDeviceFocused();
+            if (dockedFocus != m_bDockedFocus)
+                SetReadHold(dockedFocus);
+            m_bDockedFocus = dockedFocus;
         }
 
         // Drive the per-PC photo manager's tick (decode pipeline, reassembler stall sweep).
@@ -556,6 +562,7 @@ modded class SCR_PlayerController
                     item.FindComponent(AG0_TDLDeviceComponent));
                 if (deviceComp && devices.Find(deviceComp) == -1)
                     devices.Insert(deviceComp);
+                AddDockedDevices(item, devices);
             }
         }
         
@@ -599,12 +606,35 @@ modded class SCR_PlayerController
                             clothItem.FindComponent(AG0_TDLDeviceComponent));
                         if (deviceComp && devices.Find(deviceComp) == -1)
                             devices.Insert(deviceComp);
+                        AddDockedDevices(clothItem, devices);
                     }
                 }
             }
         }
         
         return devices;
+    }
+    
+    //------------------------------------------------------------------------------------------------
+    //! A device docked in a mount sits one storage below the mount, where neither the
+    //! inventory walk nor the cloth walk reaches, yet the player is wearing it.
+    protected void AddDockedDevices(IEntity holder, notnull array<AG0_TDLDeviceComponent> devices)
+    {
+        // Walked as child entities rather than through the ports component, which sits under
+        // the mount's universal storage where FindComponent does not reliably reach it.
+        IEntity child = holder.GetChildren();
+        while (child)
+        {
+            InventoryItemComponent itemComp = InventoryItemComponent.Cast(child.FindComponent(InventoryItemComponent));
+            if (itemComp && TDL_AccessoryPortSlot.Cast(itemComp.GetParentSlot()))
+            {
+                AG0_TDLDeviceComponent deviceComp = AG0_TDLDeviceComponent.Cast(
+                    child.FindComponent(AG0_TDLDeviceComponent));
+                if (deviceComp && devices.Find(deviceComp) == -1)
+                    devices.Insert(deviceComp);
+            }
+            child = child.GetSibling();
+        }
     }
     
     //------------------------------------------------------------------------------------------------
@@ -631,9 +661,9 @@ modded class SCR_PlayerController
     }
     
     //------------------------------------------------------------------------------------------------
-    void NotifyNetworkMembers(int networkId, array<ref AG0_TDLNetworkMember> members)
+    void NotifyNetworkMembers(int networkId, array<ref AG0_TDLNetworkMember> members, array<RplId> roster)
     {
-        Rpc(RPC_SetTDLNetworkMembers, networkId, members);
+        Rpc(RPC_SetTDLNetworkMembers, networkId, members, roster);
     }
     
     //------------------------------------------------------------------------------------------------
@@ -688,19 +718,25 @@ modded class SCR_PlayerController
             return;
         }
 
+        if (!CanOperate(rpl.GetEntity(), "SetMarking"))
+            return;
+
+        TDL_MarkingRegistry reg = TDL_MarkingRegistry.GetInstance();
+        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
+        string identityId = "";
+        if (system)
+            identityId = system.GetPlayerIdentityId(GetPlayerId());
+        if (reg && reg.IsLocked(identityId))
+            return;
+
+        string previous = patch.GetText();
         patch.SetText(text);
 
         // Keep the identity-keyed record in step so a respawn, another server, and the
-        // website all agree with what was just typed in game.
-        TDL_MarkingRegistry reg = TDL_MarkingRegistry.GetInstance();
-        AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
-        if (reg && system)
-        {
-            int playerId = GetPlayerId();
-            string identityId = system.GetPlayerIdentityId(playerId);
-            if (!identityId.IsEmpty())
-                reg.OnLocalSet(identityId, patch.GetSlot(), patch.GetText());
-        }
+        // website all agree with what was just typed in game. The item and its old text go
+        // along so the registry can put it back if the API refuses the new one.
+        if (reg && !identityId.IsEmpty())
+            reg.OnLocalSet(identityId, patch.GetSlot(), patch.GetText(), true, patch, previous);
     }
 
     //------------------------------------------------------------------------------------------------
@@ -975,6 +1011,9 @@ modded class SCR_PlayerController
 	    if (!device)
 	        return;
 
+	    if (!CanOperate(device.GetOwner(), ""))
+	        return;
+
 	    system.LeaveNetwork(device);
 	}
 
@@ -990,6 +1029,9 @@ modded class SCR_PlayerController
 	    if (!device)
 	        return;
 
+	    if (!CanOperate(device.GetOwner(), ""))
+	        return;
+
 	    system.LeaveNetworkById(device, networkId);
 	}
 
@@ -1003,6 +1045,9 @@ modded class SCR_PlayerController
 
 	    AG0_TDLDeviceComponent device = system.GetDeviceByRplId(deviceRplId);
 	    if (!device)
+	        return;
+
+	    if (!CanOperate(device.GetOwner(), ""))
 	        return;
 
 	    system.LeaveNetworkByWaveform(device, waveform);
@@ -1021,13 +1066,10 @@ modded class SCR_PlayerController
     
     //------------------------------------------------------------------------------------------------
     [RplRpc(RplChannel.Reliable, RplRcver.Owner)]
-    protected void RPC_SetTDLNetworkMembers(int networkId, array<ref AG0_TDLNetworkMember> members)
+    protected void RPC_SetTDLNetworkMembers(int networkId, array<ref AG0_TDLNetworkMember> members, array<RplId> roster)
     {
-        AG0_TDLNetworkMembers membersData = new AG0_TDLNetworkMembers();
-        foreach (AG0_TDLNetworkMember member : members)
-            membersData.Add(member);
-
-        m_mTDLNetworkMembersMap.Set(networkId, membersData);
+        AG0_TDLNetworkMembers previous = m_mTDLNetworkMembersMap.Get(networkId);
+        m_mTDLNetworkMembersMap.Set(networkId, AG0_TDLNetworkMembers.MergeLive(previous, members, roster));
     }
     
     //------------------------------------------------------------------------------------------------
@@ -1072,6 +1114,83 @@ modded class SCR_PlayerController
     }
     
     // ============================================
+    // SENDER AUTHORIZATION (Server)
+    // ============================================
+
+    //! Generous against user-action range: a false reject strands a legitimate dialog, while
+    //! a false accept still needs the sender standing next to the thing.
+    protected static const float OPERATE_REACH_M = 5.0;
+
+    //------------------------------------------------------------------------------------------------
+    //! Server: may this controller's player act on `target`? An RpcAsk_ that names an entity
+    //! by RplId gates on this, because the id is whatever the client chose to send.
+    //!  - Carried by a player (held, worn, in their inventory): only that player.
+    //!  - Carried by nobody (ground, a body, part of a vehicle): anyone within reach, measured
+    //!    to the root's bounds so a seat anywhere in a long airframe counts.
+    //! `what` names the request in the log line a denial leaves for the server admin. Empty
+    //! = no line: the leave user action is broadcast, so every client that sees it performed
+    //! sends the ask and only the performer's is meant to land.
+    protected bool CanOperate(IEntity target, string what)
+    {
+        if (!target)
+            return false;
+        int playerId = GetPlayerId();
+        PlayerManager playerMgr = GetGame().GetPlayerManager();
+        if (playerId <= 0 || !playerMgr)
+            return false;
+        IEntity character = playerMgr.GetPlayerControlledEntity(playerId);
+        if (!character)
+            return false;
+
+        // Nearest carrier wins: a device in the hands of someone seated in a vehicle belongs
+        // to them, not to everyone aboard.
+        IEntity root = target;
+        IEntity node = target;
+        while (node)
+        {
+            if (node == character)
+                return true;
+            if (playerMgr.GetPlayerIdFromControlledEntity(node) > 0)
+            {
+                if (!what.IsEmpty())
+                    Print(string.Format("[TDL_AUTH] player %1 denied %2: target is carried by another player", playerId, what), LogLevel.WARNING);
+                return false;
+            }
+            root = node;
+            node = node.GetParent();
+        }
+
+        vector mins;
+        vector maxs;
+        root.GetWorldBounds(mins, maxs);
+        vector pos = character.GetOrigin();
+        vector nearest = pos;
+        for (int i = 0; i < 3; i++)
+            nearest[i] = Math.Clamp(pos[i], mins[i], maxs[i]);
+        if (vector.DistanceSq(pos, nearest) <= OPERATE_REACH_M * OPERATE_REACH_M)
+            return true;
+
+        if (!what.IsEmpty())
+            Print(string.Format("[TDL_AUTH] player %1 denied %2: target is out of reach", playerId, what), LogLevel.WARNING);
+        return false;
+    }
+
+    //------------------------------------------------------------------------------------------------
+    //! Server: a kick acts on someone else's device, so reach is the wrong test. The sender
+    //! has to carry a device on a network the target is joined to.
+    protected bool SharesNetworkWith(AG0_TDLSystem system, AG0_TDLDeviceComponent target)
+    {
+        int playerId = GetPlayerId();
+        foreach (int networkId : target.GetJoinedNetworkIDs())
+        {
+            if (system.GetDeviceInNetworkForPlayer(playerId, networkId))
+                return true;
+        }
+        Print(string.Format("[TDL_AUTH] player %1 denied KickDevice: no device on a network the target is in", playerId), LogLevel.WARNING);
+        return false;
+    }
+
+    // ============================================
     // RPCs - Server (Server receives)
     // ============================================
     
@@ -1087,6 +1206,9 @@ modded class SCR_PlayerController
         if (!device)
             return;
         
+        if (!SharesNetworkWith(system, device))
+            return;
+
         system.LeaveNetwork(device);
     }
     
@@ -1101,6 +1223,9 @@ modded class SCR_PlayerController
         AG0_TDLDeviceComponent device = AG0_TDLDeviceComponent.Cast(
             entity.FindComponent(AG0_TDLDeviceComponent));
         
+        if (!device || !CanOperate(entity, "SetCameraBroadcasting"))
+            return;
+
         device.SetCameraBroadcasting(broadcasting);
         Print(string.Format("[TDL Controller] Set camera broadcast to %1 for device %2", broadcasting, deviceRplId), LogLevel.DEBUG);
     }
@@ -1125,6 +1250,9 @@ modded class SCR_PlayerController
             return;
         }
 
+        if (!CanOperate(device.GetOwner(), "SetDeviceCallsign"))
+            return;
+
         // Diagnostic: how many AG0_TDLDeviceComponents live on the entity backing
         // this RplId? If >1, multiple TDL components share a single RplComponent
         // and the system-level cache (m_mDeviceCache) — last writer wins — may
@@ -1135,8 +1263,9 @@ modded class SCR_PlayerController
         {
             array<Managed> tdlComps = {};
             entityOwner.FindComponents(AG0_TDLDeviceComponent, tdlComps);
-            Print(string.Format("TDL_CS_COMPCOUNT: entity %1 has %2 AG0_TDLDeviceComponent(s) this is not good! Please tell someone to fix it. — RplId=%3 caps(this)=%4",
-                entityOwner, tdlComps.Count(), deviceRplId, device.GetActiveCapabilities()), LogLevel.WARNING);
+            if (tdlComps.Count() > 1)
+                Print(string.Format("TDL_CS_COMPCOUNT: entity %1 has %2 AG0_TDLDeviceComponent(s) this is not good! Please tell someone to fix it. — RplId=%3 caps(this)=%4",
+                    entityOwner, tdlComps.Count(), deviceRplId, device.GetActiveCapabilities()), LogLevel.WARNING);
         }
 
         // Server-side call - SetCustomCallsign handles the logic + bump + system notify
@@ -1164,6 +1293,9 @@ modded class SCR_PlayerController
         if (!device)
             return;
 
+        if (!CanOperate(entity, "CreateNetwork"))
+            return;
+
         system.CreateNetwork(device, networkName, password, waveformOverride);
         Print(string.Format("TDL_PC_RPC: Created network '%1' for device %2 (waveform %3)", networkName, deviceRplId, waveformOverride), LogLevel.DEBUG);
     }
@@ -1189,6 +1321,9 @@ modded class SCR_PlayerController
         if (!device)
             return;
 
+        if (!CanOperate(entity, "JoinNetwork"))
+            return;
+
         system.JoinNetwork(device, networkName, password, waveformOverride);
         Print(string.Format("TDL_PC_RPC: Joined network '%1' for device %2 (waveform %3)", networkName, deviceRplId, waveformOverride), LogLevel.DEBUG);
     }
@@ -1200,21 +1335,93 @@ modded class SCR_PlayerController
 	    
 	    foreach (AG0_TDLDeviceComponent device : m_aHeldDevicesCache)
 	    {
+	        IEntity owner = device.GetOwner();
 	        TDL_EUDBoneComponent boneComp = TDL_EUDBoneComponent.Cast(
-	            device.GetOwner().FindComponent(TDL_EUDBoneComponent)
+	            owner.FindComponent(TDL_EUDBoneComponent)
 	        );
+	        // A docked device folds with the mount it sits in, so the hinge is on the parent.
+	        if (!boneComp && owner.GetParent())
+	            boneComp = TDL_EUDBoneComponent.Cast(owner.GetParent().FindComponent(TDL_EUDBoneComponent));
 	        if (boneComp)
 	        {
 	            m_CachedEUDBoneComp = boneComp;
-	            break;
+	            return;
 	        }
 	    }
+
+	    // A worn mount still folds with nothing docked in it.
+	    m_CachedEUDBoneComp = FindWornHinge();
+	}
+
+	//------------------------------------------------------------------------------------------------
+	protected TDL_EUDBoneComponent FindWornHinge()
+	{
+	    IEntity playerEntity = GetControlledEntity();
+	    if (!playerEntity)
+	        return null;
+
+	    EquipedLoadoutStorageComponent loadoutStorage = EquipedLoadoutStorageComponent.Cast(
+	        playerEntity.FindComponent(EquipedLoadoutStorageComponent));
+	    if (!loadoutStorage)
+	        return null;
+
+	    array<typename> areas = {LoadoutArmoredVestSlotArea, LoadoutVestArea, LoadoutJacketArea};
+	    foreach (typename area : areas)
+	    {
+	        IEntity cloth = loadoutStorage.GetClothFromArea(area);
+	        if (!cloth)
+	            continue;
+
+	        ClothNodeStorageComponent clothStorage = ClothNodeStorageComponent.Cast(
+	            cloth.FindComponent(ClothNodeStorageComponent));
+	        if (!clothStorage)
+	            continue;
+
+	        array<IEntity> clothItems = {};
+	        clothStorage.GetAll(clothItems);
+	        foreach (IEntity clothItem : clothItems)
+	        {
+	            TDL_EUDBoneComponent boneComp = TDL_EUDBoneComponent.Cast(clothItem.FindComponent(TDL_EUDBoneComponent));
+	            if (boneComp)
+	                return boneComp;
+	        }
+	    }
+	    return null;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	// Someone reading a docked screen up close steadies it, so the hand stays on the device
+	// for as long as focus does.
+	protected bool IsDockedDeviceFocused()
+	{
+	    if (!m_CachedEUDBoneComp)
+	        return false;
+
+	    IEntity mount = m_CachedEUDBoneComp.GetOwner();
+	    foreach (AG0_TDLDeviceComponent device : m_aHeldDevicesCache)
+	    {
+	        if (!device || !device.GetOwner() || device.GetOwner().GetParent() != mount)
+	            continue;
+
+	        TDL_WorldSpaceDisplayComponent display = TDL_WorldSpaceDisplayComponent.Cast(device.GetOwner().FindComponent(TDL_WorldSpaceDisplayComponent));
+	        if (display && display.IsFocusActive())
+	            return true;
+	    }
+	    return false;
+	}
+
+	//------------------------------------------------------------------------------------------------
+	//! True when the player has a folding screen or mount the fold inputs would move.
+	bool HasEUDHinge()
+	{
+	    return m_CachedEUDBoneComp != null;
 	}
 	
 	//------------------------------------------------------------------------------------------------
 	protected void OnEUDAdjustUp()
 	{
-	    if (!m_CachedEUDBoneComp)
+	    // Focus holds the screen folded down; the camera is set for that one angle.
+	    if (!m_CachedEUDBoneComp || m_bDockedFocus)
 	        return;
 	    
 	    AskServerAdjustEUD(EUD_ADJUST_STEP);
@@ -1223,12 +1430,54 @@ modded class SCR_PlayerController
 	//------------------------------------------------------------------------------------------------
 	protected void OnEUDAdjustDown()
 	{
-	    if (!m_CachedEUDBoneComp)
+	    if (!m_CachedEUDBoneComp || m_bDockedFocus)
 	        return;
 	    
 	    AskServerAdjustEUD(-EUD_ADJUST_STEP);
 	}
 	
+	//------------------------------------------------------------------------------------------------
+	// The hinge that was focused is remembered: by the time focus ends the device may have
+	// been pulled from the mount, and the hold still has to be let go on that mount.
+	protected void SetReadHold(bool hold)
+	{
+	    if (hold)
+	        m_FocusHinge = m_CachedEUDBoneComp;
+
+	    TDL_EUDBoneComponent hinge = m_FocusHinge;
+	    if (!hold)
+	        m_FocusHinge = null;
+	    if (!hinge)
+	        return;
+
+	    RplComponent rpl = RplComponent.Cast(hinge.GetOwner().FindComponent(RplComponent));
+	    if (!rpl)
+	        return;
+
+	    // Applied here first so the player's own view does not wait on the server.
+	    hinge.SetReadHold(hold);
+	    Rpc(RpcAsk_SetEUDReadHold, rpl.Id(), hold);
+	}
+
+	//------------------------------------------------------------------------------------------------
+	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
+	protected void RpcAsk_SetEUDReadHold(RplId eudRplId, bool hold)
+	{
+	    RplComponent rpl = RplComponent.Cast(Replication.FindItem(eudRplId));
+	    if (!rpl || !rpl.GetEntity())
+	        return;
+
+	    TDL_EUDBoneComponent boneComp = TDL_EUDBoneComponent.Cast(rpl.GetEntity().FindComponent(TDL_EUDBoneComponent));
+	    if (!boneComp)
+	        return;
+
+	    // Letting go is always allowed: the device may already be out of the player's reach.
+	    if (hold && !CanOperate(rpl.GetEntity(), "AdjustEUD"))
+	        return;
+
+	    boneComp.SetReadHold(hold);
+	}
+
 	//------------------------------------------------------------------------------------------------
 	protected void AskServerAdjustEUD(float delta)
 	{
@@ -1259,6 +1508,9 @@ modded class SCR_PlayerController
 	    if (!boneComp)
 	        return;
 	    
+	    if (!CanOperate(entity, "AdjustEUD"))
+	        return;
+
 	    boneComp.RequestAdjustment(delta);
 	}
     
@@ -1336,6 +1588,10 @@ modded class SCR_PlayerController
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system) return;
 
+        AG0_TDLDeviceComponent sender = system.GetDeviceByRplId(senderDeviceRplId);
+        if (!sender || !CanOperate(sender.GetOwner(), "SendTDLMessage"))
+            return;
+
         system.SendTDLMessage(senderDeviceRplId, content, messageType, recipientRplId);
     }
     
@@ -1348,6 +1604,10 @@ modded class SCR_PlayerController
         AG0_TDLSystem system = AG0_TDLSystem.GetInstance();
         if (!system) return;
         
+        AG0_TDLDeviceComponent reader = system.GetDeviceByRplId(readerDeviceRplId);
+        if (!reader || !CanOperate(reader.GetOwner(), "MarkTDLMessageRead"))
+            return;
+
         system.MarkTDLMessageRead(readerDeviceRplId, messageId);
     }
     
@@ -2059,6 +2319,10 @@ modded class SCR_PlayerController
 	[RplRpc(RplChannel.Reliable, RplRcver.Server)]
 	protected void RpcAsk_SetRadioCryptoKey(RplId entityRplId, string key)
 	{
+		RplComponent rpl = RplComponent.Cast(Replication.FindItem(entityRplId));
+		if (!rpl || !CanOperate(rpl.GetEntity(), "SetRadioCryptoKey"))
+			return;
+
 		AG0_RadioCryptoFillBridge.s_OnKeyReceived.Invoke(entityRplId, key);
 	}
 

@@ -505,6 +505,7 @@ class AG0_TDLSystem : WorldSystem
 	protected ref map<RplId, AG0_TDLDeviceComponent> m_mDeviceCache = new map<RplId, AG0_TDLDeviceComponent>();
     
     protected float m_fGridCellSize = 2000.0;
+    protected static const float MIN_GRID_CELL_SIZE = 100.0;
     protected ref map<string, ref array<AG0_TDLDeviceComponent>> m_mSpatialGrid = new map<string, ref array<AG0_TDLDeviceComponent>>();
     protected float m_fTimeSinceGridRebuild = 999.0;
     protected float m_fGridRebuildInterval = 5.0;
@@ -1166,9 +1167,12 @@ class AG0_TDLSystem : WorldSystem
 	    float previousMaxRange = m_fMaxDeviceRange;
 	    float currentMaxRange = 0.0;
 	    
+	    // Sized from the authored range, not the momentary one: a radio with its antennas off
+	    // reaches 0 m, and a grid sized from that has zero-width cells. Antenna gain can lift
+	    // effective range above baseline, but not past the two-cell reach the neighbour search covers.
 	    foreach (AG0_TDLDeviceComponent device : m_aRegisteredNetworkDevices)
 	    {
-	        float deviceRange = device.GetEffectiveNetworkRange();
+	        float deviceRange = device.GetBaselineNetworkRange();
 	        if (deviceRange > currentMaxRange)
 	            currentMaxRange = deviceRange;
 	    }
@@ -1177,7 +1181,7 @@ class AG0_TDLSystem : WorldSystem
 	    if (rangeDifference > 100.0 || rangeDifference > (previousMaxRange * 0.1))
 	    {
 	        m_fMaxDeviceRange = currentMaxRange;
-	        m_fGridCellSize = 2.0 * m_fMaxDeviceRange;
+	        m_fGridCellSize = Math.Max(2.0 * m_fMaxDeviceRange, MIN_GRID_CELL_SIZE);
 	        m_fTimeSinceGridRebuild = 999.0;
 	    }
 	}
@@ -1742,6 +1746,9 @@ class AG0_TDLSystem : WorldSystem
 
 	    float rangeA = deviceA.GetEffectiveNetworkRange();
 	    float rangeB = deviceB.GetEffectiveNetworkRange();
+	    // A radio with no antennas fitted reaches nobody, even a device on the same carrier.
+	    if (rangeA <= 0 || rangeB <= 0)
+	        return false;
 	    float maxPossibleRange = Math.Max(rangeA, rangeB);
 
 	    // OPTIMIZATION: Early rejection using axis-aligned bounding box (AABB)
@@ -2078,9 +2085,10 @@ class AG0_TDLSystem : WorldSystem
                 bridgedData.SetRplId(foreignMemberData.GetRplId());
                 bridgedData.SetPlayerName(foreignDevice.GetDisplayName());
                 
-                vector foreignPos = foreignEntity.GetOrigin();
+                vector foreignPos = foreignDevice.GetReportedPosition();
                 foreignNetwork.UpdateDevicePosition(foreignRplId, foreignPos);
                 bridgedData.SetPosition(foreignPos);
+                bridgedData.SetFixLost(foreignDevice.IsFixLost());
                 
                 bridgedData.SetNetworkIP(foreignMemberData.GetNetworkIP());
                 
@@ -2107,6 +2115,8 @@ class AG0_TDLSystem : WorldSystem
                 }
                 bridgedData.SetCapabilities(aggregatedCaps);
                 bridgedData.SetOwnerPlayerId(foreignOwnerPlayerId);
+                bridgedData.SetIsPowered(foreignDevice.IsPowered());
+                bridgedData.SetGPSActive((aggregatedCaps & AG0_ETDLDeviceCapability.GPS_PROVIDER) != 0);
                 
                 // Signal not meaningful across a bridge — use 100 to indicate active bridge link
                 bridgedData.SetSignalStrength(100.0);
@@ -2154,6 +2164,16 @@ class AG0_TDLSystem : WorldSystem
 	    set<int> oldNotified = network.GetLastNotifiedPlayerIds();
 	    set<int> newNotified = new set<int>();
 
+	    // Every device the network holds, in range or not: lets each client tell a member that
+	    // went out of contact (kept, stale) from one that left the network (dropped).
+	    array<RplId> roster = {};
+	    foreach (AG0_TDLDeviceComponent rosterDevice : network.GetNetworkDevices())
+	    {
+	        RplId rosterId = rosterDevice.GetDeviceRplId();
+	        if (rosterId != RplId.Invalid())
+	            roster.Insert(rosterId);
+	    }
+
 	    foreach (AG0_TDLDeviceComponent device : network.GetNetworkDevices())
 	    {
 	        if (!device.CanAccessNetwork()) continue;
@@ -2164,8 +2184,7 @@ class AG0_TDLSystem : WorldSystem
 	            IEntity deviceEntity = device.GetOwner();
 	            if (deviceEntity)
 	            {
-	                vector currentPos = deviceEntity.GetOrigin();
-	                network.UpdateDevicePosition(deviceRplId, currentPos);
+	                network.UpdateDevicePosition(deviceRplId, device.GetReportedPosition());
 	            }
 	        }
 	        
@@ -2188,8 +2207,7 @@ class AG0_TDLSystem : WorldSystem
 	                IEntity connectedEntity = connectedDevice.GetOwner();
 	                if (connectedEntity)
 	                {
-	                    vector connectedCurrentPos = connectedEntity.GetOrigin();
-	                    network.UpdateDevicePosition(connectedRplId, connectedCurrentPos);
+	                    network.UpdateDevicePosition(connectedRplId, connectedDevice.GetReportedPosition());
 	                }
 	                
 	                AG0_TDLNetworkMember memberData = network.GetDeviceData().Get(connectedRplId);
@@ -2206,7 +2224,8 @@ class AG0_TDLSystem : WorldSystem
 	                        AG0_TDLNetworkMember connectedData = new AG0_TDLNetworkMember();
 	                        connectedData.SetRplId(memberData.GetRplId());
 	                        connectedData.SetPlayerName(connectedDevice.GetDisplayName());
-	                        connectedData.SetPosition(connectedPos);
+	                        connectedData.SetPosition(connectedDevice.GetReportedPosition());
+	                        connectedData.SetFixLost(connectedDevice.IsFixLost());
 	                        connectedData.SetNetworkIP(memberData.GetNetworkIP());
 							IEntity connectedPlayer = GetPlayerFromDevice(connectedDevice);
 							int ownerPlayerId = -1;
@@ -2231,6 +2250,8 @@ class AG0_TDLSystem : WorldSystem
 								connectedData.SetCapabilities(memberData.GetCapabilities());
 							}
 							connectedData.SetOwnerPlayerId(ownerPlayerId);
+							connectedData.SetIsPowered(connectedDevice.IsPowered());
+							connectedData.SetGPSActive((connectedData.GetCapabilities() & AG0_ETDLDeviceCapability.GPS_PROVIDER) != 0);
 	                        
 	                        float signalStrength;
 	                        // Satellite pegs only when the network we're
@@ -2247,7 +2268,9 @@ class AG0_TDLSystem : WorldSystem
 	                        {
 	                            float effectiveRange = Math.Min(device.GetEffectiveNetworkRange(),
 	                                                            connectedDevice.GetEffectiveNetworkRange());
-	                            signalStrength = Math.Clamp(100.0 * (1.0 - (distance / effectiveRange)), 0.0, 100.0);
+	                            // A device always lists itself as connected, including with its antennas off.
+	                            if (effectiveRange > 0)
+	                                signalStrength = Math.Clamp(100.0 * (1.0 - (distance / effectiveRange)), 0.0, 100.0);
 	                        }
 							connectedData.SetSignalStrength(signalStrength);
 	                        
@@ -2263,7 +2286,7 @@ class AG0_TDLSystem : WorldSystem
 	        // Pass network.GetNetworkID() explicitly — see NotifyNetworkConnectivity doc.
 	        // Capture the returned playerId (-1 if no RPC was sent) so we can detect
 	        // departures after the loop completes.
-	        int notifiedPid = NotifyNetworkConnectivity(device, network.GetNetworkID(), connectedMembers);
+	        int notifiedPid = NotifyNetworkConnectivity(device, network.GetNetworkID(), connectedMembers, roster);
 	        if (notifiedPid >= 0)
 	            newNotified.Insert(notifiedPid);
 			PropagateMessagesForDevice(this, network, device, connectedMembers);
@@ -3325,7 +3348,7 @@ class AG0_TDLSystem : WorldSystem
     //! or -1 if no NotifyNetworkMembers RPC was sent (no owning player, no controller,
     //! invalid networkId). Caller in UpdateNetworkConnectivity uses the return value to
     //! build the set of "players we notified this tick" for departure-detection.
-    protected int NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, int networkId, map<RplId, ref AG0_TDLNetworkMember> connectedMembers)
+    protected int NotifyNetworkConnectivity(AG0_TDLDeviceComponent device, int networkId, map<RplId, ref AG0_TDLNetworkMember> connectedMembers, array<RplId> roster)
 	{
 	    array<RplId> deviceIDs = new array<RplId>();
 	    foreach (RplId rplId, AG0_TDLNetworkMember member : connectedMembers)
@@ -3343,7 +3366,7 @@ class AG0_TDLSystem : WorldSystem
 
 	    if (device.HasCapability(AG0_ETDLDeviceCapability.INFORMATION))
 	    {
-	        device.SetLocalNetworkMembers(networkId, membersArray);
+	        device.SetLocalNetworkMembers(networkId, membersArray, roster);
 	        Print(string.Format("TDL_SYSTEM: Sent %1 members for network %2 directly to INFORMATION device %3",
 	            membersArray.Count(), networkId, device.GetOwner()), LogLevel.DEBUG);
 	    }
@@ -3366,7 +3389,7 @@ class AG0_TDLSystem : WorldSystem
 
 	    if (networkId <= 0) return -1;
 
-	    controller.NotifyNetworkMembers(networkId, membersArray);
+	    controller.NotifyNetworkMembers(networkId, membersArray, roster);
 	    return playerId;
 	}
     

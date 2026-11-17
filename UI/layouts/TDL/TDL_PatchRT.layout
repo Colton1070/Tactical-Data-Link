@@ -11,9 +11,8 @@ FrameWidgetClass {
     SizeY 256
     OffsetBottom -256
    }
-   noclear 0
    format "HDR High"
-   allowAlpha 1
+   "allow alpha" 1
    {
     FrameWidgetClass "{62CFD01A0AE57876}" {
      Name "PatchFrame"
